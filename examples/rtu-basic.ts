@@ -1,5 +1,5 @@
 import { Console, Effect } from "effect";
-import { RtuTransportService } from "../src/RtuTransport";
+import { RtuTransportService } from "../src/RtuTransportService";
 
 const program = Effect.gen(function* () {
   const transport = yield* RtuTransportService;
@@ -20,8 +20,7 @@ const program = Effect.gen(function* () {
 
 program.pipe(
   Effect.catchTags({
-    ModbusTimeoutError: (err) =>
-      Console.log(`Timeout: ${err.message}`),
+    ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
     ModbusConnectionClosedError: (err) =>
       Console.log(`Connection lost: ${err.message}`),
     ModbusExceptionError: (err) =>
@@ -29,9 +28,7 @@ program.pipe(
     ModbusInvalidArgumentError: (err) =>
       Console.log(`Invalid argument: ${err.message}`),
   }),
-  Effect.catchAll((err) =>
-    Console.log(`Unhandled error: ${err.message}`),
-  ),
+  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(
     RtuTransportService.Default({
       portPath: "/dev/ttyUSB0",
