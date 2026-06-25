@@ -16,7 +16,7 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 |--------|---------|
 | Install | `bun install` |
 | Run | `bun run index.ts` |
-| Type-check | `bunx tsc --noEmit` |
+| Type-check | `bun run typecheck` |
 | Test | `bun test` (create under `**/*.test.ts`) |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.

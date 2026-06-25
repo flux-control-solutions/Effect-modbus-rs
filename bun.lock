@@ -11,9 +11,6 @@
       "devDependencies": {
         "@effect/language-service": "^0.86.2",
         "@types/bun": "latest",
-        "tsc": "^2.0.4",
-      },
-      "peerDependencies": {
         "typescript": "^6.0.3",
       },
     },
@@ -46,8 +43,6 @@
     "modbus-rs-win32-x64-msvc": ["modbus-rs-win32-x64-msvc@0.15.0", "", { "os": "win32", "cpu": "x64" }, "sha512-rDwnWF1k59R5Ut6N0L3hOY5TeQNaoWh5PL9qwicfGFuC+u81Nuk13d2QKV2BmzbxdFHD4c1IfqFBuhwf4t8wYg=="],
 
     "pure-rand": ["pure-rand@6.1.0", "", {}, "sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA=="],
-
-    "tsc": ["tsc@2.0.4", "", { "bin": { "tsc": "bin/tsc" } }, "sha512-fzoSieZI5KKJVBYGvwbVZs/J5za84f2lSTLPYf6AGiIf43tZ3GNrI1QzTLcjtyDDP4aLxd46RTZq1nQxe7+k5Q=="],
 
     "typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 

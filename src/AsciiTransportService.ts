@@ -1,18 +1,18 @@
-import { type AsyncRtuTransport, type RtuTransportOptions } from "modbus-rs";
+import { type AsyncAsciiTransport, type AsciiTransportOptions } from "modbus-rs";
 import { Effect } from "effect";
 import { toModbusError } from "./errors.js";
 import { type AsyncSerialModbusClient, makeEffectSerialClient } from "./serial-client.js";
 
-export class RtuTransportService extends Effect.Service<RtuTransportService>()(
-  "RtuTransportService",
+export class AsciiTransportService extends Effect.Service<AsciiTransportService>()(
+  "AsciiTransportService",
   {
-    scoped: Effect.fnUntraced(function* (options: RtuTransportOptions) {
-      const { AsyncRtuTransport } = yield* Effect.promise(
+    scoped: Effect.fnUntraced(function* (options: AsciiTransportOptions) {
+      const { AsyncAsciiTransport } = yield* Effect.promise(
         () => import("modbus-rs"),
       );
 
-      const transport: AsyncRtuTransport = yield* Effect.tryPromise({
-        try: () => AsyncRtuTransport.open(options),
+      const transport: AsyncAsciiTransport = yield* Effect.tryPromise({
+        try: () => AsyncAsciiTransport.open(options),
         catch: (error) => toModbusError(error as Error),
       });
       const clientSet = new Map<number, AsyncSerialModbusClient>();
