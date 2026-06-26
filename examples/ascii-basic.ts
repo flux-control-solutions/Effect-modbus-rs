@@ -30,6 +30,8 @@ const program = Effect.gen(function* () {
 program.pipe(
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
+    ModbusTransportError: (err) =>
+      Console.log(`Transport error: ${err.message}`),
     ModbusConnectionClosedError: (err) =>
       Console.log(`Connection lost: ${err.message}`),
     ModbusExceptionError: (err) =>

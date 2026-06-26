@@ -16,7 +16,7 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 |--------|---------|
 | Install | `bun install` |
 | Type-check | `bun run typecheck` |
-| Test | `bun test` (create under `**/*.test.ts`) |
+| Test | `bun run test` (create under `**/*.test.ts`) |
 | Run example | `bun run examples/<name>.ts` |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.
@@ -45,7 +45,7 @@ examples/
 - **Client caching** — clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map<number, Async*ModbusClient>`. Repeated `withClient()` calls for the same unit ID reuse the cached client.
 - **`EffectModbusClient`** — wraps the raw `modbus-rs` client methods via `Effect.tryPromise`, routing errors through `toModbusError`. All methods return `Effect.Effect<T, ModbusError>`.
 - **Error mapping** — raw `Error` → typed `ModbusError` union via `toModbusError` in `src/errors.ts`. Handle with `Effect.catchTags` (see examples).
-- **`makeMockRtuTransport`** — each service has a static `makeMockRtuTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
+- **`makeMockTransport`** — each service has a static `makeMockTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
 
 ## Conventions
 

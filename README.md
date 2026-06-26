@@ -7,7 +7,7 @@ Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU 
 ## Install
 
 ```sh
-npm install effect-modbus-rs
+bun add effect-modbus-rs
 ```
 
 TypeScript only while prototyping (JS consumers will be supported before 1.0).
@@ -34,6 +34,8 @@ const program = Effect.gen(function* () {
 program.pipe(
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
+    ModbusTransportError: (err) =>
+      Console.log(`Transport error: ${err.message}`),
     ModbusConnectionClosedError: (err) =>
       Console.log(`Connection lost: ${err.message}`),
     ModbusExceptionError: (err) =>
@@ -160,7 +162,7 @@ Handle with `Effect.catchTags`. The `ModbusError` union type covers all six vari
 
 ## Testing with mocks
 
-Each transport service provides a `makeMockRtuTransport(devices)` static method that returns an in-memory mock `Layer` — no serial port or network required.
+Each transport service provides a `makeMockTransport(devices)` static method that returns an in-memory mock `Layer` — no serial port or network required.
 
 ```ts
 import { Console, Effect } from "effect";
@@ -187,7 +189,7 @@ const program = Effect.gen(function* () {
   console.log("Coils:", coils);
 });
 
-const mockLayer = RtuTransportService.makeMockRtuTransport([device])({
+const mockLayer = RtuTransportService.makeMockTransport([device])({
   portPath: "/dev/ttyUSB0",
   baudRate: 9600,
 });
@@ -199,7 +201,7 @@ program.pipe(
 );
 ```
 
-The mock factory is identical for all three transports; swap `RtuTransportService` for `TcpTransportService` or `AsciiTransportService` and adjust the options shape accordingly.
+The mock factory is identical for all three transports; swap `RtuTransportService` for `TcpTransportService` or `AsciiTransportService` and adjust the options shape accordingly — each exposes a static `makeMockTransport` method.
 
 See `examples/rtu-mock.ts`, `examples/tcp-mock.ts`, and `examples/ascii-mock.ts` for full walkthroughs covering read, write, multi-device access, and error-case testing.
 
@@ -219,12 +221,12 @@ Coil/default values default to `false` if omitted at the address level; register
 
 | Action | Command |
 |--------|---------|
-| Install | `npm install` |
-| Type-check | `npm run typecheck` |
-| Test | `npm test` |
-| Run example | `npx tsx examples/<name>.ts` |
+| Install | `bun install` |
+| Type-check | `bun run typecheck` |
+| Test | `bun test` |
+| Run example | `bun run examples/<name>.ts` |
 
-No build step — `noEmit` is on; the runtime (Bun, Deno, tsx) runs `.ts` directly.
+No build step — `noEmit` is on; Bun runs `.ts` directly.
 
 ## Source layout
 

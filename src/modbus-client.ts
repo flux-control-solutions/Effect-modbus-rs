@@ -239,10 +239,7 @@ export interface EffectModbusClient {
  * @see AsyncTcpModbusClient — Upstream TCP client API.
  */
 export const makeEffectModbusClient = (
-  client:
-    | AsyncSerialModbusClient
-    | AsyncSerialModbusClient
-    | AsyncTcpModbusClient,
+  client: AsyncSerialModbusClient | AsyncTcpModbusClient,
 ): EffectModbusClient => ({
   readHoldingRegisters: (opts) =>
     Effect.tryPromise({

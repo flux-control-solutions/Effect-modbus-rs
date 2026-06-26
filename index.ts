@@ -29,3 +29,10 @@ export * from "./src/errors.js";
 export { AsciiTransportService } from "./src/AsciiTransportService.js";
 export { TcpTransportService } from "./src/TcpTransportService.js";
 export { RtuTransportService } from "./src/RtuTransportService.js";
+export type {
+  CoilDefinition,
+  DiscreteInputDefinition,
+  RegisterDefinition,
+  SlaveDeviceDefinition,
+  SlaveDeviceDefinitions,
+} from "./src/mocks.js";

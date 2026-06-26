@@ -2,7 +2,7 @@
  * Example demonstrating the mock ASCII transport layer.
  *
  * Creates an in-memory ASCII transport with
- * {@link AsciiTransportService.makeMockRtuTransport},
+ * {@link AsciiTransportService.makeMockTransport},
  * simulates read/write operations (including `readWriteMultipleRegisters`),
  * and verifies out-of-range error handling.
  *
@@ -67,7 +67,7 @@ const program = Effect.gen(function* () {
     );
 });
 
-const mockLayer = AsciiTransportService.makeMockRtuTransport([device])({
+const mockLayer = AsciiTransportService.makeMockTransport([device])({
   portPath: "/dev/ttyUSB0",
   baudRate: 9600,
 });

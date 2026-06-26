@@ -56,11 +56,17 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
        */
       const clientSet = new Map<number, AsyncSerialModbusClient>();
 
+      let closed = false;
+
       /**
        * Registers a finalizer that closes the transport when the
        * consuming Effect scope completes or is interrupted.
        */
-      yield* Effect.addFinalizer(() => Effect.promise(() => transport.close()));
+      yield* Effect.addFinalizer(() => {
+        if (closed) return Effect.void;
+        closed = true;
+        return Effect.promise(() => transport.close());
+      });
 
       return {
         /**
@@ -121,13 +127,18 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
          * Closes the transport connection immediately.
          *
          * Normally the transport is closed via the scope finalizer, but
-         * this method allows explicit early termination.
+         * this method allows explicit early termination. Safe to call
+         * multiple times — subsequent calls are no-ops.
          *
          * @returns An Effect that resolves when the transport is closed.
          */
-        close: Effect.tryPromise({
-          try: () => transport.close(),
-          catch: (error) => toModbusError(error as Error),
+        close: Effect.suspend(() => {
+          if (closed) return Effect.void;
+          closed = true;
+          return Effect.tryPromise({
+            try: () => transport.close(),
+            catch: (error) => toModbusError(error as Error),
+          });
         }),
 
         /**
@@ -153,7 +164,7 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
    * @returns A layer factory that takes `AsciiTransportOptions` and returns a
    *          scoped `Layer` providing {@link AsciiTransportService}.
    */
-  static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
+  static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: AsciiTransportOptions) =>
       Layer.scoped(
