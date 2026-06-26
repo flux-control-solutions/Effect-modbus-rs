@@ -5,9 +5,9 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 ## Stack
 
 - **Runtime**: Bun only — never use Node, npm, pnpm, yarn, or vite.
-- **Language**: TypeScript 6 (ESNext target, `verbatimModuleSyntax`, bundler module resolution, `module: "Preserve"` for Bun).
+- **Language**: TypeScript 6 (ESNext, `verbatimModuleSyntax`, bundler resolution, `module: "Preserve"`).
 - **Core libs**: `effect` (^3.21.4), `modbus-rs` (^0.15.0).
-- **LSP**: `@effect/language-service` plugin configured in `tsconfig.json` `compilerOptions.plugins`.
+- **LSP**: `@effect/language-service` plugin in `tsconfig.json` `compilerOptions.plugins`.
 - **License**: GPL-3.0.
 
 ## Commands
@@ -15,31 +15,37 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 | Action | Command |
 |--------|---------|
 | Install | `bun install` |
-| Run | `bun run index.ts` |
 | Type-check | `bun run typecheck` |
 | Test | `bun test` (create under `**/*.test.ts`) |
+| Run example | `bun run examples/<name>.ts` |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.
 
 ## Source layout
 
 ```
+index.ts                     — Re-exports all public API from src/
 src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
+  modbus-client.ts           — EffectModbusClient interface + Effect.tryPromise wrapper
+  mocks.ts                   — Schema-validated mock transport for testing
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
+  TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
+  AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
 examples/
-  rtu-basic.ts               — Usage pattern: provide, scoped, runPromise
-index.ts                     — Stub entry point
+  rtu-basic.ts               — RTU usage: provide, scoped, runPromise
+  tcp-basic.ts               — TCP usage pattern
+  ascii-basic.ts             — ASCII usage pattern
 ```
 
 ## Architecture
 
-- `RtuTransportService` uses `Effect.Service` (scoped) with `Effect.fnUntraced`. The `modbus-rs` module is imported **dynamically** inside the service constructor: `yield* Effect.promise(() => import("modbus-rs"))`.
-- RTU transport is opened via `AsyncRtuTransport.open(options)`, then clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map`.
-- The service exposes `withClient(unitId)`, `setRequestTimeout`, `clearRequestTimeout`, `reconnect`, and `hasPendingRequests`.
-- Client methods (`readHoldingRegisters`, `readCoils`, etc.) return `Effect.Effect<T, ModbusError>` via `Effect.tryPromise`.
-- Error mapping: raw `Error` → typed `ModbusError` union via `toModbusError` in `src/errors.ts`. Handle with `Effect.catchTags` (see example).
-- Upcoming: TCP transport and higher-level register/coil abstractions.
+- **`Effect.Service` scoped** — each transport service opens its connection in a `scoped` constructor. The transport is automatically closed when the consuming `Scope` finalizes (`Effect.addFinalizer`).
+- **Dynamic import** — `modbus-rs` is imported inside the constructor via `yield* Effect.promise(() => import("modbus-rs"))`. This keeps the native module load deferred.
+- **Client caching** — clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map<number, Async*ModbusClient>`. Repeated `withClient()` calls for the same unit ID reuse the cached client.
+- **`EffectModbusClient`** — wraps the raw `modbus-rs` client methods via `Effect.tryPromise`, routing errors through `toModbusError`. All methods return `Effect.Effect<T, ModbusError>`.
+- **Error mapping** — raw `Error` → typed `ModbusError` union via `toModbusError` in `src/errors.ts`. Handle with `Effect.catchTags` (see examples).
+- **`makeMockRtuTransport`** — each service has a static `makeMockRtuTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
 
 ## Conventions
 
@@ -48,15 +54,17 @@ index.ts                     — Stub entry point
 - Always `import type` for type-only imports (`verbatimModuleSyntax`).
 - Don't use `dotenv` — Bun loads `.env` automatically.
 
+## Tooling
+
+- **Fallow MCP** is configured via `opencode.json` (`bunx fallow-mcp`). The `.fallowrc.json` entry covers `index.ts`, `src/`, and `examples/`. Run `fallow audit` for pre-commit quality checks on changed code.
+
 ## Referencing upstream libraries
 
-Shallow clones of key dependencies live in `references/` for offline browsing. These are gitignored — re-clone if stale.
+Shallow clones of key dependencies live in `references/` for offline browsing (gitignored; re-clone if stale):
 
 | Reference | Local path | Useful subdirectory |
 |-----------|-----------|-------------------|
 | effect | `references/effect` | `packages/effect/src/` for core types |
 | modbus-rs | `references/modbus-rs` | `mbus-ffi/nodejs/` (`index.d.ts` for types, `index.js` for impl) |
 
-When researching how to use a type/fn from either library, read the corresponding clone. For modbus-rs specifically, the npm-facing source is under `references/modbus-rs/mbus-ffi/nodejs`.
-
-The skill at `.opencode/skills/reference-dependencies/SKILL.md` is the dedicated instruction for reference lookup — it should be loaded automatically by OpenCode for tasks involving `effect`, `@effect/*`, or `modbus-rs` types.
+The skill at `.opencode/skills/reference-dependencies/SKILL.md` is the dedicated instruction for reference lookup.

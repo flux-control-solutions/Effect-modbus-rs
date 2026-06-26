@@ -144,6 +144,16 @@ export class RtuTransportService extends Effect.Service<RtuTransportService>()(
     }),
   },
 ) {
+  /**
+   * Creates a {@link Layer} that provides a mock RTU transport for testing.
+   *
+   * Accepts an array of {@link SlaveDeviceDefinition} describing the simulated
+   * Modbus slaves and returns a `Layer` suitable for `Effect.provide`.
+   *
+   * @param devices - Array of slave device definitions to simulate.
+   * @returns A layer factory that takes `RtuTransportOptions` and returns a
+   *          scoped `Layer` providing {@link RtuTransportService}.
+   */
   static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: RtuTransportOptions) =>

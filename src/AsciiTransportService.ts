@@ -143,6 +143,16 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
     }),
   },
 ) {
+  /**
+   * Creates a {@link Layer} that provides a mock ASCII transport for testing.
+   *
+   * Accepts an array of {@link SlaveDeviceDefinition} describing the simulated
+   * Modbus slaves and returns a `Layer` suitable for `Effect.provide`.
+   *
+   * @param devices - Array of slave device definitions to simulate.
+   * @returns A layer factory that takes `AsciiTransportOptions` and returns a
+   *          scoped `Layer` providing {@link AsciiTransportService}.
+   */
   static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: AsciiTransportOptions) =>

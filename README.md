@@ -7,10 +7,10 @@ Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU 
 ## Install
 
 ```sh
-bun install effect-modbus-rs
+npm install effect-modbus-rs
 ```
 
-Requires **Bun** (no Node, npm, pnpm, or yarn).
+TypeScript only while prototyping (JS consumers will be supported before 1.0).
 
 ## Quick start
 
@@ -158,16 +158,73 @@ Errors from the underlying Rust layer are mapped to typed `Effect` errors via `D
 
 Handle with `Effect.catchTags`. The `ModbusError` union type covers all six variants.
 
+## Testing with mocks
+
+Each transport service provides a `makeMockRtuTransport(devices)` static method that returns an in-memory mock `Layer` — no serial port or network required.
+
+```ts
+import { Console, Effect } from "effect";
+import { RtuTransportService } from "effect-modbus-rs";
+
+const device = {
+  unitId: 1,
+  coils: [
+    { address: 0, default: true },
+    { address: 1, default: false },
+  ],
+  discreteInputs: [],
+  holdingRegisters: [
+    { address: 0, default: 100 },
+    { address: 1, default: 200 },
+  ],
+  inputRegisters: [],
+};
+
+const program = Effect.gen(function* () {
+  const transport = yield* RtuTransportService;
+  const client = yield* transport.withClient(1);
+  const coils = yield* client.readCoils({ address: 0, quantity: 2 });
+  console.log("Coils:", coils);
+});
+
+const mockLayer = RtuTransportService.makeMockRtuTransport([device])({
+  portPath: "/dev/ttyUSB0",
+  baudRate: 9600,
+});
+
+program.pipe(
+  Effect.provide(mockLayer),
+  Effect.scoped,
+  Effect.runPromise,
+);
+```
+
+The mock factory is identical for all three transports; swap `RtuTransportService` for `TcpTransportService` or `AsciiTransportService` and adjust the options shape accordingly.
+
+See `examples/rtu-mock.ts`, `examples/tcp-mock.ts`, and `examples/ascii-mock.ts` for full walkthroughs covering read, write, multi-device access, and error-case testing.
+
+### Slave device schema
+
+| Property | Type | Default |
+|----------|------|---------|
+| `unitId` | `number` | required |
+| `coils` | `{ address, default }[]` | `[]` |
+| `discreteInputs` | `{ address, default }[]` | `[]` |
+| `holdingRegisters` | `{ address, default }[]` | `[]` |
+| `inputRegisters` | `{ address, default }[]` | `[]` |
+
+Coil/default values default to `false` if omitted at the address level; register values default to `0`. Reads beyond the highest configured address produce a `ModbusInvalidArgumentError`.
+
 ## Development
 
 | Action | Command |
 |--------|---------|
-| Install | `bun install` |
-| Type-check | `bun run typecheck` |
-| Test | `bun test` |
-| Run example | `bun run examples/<name>.ts` |
+| Install | `npm install` |
+| Type-check | `npm run typecheck` |
+| Test | `npm test` |
+| Run example | `npx tsx examples/<name>.ts` |
 
-No build step — `noEmit` is on; Bun runs `.ts` directly.
+No build step — `noEmit` is on; the runtime (Bun, Deno, tsx) runs `.ts` directly.
 
 ## Source layout
 
@@ -175,6 +232,7 @@ No build step — `noEmit` is on; Bun runs `.ts` directly.
 src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + factory
+  mocks.ts                   — Schema-validated mock transport + slave device definitions
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
@@ -182,6 +240,9 @@ examples/
   rtu-basic.ts               — RTU usage pattern
   tcp-basic.ts               — TCP usage pattern
   ascii-basic.ts             — ASCII usage pattern
+  rtu-mock.ts                — RTU with in-memory mock
+  tcp-mock.ts                — TCP with in-memory mock (multi-device)
+  ascii-mock.ts              — ASCII with in-memory mock (error-case)
 index.ts                     — Re-exports public API
 ```
 

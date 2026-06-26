@@ -19,21 +19,46 @@ import type {
 import { ModbusInvalidArgumentError } from "./errors.js";
 import type { EffectModbusClient } from "./modbus-client.js";
 
+/**
+ * Schema for a single coil (digital output) definition.
+ *
+ * Each entry declares a coil's address and its default boolean state
+ * used when the mock transport initialises.
+ */
 export const CoilDefinition = Schema.Struct({
   address: Schema.Number,
   default: Schema.Boolean,
 });
 
+/**
+ * Schema for a single discrete input (digital input) definition.
+ *
+ * Each entry declares a discrete input's address and its default
+ * boolean state used when the mock transport initialises.
+ */
 export const DiscreteInputDefinition = Schema.Struct({
   address: Schema.Number,
   default: Schema.Boolean,
 });
 
+/**
+ * Schema for a single register (holding or input) definition.
+ *
+ * Each entry declares a register's address and its default 16-bit
+ * value used when the mock transport initialises.
+ */
 export const RegisterDefinition = Schema.Struct({
   address: Schema.Number,
   default: Schema.Number,
 });
 
+/**
+ * Schema for a complete slave device definition.
+ *
+ * Describes a Modbus slave identified by `unitId`, with optional
+ * arrays of coils, discrete inputs, holding registers, and input
+ * registers. All arrays default to `[]` when omitted.
+ */
 export const SlaveDeviceDefinition = Schema.Struct({
   unitId: Schema.Number,
   coils: Schema.optionalWith(Schema.Array(CoilDefinition), {
@@ -50,23 +75,32 @@ export const SlaveDeviceDefinition = Schema.Struct({
   }),
 });
 
+/**
+ * Schema for an array of {@link SlaveDeviceDefinition} — the complete
+ * set of slave devices the mock transport should simulate.
+ */
 export const SlaveDeviceDefinitions = Schema.Array(SlaveDeviceDefinition);
 
 // TODO: Add support for file records (FC20/FC21) and FIFO queues (FC24)
 
+/** Inferred TypeScript type for a {@link CoilDefinition} schema. */
 export type CoilDefinition = Schema.Schema.Type<typeof CoilDefinition>;
+/** Inferred TypeScript type for a {@link DiscreteInputDefinition} schema. */
 export type DiscreteInputDefinition = Schema.Schema.Type<
   typeof DiscreteInputDefinition
 >;
+/** Inferred TypeScript type for a {@link RegisterDefinition} schema. */
 export type RegisterDefinition = Schema.Schema.Type<typeof RegisterDefinition>;
+/** Inferred TypeScript type for a {@link SlaveDeviceDefinition} schema. */
 export type SlaveDeviceDefinition = Schema.Schema.Type<
   typeof SlaveDeviceDefinition
 >;
-
+/** Inferred TypeScript type for a {@link SlaveDeviceDefinitions} schema. */
 export type SlaveDeviceDefinitions = Schema.Schema.Type<
   typeof SlaveDeviceDefinitions
 >;
 
+/** Internal mutable state held by the mock transport for a single slave device. */
 interface MockDeviceState {
   coils: Map<number, boolean>;
   discreteInputs: Map<number, boolean>;
@@ -78,6 +112,7 @@ interface MockDeviceState {
   maxInputAddress: number;
 }
 
+/** Builds a coil state map from an array of {@link CoilDefinition} entries. */
 const buildCoils = (defs: readonly CoilDefinition[]) => {
   const map = new Map<number, boolean>();
   let max = -1;
@@ -88,6 +123,7 @@ const buildCoils = (defs: readonly CoilDefinition[]) => {
   return { map, maxAddress: max };
 };
 
+/** Builds a register state map from an array of {@link RegisterDefinition} entries. */
 const buildRegisters = (defs: readonly RegisterDefinition[]) => {
   const map = new Map<number, number>();
   let max = -1;
@@ -98,6 +134,15 @@ const buildRegisters = (defs: readonly RegisterDefinition[]) => {
   return { map, maxAddress: max };
 };
 
+/**
+ * Constructs a {@link ModbusInvalidArgumentError} for an out-of-range
+ * address or address+quantity combination.
+ *
+ * @param label - Human-readable label for the address space (e.g. "Coil", "HoldingRegister").
+ * @param address - The starting address that is out of range.
+ * @param quantity - Optional quantity that, together with `address`, exceeds the range.
+ * @returns A `ModbusInvalidArgumentError` effect.
+ */
 const failOutOfRange = (label: string, address: number, quantity?: number) =>
   new ModbusInvalidArgumentError({
     cause: new Error(
@@ -111,6 +156,19 @@ const failOutOfRange = (label: string, address: number, quantity?: number) =>
         : `${label} write out of range: address=${address}`,
   });
 
+/**
+ * Creates an {@link EffectModbusClient} backed by an in-memory
+ * {@link MockDeviceState} map.
+ *
+ * All Modbus function codes are simulated against the provided state,
+ * returning configured default values for reads and mutating state
+ * for writes. Out-of-range addresses produce a
+ * {@link ModbusInvalidArgumentError}.
+ *
+ * @param state - The mutable device state to read from and write to.
+ * @param unitId - The Modbus unit ID this client represents (used for logging).
+ * @returns An `EffectModbusClient` backed by in-memory state.
+ */
 const makeMockModbusClient = (
   state: MockDeviceState,
   unitId: number,
@@ -310,6 +368,23 @@ const makeMockModbusClient = (
   }),
 });
 
+/**
+ * Creates a mock transport factory suitable for use as a `scoped`
+ * {@link Layer} dependency in tests or development.
+ *
+ * Accepts an array of {@link SlaveDeviceDefinition} that describe the
+ * simulated Modbus slaves, their register maps, and coil states.
+ * The returned factory matches the signature expected by the transport
+ * service constructors (`RtuTransportOptions | AsciiTransportOptions |
+ * TcpTransportOptions`) so it can be injected into any service layer.
+ *
+ * Unsupported function codes (FIFO queue, file records) return
+ * {@link ModbusInvalidArgumentError}.
+ *
+ * @param devices - Array of slave device definitions to simulate.
+ * @returns A transport factory function that returns a scoped Effect
+ *          providing the mock transport.
+ */
 export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
   const deviceDefs = Schema.decodeUnknownSync(SlaveDeviceDefinitions)(devices);
 
