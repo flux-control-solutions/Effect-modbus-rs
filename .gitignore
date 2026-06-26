@@ -114,3 +114,4 @@ dist
 
 # Reference clones of upstream dependencies
 references/
+.fallow/

@@ -14,47 +14,62 @@ import type {
   FifoQueueResponse,
   DiagnosticsResponse,
   DeviceIdentificationResponse,
+  AsyncSerialModbusClient,
+  AsyncTcpModbusClient,
 } from "modbus-rs";
 import { Effect } from "effect";
 import { type ModbusError, toModbusError } from "./errors.js";
 
-interface ModbusClientMethods {
-  readHoldingRegisters(opts: ReadRegistersOptions): Promise<number[]>;
-  readInputRegisters(opts: ReadRegistersOptions): Promise<number[]>;
-  writeSingleRegister(opts: WriteSingleRegisterOptions): Promise<void>;
-  writeMultipleRegisters(opts: WriteMultipleRegistersOptions): Promise<void>;
-  readWriteMultipleRegisters(opts: ReadWriteMultipleRegistersOptions): Promise<number[]>;
-  readCoils(opts: ReadBitsOptions): Promise<boolean[]>;
-  writeSingleCoil(opts: WriteSingleCoilOptions): Promise<void>;
-  writeMultipleCoils(opts: WriteMultipleCoilsOptions): Promise<void>;
-  readDiscreteInputs(opts: ReadBitsOptions): Promise<boolean[]>;
-  readFifoQueue(opts: ReadFifoQueueOptions): Promise<FifoQueueResponse>;
-  readFileRecord(opts: ReadFileRecordOptions): Promise<number[][]>;
-  writeFileRecord(opts: WriteFileRecordOptions): Promise<void>;
-  readExceptionStatus(): Promise<number>;
-  diagnostics(opts: DiagnosticsOptions): Promise<DiagnosticsResponse>;
-  readDeviceIdentification(opts: ReadDeviceIdentificationOptions): Promise<DeviceIdentificationResponse>;
-}
-
 export interface EffectModbusClient {
-  readHoldingRegisters(opts: ReadRegistersOptions): Effect.Effect<number[], ModbusError>;
-  readInputRegisters(opts: ReadRegistersOptions): Effect.Effect<number[], ModbusError>;
-  writeSingleRegister(opts: WriteSingleRegisterOptions): Effect.Effect<void, ModbusError>;
-  writeMultipleRegisters(opts: WriteMultipleRegistersOptions): Effect.Effect<void, ModbusError>;
-  readWriteMultipleRegisters(opts: ReadWriteMultipleRegistersOptions): Effect.Effect<number[], ModbusError>;
+  readHoldingRegisters(
+    opts: ReadRegistersOptions,
+  ): Effect.Effect<number[], ModbusError>;
+  readInputRegisters(
+    opts: ReadRegistersOptions,
+  ): Effect.Effect<number[], ModbusError>;
+  writeSingleRegister(
+    opts: WriteSingleRegisterOptions,
+  ): Effect.Effect<void, ModbusError>;
+  writeMultipleRegisters(
+    opts: WriteMultipleRegistersOptions,
+  ): Effect.Effect<void, ModbusError>;
+  readWriteMultipleRegisters(
+    opts: ReadWriteMultipleRegistersOptions,
+  ): Effect.Effect<number[], ModbusError>;
   readCoils(opts: ReadBitsOptions): Effect.Effect<boolean[], ModbusError>;
-  writeSingleCoil(opts: WriteSingleCoilOptions): Effect.Effect<void, ModbusError>;
-  writeMultipleCoils(opts: WriteMultipleCoilsOptions): Effect.Effect<void, ModbusError>;
-  readDiscreteInputs(opts: ReadBitsOptions): Effect.Effect<boolean[], ModbusError>;
-  readFifoQueue(opts: ReadFifoQueueOptions): Effect.Effect<FifoQueueResponse, ModbusError>;
-  readFileRecord(opts: ReadFileRecordOptions): Effect.Effect<number[][], ModbusError>;
-  writeFileRecord(opts: WriteFileRecordOptions): Effect.Effect<void, ModbusError>;
+  writeSingleCoil(
+    opts: WriteSingleCoilOptions,
+  ): Effect.Effect<void, ModbusError>;
+  writeMultipleCoils(
+    opts: WriteMultipleCoilsOptions,
+  ): Effect.Effect<void, ModbusError>;
+  readDiscreteInputs(
+    opts: ReadBitsOptions,
+  ): Effect.Effect<boolean[], ModbusError>;
+  readFifoQueue(
+    opts: ReadFifoQueueOptions,
+  ): Effect.Effect<FifoQueueResponse, ModbusError>;
+  readFileRecord(
+    opts: ReadFileRecordOptions,
+  ): Effect.Effect<number[][], ModbusError>;
+  writeFileRecord(
+    opts: WriteFileRecordOptions,
+  ): Effect.Effect<void, ModbusError>;
   readExceptionStatus(): Effect.Effect<number, ModbusError>;
-  diagnostics(opts: DiagnosticsOptions): Effect.Effect<DiagnosticsResponse, ModbusError>;
-  readDeviceIdentification(opts: ReadDeviceIdentificationOptions): Effect.Effect<DeviceIdentificationResponse, ModbusError>;
+  diagnostics(
+    opts: DiagnosticsOptions,
+  ): Effect.Effect<DiagnosticsResponse, ModbusError>;
+  readDeviceIdentification(
+    opts: ReadDeviceIdentificationOptions,
+  ): Effect.Effect<DeviceIdentificationResponse, ModbusError>;
 }
 
-export const makeEffectModbusClient = (client: ModbusClientMethods): EffectModbusClient => ({
+export const makeEffectModbusClient = (
+  client:
+    | AsyncSerialModbusClient
+    | AsyncSerialModbusClient
+    | AsyncTcpModbusClient,
+): EffectModbusClient => ({
   readHoldingRegisters: (opts) =>
     Effect.tryPromise({
       try: () => client.readHoldingRegisters(opts),

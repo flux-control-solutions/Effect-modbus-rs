@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "fallow": {
+      "enabled": true,
+      "type": "local",
+      "command": ["bunx", "fallow-mcp"]
+    }
+  }
+}
