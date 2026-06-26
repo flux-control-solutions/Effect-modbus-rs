@@ -1,7 +1,12 @@
-import { type AsyncTcpTransport, type AsyncTcpModbusClient, type TcpTransportOptions } from "modbus-rs";
-import { Effect } from "effect";
+import {
+  type AsyncTcpTransport,
+  type AsyncTcpModbusClient,
+  type TcpTransportOptions,
+} from "modbus-rs";
+import { Effect, Layer } from "effect";
 import { toModbusError } from "./errors.js";
 import { makeEffectModbusClient } from "./modbus-client.js";
+import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks.js";
 
 /**
  * Effect-TS scoped service wrapping a `modbus-rs` TCP transport.
@@ -138,4 +143,13 @@ export class TcpTransportService extends Effect.Service<TcpTransportService>()(
       };
     }),
   },
-) {}
+) {
+  static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
+    const factory = makeMockTransport(devices);
+    return (options: TcpTransportOptions) =>
+      Layer.scoped(
+        TcpTransportService,
+        factory(options) as unknown as Effect.Effect<TcpTransportService>,
+      );
+  };
+}

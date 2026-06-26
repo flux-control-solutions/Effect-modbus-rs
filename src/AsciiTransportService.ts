@@ -1,7 +1,12 @@
-import { type AsyncAsciiTransport, type AsyncSerialModbusClient, type AsciiTransportOptions } from "modbus-rs";
-import { Effect } from "effect";
+import {
+  type AsyncAsciiTransport,
+  type AsyncSerialModbusClient,
+  type AsciiTransportOptions,
+} from "modbus-rs";
+import { Effect, Layer } from "effect";
 import { toModbusError } from "./errors.js";
 import { makeEffectModbusClient } from "./modbus-client.js";
+import { makeMockTransport, SlaveDeviceDefinitions } from "./mocks.js";
 
 /**
  * Effect-TS scoped service wrapping a `modbus-rs` ASCII serial transport.
@@ -137,4 +142,13 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
       };
     }),
   },
-) {}
+) {
+  static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
+    const factory = makeMockTransport(devices);
+    return (options: AsciiTransportOptions) =>
+      Layer.scoped(
+        AsciiTransportService,
+        factory(options) as unknown as Effect.Effect<AsciiTransportService>,
+      );
+  };
+}

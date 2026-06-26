@@ -1,7 +1,13 @@
-import { type AsyncRtuTransport, type AsyncSerialModbusClient, type RtuTransportOptions } from "modbus-rs";
-import { Effect } from "effect";
+import {
+  type AsyncRtuTransport,
+  type AsyncSerialModbusClient,
+  type RtuTransportOptions,
+} from "modbus-rs";
+import { Effect, Layer } from "effect";
 import { toModbusError } from "./errors.js";
 import { makeEffectModbusClient } from "./modbus-client.js";
+import { makeMockTransport } from "./mocks.js";
+import type { SlaveDeviceDefinitions } from "./mocks.js";
 
 /**
  * Effect-TS scoped service wrapping a `modbus-rs` RTU serial transport.
@@ -137,4 +143,13 @@ export class RtuTransportService extends Effect.Service<RtuTransportService>()(
       };
     }),
   },
-) {}
+) {
+  static makeMockRtuTransport = (devices: SlaveDeviceDefinitions) => {
+    const factory = makeMockTransport(devices);
+    return (options: RtuTransportOptions) =>
+      Layer.scoped(
+        RtuTransportService,
+        factory(options) as unknown as Effect.Effect<RtuTransportService>,
+      );
+  };
+}
