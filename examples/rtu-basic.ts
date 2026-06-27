@@ -28,6 +28,12 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
+  Effect.provide(
+    RtuTransportService.Default({
+      portPath: "/dev/ttyUSB0",
+      baudRate: 9600,
+    }),
+  ),
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
     ModbusTransportError: (err) =>
@@ -38,14 +44,9 @@ program.pipe(
       Console.log(`Modbus exception ${err.exception}: ${err.message}`),
     ModbusInvalidArgumentError: (err) =>
       Console.log(`Invalid argument: ${err.message}`),
+    ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
-  Effect.provide(
-    RtuTransportService.Default({
-      portPath: "/dev/ttyUSB0",
-      baudRate: 9600,
-    }),
-  ),
+
   Effect.scoped,
   Effect.runPromise,
 );

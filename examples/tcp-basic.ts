@@ -28,6 +28,12 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
+  Effect.provide(
+    TcpTransportService.Default({
+      host: "192.168.1.100",
+      port: 502,
+    }),
+  ),
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
     ModbusTransportError: (err) =>
@@ -38,14 +44,8 @@ program.pipe(
       Console.log(`Modbus exception ${err.exception}: ${err.message}`),
     ModbusInvalidArgumentError: (err) =>
       Console.log(`Invalid argument: ${err.message}`),
+    ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
-  Effect.provide(
-    TcpTransportService.Default({
-      host: "192.168.1.100",
-      port: 502,
-    }),
-  ),
   Effect.scoped,
   Effect.runPromise,
 );
