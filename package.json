@@ -21,12 +21,12 @@
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
     "@types/bun": "latest",
-    "fallow": "^2.102.0",
+    "fallow": "^2.103.0",
     "typescript": "^6.0.3",
     "@effect/platform-bun": "^0.90.0"
   },
   "dependencies": {
     "effect": "^3.21.4",
-    "modbus-rs": "^0.15.0"
+    "modbus-rs": "^0.15.2"
   }
 }

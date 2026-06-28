@@ -6,7 +6,7 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 - **Runtime**: Bun only — never use Node, npm, pnpm, yarn, or vite.
 - **Language**: TypeScript 6 (ESNext, `verbatimModuleSyntax`, bundler resolution, `module: "Preserve"`).
-- **Core libs**: `effect` (^3.21.4), `modbus-rs` (^0.15.0).
+- **Core libs**: `effect` (^3.21.4), `modbus-rs` (^0.15.2).
 - **LSP**: `@effect/language-service` plugin in `tsconfig.json` `compilerOptions.plugins`.
 - **License**: GPL-3.0.
 
@@ -29,6 +29,7 @@ src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + Effect.tryPromise wrapper
   mocks.ts                   — Schema-validated mock transport for testing
+  shared-transport.ts        — Generic scoped transport lifecycle management
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
@@ -36,6 +37,11 @@ examples/
   rtu-basic.ts               — RTU usage: provide, scoped, runPromise
   tcp-basic.ts               — TCP usage pattern
   ascii-basic.ts             — ASCII usage pattern
+  rtu-mock.ts                — RTU with in-memory mock
+  tcp-mock.ts                — TCP with in-memory mock (multi-device)
+  ascii-mock.ts              — ASCII with in-memory mock (error-case)
+  tcp-polling-stream.ts      — TCP polling, reconnect, and stream
+  tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
 ```
 
 ## Architecture

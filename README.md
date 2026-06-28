@@ -1,6 +1,6 @@
 # Effect-modbus-rs
 
-**Type-safe Modbus communication via Effect-TS**, wrapping the [`modbus-rs`](https://github.com/brendanzagaeski/modbus-rs) npm bindings (Rust napi-rs under the hood).
+**Type-safe Modbus communication via Effect-TS**, wrapping the [`modbus-rs`](https://github.com/Raghava-Ch/modbus-rs) npm bindings (Rust napi-rs under the hood).
 
 Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU (serial), TCP, and ASCII Modbus transports. Clients expose a typed `Effect`-based API for all standard Modbus function codes.
 
@@ -141,9 +141,9 @@ All transport options types are re-exported from `modbus-rs`.
 | `readExceptionStatus()` | `number` |
 | `diagnostics({ subFunction, data })` | `DiagnosticsResponse` |
 | `readFifoQueue({ address })` | `FifoQueueResponse` |
-| `readFileRecord({ records })` | `number[][]` |
-| `writeFileRecord({ records })` | `void` |
-| `readDeviceIdentification({ identificationCode, objectId })` | `DeviceIdentificationResponse` |
+| `readFileRecord({ requests })` | `number[][]` |
+| `writeFileRecord({ requests })` | `void` |
+| `readDeviceIdentification({ readDeviceIdCode, objectId })` | `DeviceIdentificationResponse` |
 
 ## Error handling
 
@@ -156,9 +156,10 @@ Errors from the underlying Rust layer are mapped to typed `Effect` errors via `D
 | `ModbusTransportError` | Transport-level failure |
 | `ModbusInvalidArgumentError` | Invalid parameters |
 | `ModbusConnectionClosedError` | Connection lost |
+| `ModbusNotConnectedError` | Operation attempted before connection |
 | `ModbusInternalError` | Unclassified error |
 
-Handle with `Effect.catchTags`. The `ModbusError` union type covers all six variants.
+Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven variants.
 
 ## Testing with mocks
 
@@ -235,6 +236,7 @@ src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + factory
   mocks.ts                   — Schema-validated mock transport + slave device definitions
+  shared-transport.ts        — Generic scoped transport lifecycle management
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
@@ -245,6 +247,8 @@ examples/
   rtu-mock.ts                — RTU with in-memory mock
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
+  tcp-polling-stream.ts      — TCP polling, reconnect, and stream
+  tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
 index.ts                     — Re-exports public API
 ```
 
