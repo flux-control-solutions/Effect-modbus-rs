@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { test, expect } from "bun:test";
-import { RtuTransportService } from "./RtuTransportService.js";
-import { ModbusInvalidArgumentError } from "./errors.js";
+import { RtuTransportService } from "./RtuTransportService";
+import { ModbusInvalidArgumentError } from "./errors";
 
 const device = {
   unitId: 1,

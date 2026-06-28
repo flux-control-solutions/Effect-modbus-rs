@@ -16,8 +16,8 @@ import type {
   WriteSingleCoilOptions,
   WriteSingleRegisterOptions,
 } from "modbus-rs";
-import { ModbusInvalidArgumentError } from "./errors.js";
-import type { EffectModbusClient } from "./modbus-client.js";
+import { ModbusInvalidArgumentError } from "./errors";
+import type { EffectModbusClient } from "./modbus-client";
 
 /**
  * Schema for a single coil (digital output) definition.

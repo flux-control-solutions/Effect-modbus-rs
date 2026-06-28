@@ -1,11 +1,7 @@
-import {
-  type AsyncAsciiTransport,
-  type AsyncSerialModbusClient,
-  type AsciiTransportOptions,
-} from "modbus-rs";
+import type { AsyncAsciiTransport, AsyncSerialModbusClient, AsciiTransportOptions } from "modbus-rs";
 import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport.js";
-import { makeMockTransport, SlaveDeviceDefinitions } from "./mocks.js";
+import { makeTransportScoped } from "./shared-transport";
+import { makeMockTransport, SlaveDeviceDefinitions } from "./mocks";
 
 export class AsciiTransportService extends Effect.Service<AsciiTransportService>()(
   "AsciiTransportService",

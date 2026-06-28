@@ -1,8 +1,8 @@
-import { type AsyncRtuTransport, type AsyncSerialModbusClient, type RtuTransportOptions } from "modbus-rs";
+import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from "modbus-rs";
 import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport.js";
-import { makeMockTransport } from "./mocks.js";
-import type { SlaveDeviceDefinitions } from "./mocks.js";
+import { makeTransportScoped } from "./shared-transport";
+import { makeMockTransport } from "./mocks";
+import type { SlaveDeviceDefinitions } from "./mocks";
 
 export class RtuTransportService extends Effect.Service<RtuTransportService>()(
   "RtuTransportService",

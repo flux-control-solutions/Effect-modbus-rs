@@ -10,6 +10,19 @@
  * - {@link TcpTransportService} — TCP/IP transport (Modbus/TCP).
  * - {@link AsciiTransportService} — Serial ASCII transport.
  *
+ * ## Server layers
+ *
+ * Run a server layer with {@link Layer.launch} and execute with a runtime:
+ *
+ * ```ts
+ * Layer.launch(tcpServerLayer({ host: "0.0.0.0", port: 502, unitId: 1 }, handlers)).pipe(Effect.runPromise)
+ * ```
+ *
+ * - {@link serialRtuServerLayer} — Serial RTU server.
+ * - {@link serialAsciiServerLayer} — Serial ASCII server.
+ * - {@link tcpServerLayer} — TCP server.
+ * - {@link tcpGatewayLayer} — TCP gateway.
+ *
  * ## Errors
  *
  * All Modbus operations fail with a {@link ModbusError} discriminated union.
@@ -25,14 +38,17 @@
  * @module effect-modbus-rs
  */
 
-export * from "./src/errors.js";
-export { AsciiTransportService } from "./src/AsciiTransportService.js";
-export { TcpTransportService } from "./src/TcpTransportService.js";
-export { RtuTransportService } from "./src/RtuTransportService.js";
+export * from "./src/errors";
+export { AsciiTransportService } from "./src/AsciiTransportService";
+export { TcpTransportService } from "./src/TcpTransportService";
+export { RtuTransportService } from "./src/RtuTransportService";
+export { serialRtuServerLayer, serialAsciiServerLayer } from "./src/SerialModbusServerService";
+export { tcpServerLayer } from "./src/TcpModbusServerService";
+export { tcpGatewayLayer } from "./src/TcpGatewayService";
 export type {
   CoilDefinition,
   DiscreteInputDefinition,
   RegisterDefinition,
   SlaveDeviceDefinition,
   SlaveDeviceDefinitions,
-} from "./src/mocks.js";
+} from "./src/mocks";

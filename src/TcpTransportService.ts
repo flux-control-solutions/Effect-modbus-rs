@@ -1,7 +1,7 @@
-import { type AsyncTcpModbusClient, type AsyncTcpTransport, type TcpTransportOptions } from "modbus-rs";
+import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from "modbus-rs";
 import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport.js";
-import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks.js";
+import { makeTransportScoped } from "./shared-transport";
+import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
 
 export class TcpTransportService extends Effect.Service<TcpTransportService>()(
   "TcpTransportService",

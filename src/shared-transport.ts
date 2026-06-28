@@ -3,8 +3,8 @@ import {
   type ModbusError,
   ModbusNotConnectedError,
   toModbusError,
-} from "./errors.js";
-import { makeEffectModbusClient, type AnyModbusClient, type EffectModbusClient } from "./modbus-client.js";
+} from "./errors";
+import { makeEffectModbusClient, type AnyModbusClient, type EffectModbusClient } from "./modbus-client";
 
 export interface TransportServiceApi {
   withClient(unitId: number): Effect.Effect<EffectModbusClient, ModbusError>;
@@ -48,7 +48,15 @@ export function makeTransportScoped<
     let closed = false;
 
     const ensureOpen = Effect.fnUntraced(function* () {
-      if (transport) return transport;
+      if (transport) {
+        if (closed) {
+          return yield* new ModbusNotConnectedError({
+            cause: new Error("Transport has been closed"),
+            message: "Transport has been closed",
+          });
+        }
+        return transport;
+      }
       if (closed) {
         return yield* new ModbusNotConnectedError({
           cause: new Error("Transport has been closed"),
@@ -67,6 +75,14 @@ export function makeTransportScoped<
           return Effect.fail(err);
         }),
       );
+      if (closed) {
+        connectPromise = null;
+        yield* Effect.fork(Effect.promise(() => t.close()).pipe(Effect.catchAll(() => Effect.void)));
+        return yield* new ModbusNotConnectedError({
+          cause: new Error("Transport has been closed"),
+          message: "Transport has been closed",
+        });
+      }
       transport = t;
       return t;
     });
@@ -100,7 +116,7 @@ export function makeTransportScoped<
 
       setRequestTimeout: Effect.fnUntraced(function* (timeoutMs: number) {
         const t = transport;
-        if (!t) {
+        if (!t || closed) {
           return yield* new ModbusNotConnectedError({
             cause: new Error(notConnectedMsg),
             message: notConnectedMsg,
@@ -111,7 +127,7 @@ export function makeTransportScoped<
 
       clearRequestTimeout: Effect.fnUntraced(function* () {
         const t = transport;
-        if (!t) {
+        if (!t || closed) {
           return yield* new ModbusNotConnectedError({
             cause: new Error(notConnectedMsg),
             message: notConnectedMsg,
@@ -121,6 +137,12 @@ export function makeTransportScoped<
       }),
 
       reconnect: Effect.fnUntraced(function* () {
+        if (closed) {
+          return yield* new ModbusNotConnectedError({
+            cause: new Error("Transport has been closed"),
+            message: "Transport has been closed",
+          });
+        }
         if (transport) {
           if (!reconnectPromise) {
             reconnectPromise = transport
@@ -157,6 +179,7 @@ export function makeTransportScoped<
       }),
 
       hasPendingRequests: () => {
+        if (closed) return false;
         const t = transport;
         if (!t) return false;
         return t.pendingRequests;
