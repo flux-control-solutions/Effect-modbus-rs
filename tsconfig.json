@@ -28,5 +28,5 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "exclude": ["node_modules", "references", ".opencode", "dist"]
+  "exclude": ["node_modules", "references", ".opencode", "dist", "examples"]
 }
