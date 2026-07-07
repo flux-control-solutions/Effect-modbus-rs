@@ -16,17 +16,20 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src/ ./examples/",
-    "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir ."
+    "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json"
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
+    "@effect/platform-bun": "^0.90.0",
     "@types/bun": "latest",
+    "effect": "^3.21.4",
     "fallow": "^2.103.0",
-    "typescript": "^6.0.3",
-    "@effect/platform-bun": "^0.90.0"
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "effect": "^3.21.4"
   },
   "dependencies": {
-    "effect": "^3.21.4",
     "modbus-rs": "^0.15.3"
   }
 }
