@@ -22,8 +22,8 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.js"
+      "types": "./index.ts",
+      "default": "./index.ts"
     }
   },
   "scripts": {
