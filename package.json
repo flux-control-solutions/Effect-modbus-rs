@@ -34,16 +34,17 @@
     "docs": "typedoc"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.86.2",
+    "@changesets/cli": "^2.31.1",
+    "@effect/language-service": "^0.86.6",
     "@effect/platform-bun": "^0.90.0",
     "@types/bun": "latest",
-    "effect": "^3.21.4",
-    "fallow": "^2.103.0",
+    "effect": "^3.22.0",
+    "fallow": "^2.104.0",
     "typedoc": "^0.28.20",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "effect": "^3.21.4"
+    "effect": "^3.22.0"
   },
   "dependencies": {
     "modbus-rs": "^0.15.4"

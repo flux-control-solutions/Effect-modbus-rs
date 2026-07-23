@@ -1,20 +1,21 @@
 import { Effect, Schema } from "effect";
-import type {
-  AsciiTransportOptions,
-  DiagnosticsOptions,
-  ReadBitsOptions,
-  ReadDeviceIdentificationOptions,
-  ReadFifoQueueOptions,
-  ReadFileRecordOptions,
-  ReadRegistersOptions,
-  ReadWriteMultipleRegistersOptions,
-  RtuTransportOptions,
-  TcpTransportOptions,
-  WriteFileRecordOptions,
-  WriteMultipleCoilsOptions,
-  WriteMultipleRegistersOptions,
-  WriteSingleCoilOptions,
-  WriteSingleRegisterOptions,
+import {
+  CoilState,
+  type AsciiTransportOptions,
+  type DiagnosticsOptions,
+  type ReadBitsOptions,
+  type ReadDeviceIdentificationOptions,
+  type ReadFifoQueueOptions,
+  type ReadFileRecordOptions,
+  type ReadRegistersOptions,
+  type ReadWriteMultipleRegistersOptions,
+  type RtuTransportOptions,
+  type TcpTransportOptions,
+  type WriteFileRecordOptions,
+  type WriteMultipleCoilsOptions,
+  type WriteMultipleRegistersOptions,
+  type WriteSingleCoilOptions,
+  type WriteSingleRegisterOptions,
 } from "modbus-rs";
 import { ModbusInvalidArgumentError, type ModbusError } from "./errors";
 import type { EffectModbusClient } from "./modbus-client";
@@ -178,9 +179,11 @@ const makeMockModbusClient = (
     if (opts.address + opts.quantity > state.maxCoilAddress + 1) {
       return yield* failOutOfRange("Coil", opts.address, opts.quantity);
     }
-    const result: boolean[] = [];
+    const result: CoilState[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
-      result.push(state.coils.get(i) ?? false);
+      result.push(
+        state.coils.get(i) ?? false ? CoilState.On : CoilState.Off,
+      );
     }
     return result;
   }),
@@ -194,9 +197,11 @@ const makeMockModbusClient = (
         opts.quantity,
       );
     }
-    const result: boolean[] = [];
+    const result: CoilState[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
-      result.push(state.discreteInputs.get(i) ?? false);
+      result.push(
+        state.discreteInputs.get(i) ?? false ? CoilState.On : CoilState.Off,
+      );
     }
     return result;
   }),
@@ -219,7 +224,7 @@ const makeMockModbusClient = (
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
       result.push(state.holdingRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   readInputRegisters: Effect.fnUntraced(function* (opts: ReadRegistersOptions) {
@@ -235,7 +240,7 @@ const makeMockModbusClient = (
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
       result.push(state.inputRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   writeSingleCoil: Effect.fnUntraced(function* (opts: WriteSingleCoilOptions) {
@@ -243,7 +248,7 @@ const makeMockModbusClient = (
     if (opts.address > state.maxCoilAddress) {
       return yield* failOutOfRange("Coil", opts.address);
     }
-    state.coils.set(opts.address, opts.value);
+    state.coils.set(opts.address, opts.value === CoilState.On);
   }),
 
   writeMultipleCoils: Effect.fnUntraced(function* (
@@ -254,7 +259,7 @@ const makeMockModbusClient = (
       return yield* failOutOfRange("Coil", opts.address, opts.values.length);
     }
     for (let i = 0; i < opts.values.length; i++) {
-      state.coils.set(opts.address + i, opts.values[i]!);
+      state.coils.set(opts.address + i, opts.values[i]! === CoilState.On);
     }
   }),
 
@@ -318,7 +323,7 @@ const makeMockModbusClient = (
     for (let i = opts.readAddress; i < opts.readAddress + opts.readQuantity; i++) {
       result.push(state.holdingRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   readFifoQueue: Effect.fnUntraced(function* (_opts: ReadFifoQueueOptions) {
@@ -349,7 +354,7 @@ const makeMockModbusClient = (
 
   diagnostics: Effect.fnUntraced(function* (opts: DiagnosticsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} diagnostics`, opts);
-    return { subFunction: opts.subFunction, data: [] };
+    return { subFunction: opts.subFunction, data: new Uint16Array() };
   }),
 
   readDeviceIdentification: Effect.fnUntraced(function* (

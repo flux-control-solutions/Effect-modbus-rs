@@ -33,7 +33,7 @@ const program = Effect.gen(function* () {
     readAddress: 0,
     readQuantity: 3,
     writeAddress: 0,
-    writeValues: [11, 22, 33],
+    writeValues: new Uint16Array([11, 22, 33]),
   });
   yield* Console.log("ReadWriteMultipleRegisters result:", readResult);
 
@@ -60,7 +60,7 @@ const program = Effect.gen(function* () {
     .pipe(
       Effect.catchTag("ModbusInvalidArgumentError", (err) =>
         Console.log("Expected out-of-range error:", err.message).pipe(
-          Effect.map(() => [] as number[]),
+          Effect.map(() => new Uint16Array()),
         ),
       ),
     );

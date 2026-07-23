@@ -16,6 +16,7 @@ import type {
   DeviceIdentificationResponse,
   AsyncSerialModbusClient,
   AsyncTcpModbusClient,
+  CoilState,
 } from "modbus-rs";
 import { Effect } from "effect";
 import type { ModbusError } from "./errors";
@@ -50,7 +51,7 @@ export interface EffectModbusClient {
    */
   readHoldingRegisters(
     opts: ReadRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Reads input registers from the Modbus device (FC04).
@@ -63,7 +64,7 @@ export interface EffectModbusClient {
    */
   readInputRegisters(
     opts: ReadRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Writes a single holding register (FC06).
@@ -102,7 +103,7 @@ export interface EffectModbusClient {
    */
   readWriteMultipleRegisters(
     opts: ReadWriteMultipleRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Reads coils (digital outputs) from the Modbus device (FC01).
@@ -112,7 +113,7 @@ export interface EffectModbusClient {
    *
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
-  readCoils(opts: ReadBitsOptions): Effect.Effect<boolean[], ModbusError>;
+  readCoils(opts: ReadBitsOptions): Effect.Effect<CoilState[], ModbusError>;
 
   /**
    * Writes a single coil (digital output) (FC05).
@@ -148,7 +149,7 @@ export interface EffectModbusClient {
    */
   readDiscreteInputs(
     opts: ReadBitsOptions,
-  ): Effect.Effect<boolean[], ModbusError>;
+  ): Effect.Effect<CoilState[], ModbusError>;
 
   /**
    * Reads the FIFO queue from the Modbus device (FC24).
@@ -173,7 +174,7 @@ export interface EffectModbusClient {
    */
   readFileRecord(
     opts: ReadFileRecordOptions,
-  ): Effect.Effect<number[][], ModbusError>;
+  ): Effect.Effect<Uint16Array[], ModbusError>;
 
   /**
    * Writes file records to the Modbus device (FC21).

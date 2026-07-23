@@ -10,6 +10,7 @@
  */
 
 import { Console, Effect } from "effect";
+import { CoilState } from "modbus-rs";
 import { RtuTransportService } from "../src/RtuTransportService";
 
 const device = {
@@ -36,7 +37,7 @@ const program = Effect.gen(function* () {
   const coils = yield* client.readCoils({ address: 0, quantity: 3 });
   yield* Console.log("Coils (before):", coils);
 
-  yield* client.writeSingleCoil({ address: 1, value: true });
+  yield* client.writeSingleCoil({ address: 1, value: CoilState.On });
 
   const coilsAfter = yield* client.readCoils({ address: 0, quantity: 3 });
   yield* Console.log("Coils (after):", coilsAfter);

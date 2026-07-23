@@ -12,6 +12,7 @@
  */
 
 import { Console, Effect } from "effect";
+import { CoilState } from "modbus-rs";
 import { TcpTransportService } from "../src/TcpTransportService";
 
 const device = {
@@ -37,9 +38,9 @@ const program = Effect.gen(function* () {
 
       yield* client.writeMultipleRegisters({
         address: 0,
-        values: [100, 200, 300],
+        values: new Uint16Array([100, 200, 300]),
       });
-      yield* client.writeSingleCoil({ address: 0, value: true });
+      yield* client.writeSingleCoil({ address: 0, value: CoilState.On });
 
       const regsBefore = yield* client.readHoldingRegisters({
         address: 0,
@@ -57,11 +58,11 @@ const program = Effect.gen(function* () {
           yield* client
             .writeMultipleRegisters({
               address: 0,
-              values: [0, 0, 0],
+              values: new Uint16Array([0, 0, 0]),
             })
             .pipe(Effect.catchAll((err) => Console.log(err.message)));
           yield* client
-            .writeSingleCoil({ address: 0, value: false })
+            .writeSingleCoil({ address: 0, value: CoilState.Off })
             .pipe(Effect.catchAll((err) => Console.log(err.message)));
         }),
       );

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { test, expect } from "bun:test";
+import { CoilState } from "modbus-rs";
 import { RtuTransportService } from "./RtuTransportService";
 import { ModbusInvalidArgumentError } from "./errors";
 
@@ -42,7 +43,7 @@ test("read coils returns defaults", async () => {
       return yield* c.readCoils({ address: 0, quantity: 2 });
     }),
   );
-  expect(result).toEqual([true, false]);
+  expect(result).toEqual([CoilState.On, CoilState.Off]);
 });
 
 test("read coils returns false for unconfigured addresses", async () => {
@@ -53,7 +54,7 @@ test("read coils returns false for unconfigured addresses", async () => {
       return yield* c.readCoils({ address: 3, quantity: 2 });
     }),
   );
-  expect(result).toEqual([false, false]);
+  expect(result).toEqual([CoilState.Off, CoilState.Off]);
 });
 
 test("write single coil and read back", async () => {
@@ -61,11 +62,11 @@ test("write single coil and read back", async () => {
     Effect.gen(function* () {
       const t = yield* RtuTransportService;
       const c = yield* t.withClient(1);
-      yield* c.writeSingleCoil({ address: 1, value: true });
+      yield* c.writeSingleCoil({ address: 1, value: CoilState.On });
       return yield* c.readCoils({ address: 0, quantity: 3 });
     }),
   );
-  expect(result).toEqual([true, true, false]);
+  expect(result).toEqual([CoilState.On, CoilState.On, CoilState.Off]);
 });
 
 test("write multiple coils and read back", async () => {
@@ -73,11 +74,14 @@ test("write multiple coils and read back", async () => {
     Effect.gen(function* () {
       const t = yield* RtuTransportService;
       const c = yield* t.withClient(1);
-      yield* c.writeMultipleCoils({ address: 0, values: [false, true, false] });
+      yield* c.writeMultipleCoils({
+        address: 0,
+        values: [CoilState.Off, CoilState.On, CoilState.Off],
+      });
       return yield* c.readCoils({ address: 0, quantity: 3 });
     }),
   );
-  expect(result).toEqual([false, true, false]);
+  expect(result).toEqual([CoilState.Off, CoilState.On, CoilState.Off]);
 });
 
 test("read holding registers returns defaults", async () => {
@@ -88,7 +92,7 @@ test("read holding registers returns defaults", async () => {
       return yield* c.readHoldingRegisters({ address: 0, quantity: 2 });
     }),
   );
-  expect(result).toEqual([100, 200]);
+  expect(result).toEqual(new Uint16Array([100, 200]));
 });
 
 test("read beyond configured registers returns error", async () => {
@@ -113,7 +117,7 @@ test("write single register and read back", async () => {
       return yield* c.readHoldingRegisters({ address: 0, quantity: 2 });
     }),
   );
-  expect(result).toEqual([100, 999]);
+  expect(result).toEqual(new Uint16Array([100, 999]));
 });
 
 test("write multiple registers and read back", async () => {
@@ -121,11 +125,14 @@ test("write multiple registers and read back", async () => {
     Effect.gen(function* () {
       const t = yield* RtuTransportService;
       const c = yield* t.withClient(1);
-      yield* c.writeMultipleRegisters({ address: 0, values: [10, 20] });
+      yield* c.writeMultipleRegisters({
+        address: 0,
+        values: new Uint16Array([10, 20]),
+      });
       return yield* c.readHoldingRegisters({ address: 0, quantity: 2 });
     }),
   );
-  expect(result).toEqual([10, 20]);
+  expect(result).toEqual(new Uint16Array([10, 20]));
 });
 
 test("readWriteMultipleRegisters writes then reads", async () => {
@@ -137,11 +144,11 @@ test("readWriteMultipleRegisters writes then reads", async () => {
         readAddress: 0,
         readQuantity: 2,
         writeAddress: 0,
-        writeValues: [11, 22],
+        writeValues: new Uint16Array([11, 22]),
       });
     }),
   );
-  expect(result).toEqual([11, 22]);
+  expect(result).toEqual(new Uint16Array([11, 22]));
 });
 
 test("read discrete inputs returns defaults", async () => {
@@ -152,7 +159,7 @@ test("read discrete inputs returns defaults", async () => {
       return yield* c.readDiscreteInputs({ address: 0, quantity: 1 });
     }),
   );
-  expect(result).toEqual([true]);
+  expect(result).toEqual([CoilState.On]);
 });
 
 test("read input registers returns defaults", async () => {
@@ -163,7 +170,7 @@ test("read input registers returns defaults", async () => {
       return yield* c.readInputRegisters({ address: 0, quantity: 1 });
     }),
   );
-  expect(result).toEqual([42]);
+  expect(result).toEqual(new Uint16Array([42]));
 });
 
 test("read exception status returns 0", async () => {
@@ -195,7 +202,7 @@ test("write beyond configured coils returns error", async () => {
     Effect.gen(function* () {
       const t = yield* RtuTransportService;
       const c = yield* t.withClient(1);
-      return yield* c.writeSingleCoil({ address: 100, value: true }).pipe(
+      return yield* c.writeSingleCoil({ address: 100, value: CoilState.On }).pipe(
         Effect.flip,
       );
     }),
@@ -218,10 +225,10 @@ test("diagnostics returns expected shape", async () => {
     Effect.gen(function* () {
       const t = yield* RtuTransportService;
       const c = yield* t.withClient(1);
-      return yield* c.diagnostics({ subFunction: 0, data: [] });
+      return yield* c.diagnostics({ subFunction: 0, data: new Uint16Array() });
     }),
   );
-  expect(result).toEqual({ subFunction: 0, data: [] });
+  expect(result).toEqual({ subFunction: 0, data: new Uint16Array() });
 });
 
 test("readDeviceIdentification returns expected shape", async () => {
@@ -250,7 +257,7 @@ test("multiple unit IDs are isolated", async () => {
       return c1regs;
     }),
   );
-  expect(result).toEqual([999]);
+  expect(result).toEqual(new Uint16Array([999]));
 });
 
 test("readFifoQueue returns error (not yet supported)", async () => {

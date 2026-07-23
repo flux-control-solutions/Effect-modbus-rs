@@ -12,37 +12,37 @@
 import { Console, Effect, Layer, LogLevel, Logger } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import type { ReadCoilsRequest, ReadHoldingRegistersRequest, WriteMultipleCoilsRequest, WriteMultipleRegistersRequest, WriteSingleCoilRequest, WriteSingleRegisterRequest } from "modbus-rs";
-import type { ServerHandlers } from "modbus-rs";
+import { CoilState, type ServerHandlers } from "modbus-rs";
 import { tcpServerLayer } from "../src/TcpModbusServerService";
 
 const coils = new Map<number, boolean>();
 const holdingRegisters = new Map<number, number>();
 
 const handlers: ServerHandlers = {
-  onReadCoils: (req: ReadCoilsRequest): boolean[] => {
-    const result: boolean[] = [];
+  onReadCoils: (req: ReadCoilsRequest): CoilState[] => {
+    const result: CoilState[] = [];
     for (let i = 0; i < req.quantity; i++) {
-      result.push(coils.get(req.address + i) ?? false);
+      result.push(coils.get(req.address + i) ?? false ? CoilState.On : CoilState.Off);
     }
     return result;
   },
 
   onWriteSingleCoil: (req: WriteSingleCoilRequest): void => {
-    coils.set(req.address, req.value);
+    coils.set(req.address, req.value === CoilState.On);
   },
 
   onWriteMultipleCoils: (req: WriteMultipleCoilsRequest): void => {
     for (let i = 0; i < req.values.length; i++) {
-      coils.set(req.address + i, req.values[i]!);
+      coils.set(req.address + i, req.values[i]! === CoilState.On);
     }
   },
 
-  onReadHoldingRegisters: (req: ReadHoldingRegistersRequest): number[] => {
+  onReadHoldingRegisters: (req: ReadHoldingRegistersRequest): Uint16Array => {
     const result: number[] = [];
     for (let i = 0; i < req.quantity; i++) {
       result.push(holdingRegisters.get(req.address + i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   },
 
   onWriteSingleRegister: (req: WriteSingleRegisterRequest): void => {

@@ -10,6 +10,7 @@
  */
 
 import { Console, Effect } from "effect";
+import { CoilState } from "modbus-rs";
 import { TcpTransportService } from "../src/TcpTransportService";
 
 const devices = [
@@ -56,7 +57,7 @@ const program = Effect.gen(function* () {
 
   yield* device1.writeMultipleCoils({
     address: 0,
-    values: [true, true, true],
+    values: [CoilState.On, CoilState.On, CoilState.On],
   });
   const coilsAfter = yield* device1.readCoils({ address: 0, quantity: 3 });
   yield* Console.log("Unit 1 coils (after):", coilsAfter);
@@ -76,7 +77,7 @@ const program = Effect.gen(function* () {
 
   yield* device2.writeMultipleRegisters({
     address: 0,
-    values: [100, 200],
+    values: new Uint16Array([100, 200]),
   });
   const holdingAfter = yield* device2.readHoldingRegisters({
     address: 0,
