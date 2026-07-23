@@ -17,6 +17,7 @@ import {
   type WriteSingleCoilOptions,
   type WriteSingleRegisterOptions,
 } from "modbus-rs";
+import type { WasmWsTransportOptions, WasmSerialTransportOptions } from "modbus-rs/web";
 import { ModbusInvalidArgumentError, type ModbusError } from "./errors";
 import type { EffectModbusClient } from "./modbus-client";
 
@@ -413,7 +414,12 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
   }
 
   return (
-    _options: RtuTransportOptions | AsciiTransportOptions | TcpTransportOptions,
+    _options:
+      | RtuTransportOptions
+      | AsciiTransportOptions
+      | TcpTransportOptions
+      | WasmWsTransportOptions
+      | WasmSerialTransportOptions,
   ) =>
     Effect.gen(function* () {
       yield* Effect.logDebug("Mock transport opened with devices:", deviceDefs);

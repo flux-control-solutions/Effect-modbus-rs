@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>effect-modbus-rs — Browser (WASM) Example</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+        display: flex;
+        justify-content: center;
+        padding: 32px 16px;
+        box-sizing: border-box;
+      }
+      main {
+        width: 100%;
+        max-width: 640px;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      p.subtitle {
+        color: #94a3b8;
+        margin-top: -8px;
+      }
+      section {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin-bottom: 16px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #94a3b8;
+        margin-bottom: 4px;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        color: #f1f5f9;
+        padding: 8px 10px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .row > div {
+        flex: 1;
+        min-width: 120px;
+      }
+      button {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #status {
+        font-weight: 600;
+      }
+      #log {
+        white-space: pre-wrap;
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+        max-height: 240px;
+        overflow-y: auto;
+        background: rgba(15, 23, 42, 0.6);
+        border-radius: 8px;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>effect-modbus-rs — Browser (WASM) Example</h1>
+      <p class="subtitle">
+        Exercises <code>WasmWsTransportService</code> and
+        <code>WasmRtuTransportService</code>/<code>WasmAsciiTransportService</code> from this
+        package, in a real browser.
+      </p>
+
+      <section>
+        <div class="row">
+          <div>
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="ws">TCP over WebSocket gateway</option>
+              <option value="serial">Web Serial (RTU/ASCII)</option>
+            </select>
+          </div>
+          <div id="ws-fields">
+            <label for="wsUrl">WebSocket gateway URL</label>
+            <input id="wsUrl" type="text" value="ws://127.0.0.1:8080" />
+          </div>
+          <div id="serial-fields" style="display: none">
+            <label for="protocol">Protocol</label>
+            <select id="protocol">
+              <option value="rtu">RTU</option>
+              <option value="ascii">ASCII</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" id="serial-baud-row" style="display: none">
+          <div>
+            <label for="baudRate">Baud rate</label>
+            <select id="baudRate">
+              <option>9600</option>
+              <option>19200</option>
+              <option>38400</option>
+              <option>115200</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="unitId">Unit ID</label>
+            <input id="unitId" type="number" value="1" />
+          </div>
+          <div style="display: flex; align-items: flex-end">
+            <button id="connect">Connect</button>
+            <button id="disconnect" disabled>Disconnect</button>
+          </div>
+        </div>
+        <p>Status: <span id="status">disconnected</span></p>
+      </section>
+
+      <section>
+        <h3 style="margin-top: 0">Read holding registers (FC03)</h3>
+        <div class="row">
+          <div>
+            <label for="address">Address</label>
+            <input id="address" type="number" value="0" />
+          </div>
+          <div>
+            <label for="quantity">Quantity</label>
+            <input id="quantity" type="number" value="10" />
+          </div>
+          <div style="display: flex; align-items: flex-end">
+            <button id="read" disabled>Read</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3 style="margin-top: 0">Log</h3>
+        <div id="log"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

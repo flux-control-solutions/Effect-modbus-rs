@@ -66,12 +66,24 @@ export function makeTransportScoped<
   transportKey: string,
   openMethod: (TC: unknown, options: TOptions) => Promise<TTransport>,
   serviceName: string,
+  config?: {
+    /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
+    moduleSpecifier?: "modbus-rs" | "modbus-rs/web";
+    /** Wraps the raw transport client into an {@link EffectModbusClient}. Defaults to {@link makeEffectModbusClient}. */
+    toEffectClient?: (client: TClient) => EffectModbusClient;
+  },
 ) {
   return Effect.fnUntraced(function* (options: TOptions) {
-    const mod: Record<string, unknown> = yield* Effect.promise(() =>
-      import("modbus-rs"),
-    );
+    // Branched as a literal specifier (not a variable) so bundlers reliably apply
+    // modbus-rs's conditional exports when resolving the dynamic import.
+    const mod: Record<string, unknown> =
+      config?.moduleSpecifier === "modbus-rs/web"
+        ? yield* Effect.promise(() => import("modbus-rs/web"))
+        : yield* Effect.promise(() => import("modbus-rs"));
     const TC = mod[transportKey];
+    const toEffectClient = (config?.toEffectClient ?? makeEffectModbusClient) as unknown as (
+      client: TClient,
+    ) => EffectModbusClient;
 
     let transport: TTransport | null = null;
     let connectPromise: Promise<TTransport> | null = null;
@@ -145,7 +157,7 @@ export function makeTransportScoped<
           });
           clientSet.set(unitId, client);
         }
-        return makeEffectModbusClient(client);
+        return toEffectClient(client);
       }),
 
       setRequestTimeout: Effect.fnUntraced(function* (timeoutMs: number) {

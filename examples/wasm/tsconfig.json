@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+
+    "strict": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": [
+    "src",
+    "vite.config.ts",
+    // TEMPORARY: makes the parent package's modbus-rs/web ambient type shim visible here too
+    // (it otherwise only applies within the parent repo's own tsc invocation). Remove this
+    // entry along with ../../src/modbus-rs-web.d.ts once upstream's modbus-rs-wasm publish
+    // is fixed — see that file's doc comment and ../../AGENTS.md's WASM section.
+    "../../src/modbus-rs-web.d.ts"
+  ]
+}
