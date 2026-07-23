@@ -1,21 +1,35 @@
 {
   "name": "effect-modbus-rs",
   "version": "1.0.0",
-  "description": "",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Type-safe Modbus communication via Effect-TS, wrapping the modbus-rs npm bindings.",
   "type": "module",
-  "exports": {
-    ".": {
-      "import": {
+  "files": [
+    "src/**/*.ts",
+    "dist/**/*.js",
+    "dist/**/*.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "exports": {
+      "./package.json": "./package.json",
+      ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       }
     }
   },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.js"
+    }
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit",
     "test": "bun test ./src/ ./examples/",
+    "test:coverage": "bun test --coverage ./src/ ./examples/",
+    "typecheck": "tsc --noEmit",
     "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json"
   },
   "devDependencies": {
@@ -31,5 +45,6 @@
   },
   "dependencies": {
     "modbus-rs": "^0.15.3"
-  }
+  },
+  "license": "GPL-3.0"
 }
