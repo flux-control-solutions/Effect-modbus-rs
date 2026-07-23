@@ -46,7 +46,7 @@
     "effect": "^3.21.4"
   },
   "dependencies": {
-    "modbus-rs": "^0.15.3"
+    "modbus-rs": "^0.15.4"
   },
   "license": "GPL-3.0"
 }
