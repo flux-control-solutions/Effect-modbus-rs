@@ -7,5 +7,6 @@
   "readme": "README.md",
   "cleanOutputDir": true,
   "excludePrivate": true,
-  "excludeInternal": true
+  "excludeInternal": true,
+  "excludeExternals": true
 }
