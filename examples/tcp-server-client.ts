@@ -13,15 +13,7 @@
  * @example bun run examples/tcp-server-client.ts
  */
 
-import {
-  Console,
-  Effect,
-  Fiber,
-  Layer,
-  LogLevel,
-  Logger,
-  Schedule,
-} from "effect";
+import { Console, Effect, Fiber, Layer, LogLevel, Logger, Schedule } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import type {
   ReadCoilsRequest,
@@ -44,7 +36,7 @@ const handlers: ServerHandlers = {
   onReadCoils: (req: ReadCoilsRequest): CoilState[] => {
     const result: CoilState[] = [];
     for (let i = 0; i < req.quantity; i++) {
-      result.push(coils.get(req.address + i) ?? false ? CoilState.On : CoilState.Off);
+      result.push((coils.get(req.address + i) ?? false) ? CoilState.On : CoilState.Off);
     }
     return result;
   },
@@ -79,25 +71,17 @@ const handlers: ServerHandlers = {
 };
 
 const program = Effect.gen(function* () {
-  const serverFiber = yield* Effect.acquireRelease(
-    Effect.fork(
-      Layer.launch(
-        tcpServerLayer({ host: "0.0.0.0", port: PORT, unitId: 1 }, handlers),
-      ),
-    ),
+  yield* Effect.acquireRelease(
+    Effect.fork(Layer.launch(tcpServerLayer({ host: "0.0.0.0", port: PORT, unitId: 1 }, handlers))),
     (fiber) => Fiber.interrupt(fiber).pipe(Effect.catchAll(() => Effect.void)),
   );
 
-  yield* Console.log(
-    "--- Client connecting (with retries until server is ready) ---",
-  );
+  yield* Console.log("--- Client connecting (with retries until server is ready) ---");
 
   const transport = yield* TcpTransportService;
   const client = yield* transport
     .withClient(1)
-    .pipe(
-      Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => "50 millis")),
-    );
+    .pipe(Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => "50 millis")));
 
   yield* Console.log("--- Client connected, reading initial state ---");
 
@@ -144,10 +128,8 @@ BunRuntime.runMain(
     ),
     Effect.catchTags({
       ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
-      ModbusTransportError: (err) =>
-        Console.log(`Transport error: ${err.message}`),
-      ModbusConnectionClosedError: (err) =>
-        Console.log(`Connection lost: ${err.message}`),
+      ModbusTransportError: (err) => Console.log(`Transport error: ${err.message}`),
+      ModbusConnectionClosedError: (err) => Console.log(`Connection lost: ${err.message}`),
     }),
     Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
     Logger.withMinimumLogLevel(LogLevel.Debug),

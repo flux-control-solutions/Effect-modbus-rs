@@ -31,7 +31,11 @@
     "test:coverage": "bun test --coverage ./src/ ./examples/",
     "typecheck": "tsc --noEmit",
     "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:fix": "oxfmt --fix"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
@@ -40,6 +44,8 @@
     "@types/bun": "latest",
     "effect": "^3.22.0",
     "fallow": "^2.104.0",
+    "oxfmt": "^0.60.0",
+    "oxlint": "^1.75.0",
     "typedoc": "^0.28.20",
     "typescript": "^7.0.2"
   },
@@ -47,7 +53,7 @@
     "effect": "^3.22.0"
   },
   "dependencies": {
-    "modbus-rs": "^0.15.4"
+    "modbus-rs": "^0.15.6"
   },
   "license": "GPL-3.0"
 }

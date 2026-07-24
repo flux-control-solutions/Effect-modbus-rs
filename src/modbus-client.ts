@@ -32,7 +32,10 @@ export type AnyModbusClient = NativeModbusClient | WasmModbusClient;
 
 /** Wraps a Promise-returning call in `Effect.tryPromise`, routing errors through {@link toModbusError}. */
 const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
-  Effect.tryPromise({ try: try_, catch: (error) => toModbusError(error as Error) });
+  Effect.tryPromise({
+    try: try_,
+    catch: (error) => toModbusError(error as Error),
+  });
 
 /**
  * Effect-ified Modbus client wrapping a `modbus-rs` transport client.
@@ -60,7 +63,7 @@ export interface EffectModbusClient {
    * @see AsyncSerialModbusClient.readHoldingRegisters — Upstream implementation.
    */
   readHoldingRegisters(
-    opts: ReadRegistersOptions,
+    opts: ReadRegistersOptions
   ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
@@ -73,7 +76,7 @@ export interface EffectModbusClient {
    * @see AsyncSerialModbusClient.readInputRegisters — Upstream implementation.
    */
   readInputRegisters(
-    opts: ReadRegistersOptions,
+    opts: ReadRegistersOptions
   ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
@@ -85,7 +88,7 @@ export interface EffectModbusClient {
    * @see WriteSingleRegisterOptions — Options shape from `modbus-rs`.
    */
   writeSingleRegister(
-    opts: WriteSingleRegisterOptions,
+    opts: WriteSingleRegisterOptions
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -97,7 +100,7 @@ export interface EffectModbusClient {
    * @see WriteMultipleRegistersOptions — Options shape from `modbus-rs`.
    */
   writeMultipleRegisters(
-    opts: WriteMultipleRegistersOptions,
+    opts: WriteMultipleRegistersOptions
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -112,7 +115,7 @@ export interface EffectModbusClient {
    * @see ReadWriteMultipleRegistersOptions — Options shape from `modbus-rs`.
    */
   readWriteMultipleRegisters(
-    opts: ReadWriteMultipleRegistersOptions,
+    opts: ReadWriteMultipleRegistersOptions
   ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
@@ -134,7 +137,7 @@ export interface EffectModbusClient {
    * @see WriteSingleCoilOptions — Options shape from `modbus-rs`.
    */
   writeSingleCoil(
-    opts: WriteSingleCoilOptions,
+    opts: WriteSingleCoilOptions
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -146,7 +149,7 @@ export interface EffectModbusClient {
    * @see WriteMultipleCoilsOptions — Options shape from `modbus-rs`.
    */
   writeMultipleCoils(
-    opts: WriteMultipleCoilsOptions,
+    opts: WriteMultipleCoilsOptions
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -158,7 +161,7 @@ export interface EffectModbusClient {
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
   readDiscreteInputs(
-    opts: ReadBitsOptions,
+    opts: ReadBitsOptions
   ): Effect.Effect<CoilState[], ModbusError>;
 
   /**
@@ -171,7 +174,7 @@ export interface EffectModbusClient {
    * @see FifoQueueResponse — Response type from `modbus-rs`.
    */
   readFifoQueue(
-    opts: ReadFifoQueueOptions,
+    opts: ReadFifoQueueOptions
   ): Effect.Effect<FifoQueueResponse, ModbusError>;
 
   /**
@@ -183,7 +186,7 @@ export interface EffectModbusClient {
    * @see ReadFileRecordOptions — Options shape from `modbus-rs`.
    */
   readFileRecord(
-    opts: ReadFileRecordOptions,
+    opts: ReadFileRecordOptions
   ): Effect.Effect<Uint16Array[], ModbusError>;
 
   /**
@@ -195,7 +198,7 @@ export interface EffectModbusClient {
    * @see WriteFileRecordOptions — Options shape from `modbus-rs`.
    */
   writeFileRecord(
-    opts: WriteFileRecordOptions,
+    opts: WriteFileRecordOptions
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -217,7 +220,7 @@ export interface EffectModbusClient {
    * @see DiagnosticsResponse — Response type from `modbus-rs`.
    */
   diagnostics(
-    opts: DiagnosticsOptions,
+    opts: DiagnosticsOptions
   ): Effect.Effect<DiagnosticsResponse, ModbusError>;
 
   /**
@@ -230,7 +233,7 @@ export interface EffectModbusClient {
    * @see DeviceIdentificationResponse — Response type from `modbus-rs`.
    */
   readDeviceIdentification(
-    opts: ReadDeviceIdentificationOptions,
+    opts: ReadDeviceIdentificationOptions
   ): Effect.Effect<DeviceIdentificationResponse, ModbusError>;
 }
 
@@ -252,12 +255,16 @@ export interface EffectModbusClient {
  * @see AsyncSerialModbusClient — Upstream serial client API.
  * @see AsyncTcpModbusClient — Upstream TCP client API.
  */
-export const makeEffectModbusClient = (client: NativeModbusClient): EffectModbusClient => ({
+export const makeEffectModbusClient = (
+  client: NativeModbusClient
+): EffectModbusClient => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
-  writeMultipleRegisters: (opts) => wrap(() => client.writeMultipleRegisters(opts)),
-  readWriteMultipleRegisters: (opts) => wrap(() => client.readWriteMultipleRegisters(opts)),
+  writeMultipleRegisters: (opts) =>
+    wrap(() => client.writeMultipleRegisters(opts)),
+  readWriteMultipleRegisters: (opts) =>
+    wrap(() => client.readWriteMultipleRegisters(opts)),
   readCoils: (opts) => wrap(() => client.readCoils(opts)),
   writeSingleCoil: (opts) => wrap(() => client.writeSingleCoil(opts)),
   writeMultipleCoils: (opts) => wrap(() => client.writeMultipleCoils(opts)),
@@ -267,7 +274,8 @@ export const makeEffectModbusClient = (client: NativeModbusClient): EffectModbus
   writeFileRecord: (opts) => wrap(() => client.writeFileRecord(opts)),
   readExceptionStatus: () => wrap(() => client.readExceptionStatus()),
   diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
-  readDeviceIdentification: (opts) => wrap(() => client.readDeviceIdentification(opts)),
+  readDeviceIdentification: (opts) =>
+    wrap(() => client.readDeviceIdentification(opts)),
 });
 
 /**
@@ -292,25 +300,29 @@ export const makeEffectModbusClient = (client: NativeModbusClient): EffectModbus
  * @param client - The upstream `modbus-rs/web` client instance.
  * @see makeEffectModbusClient — The native-client equivalent.
  */
-export const makeWasmEffectModbusClient = (client: WasmModbusClient): EffectModbusClient => ({
+export const makeWasmEffectModbusClient = (
+  client: WasmModbusClient
+): EffectModbusClient => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
-  writeMultipleRegisters: (opts) => wrap(() => client.writeMultipleRegisters(opts)),
-  readWriteMultipleRegisters: (opts) => wrap(() => client.readWriteMultipleRegisters(opts)),
+  writeMultipleRegisters: (opts) =>
+    wrap(() => client.writeMultipleRegisters(opts)),
+  readWriteMultipleRegisters: (opts) =>
+    wrap(() => client.readWriteMultipleRegisters(opts)),
   readCoils: (opts) =>
     wrap(() => client.readCoils(opts)).pipe(
-      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off))),
+      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off)))
     ),
   writeSingleCoil: (opts) => wrap(() => client.writeSingleCoil(opts)),
   writeMultipleCoils: (opts) => wrap(() => client.writeMultipleCoils(opts)),
   readDiscreteInputs: (opts) =>
     wrap(() => client.readDiscreteInputs(opts)).pipe(
-      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off))),
+      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off)))
     ),
   readFifoQueue: (opts) =>
     wrap(() => client.readFifoQueue(opts)).pipe(
-      Effect.map((values): FifoQueueResponse => ({ count: values.length, values })),
+      Effect.map((values): FifoQueueResponse => values)
     ),
   readFileRecord: (opts) => wrap(() => client.readFileRecord(opts)),
   writeFileRecord: (opts) => wrap(() => client.writeFileRecord(opts)),
@@ -324,7 +336,7 @@ export const makeWasmEffectModbusClient = (client: WasmModbusClient): EffectModb
           moreFollows: resp.moreFollows,
           nextObjectId: 0,
           objects: resp.objects,
-        }),
-      ),
+        })
+      )
     ),
 });

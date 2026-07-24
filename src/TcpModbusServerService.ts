@@ -1,4 +1,4 @@
-import type { AsyncTcpModbusServer, ServerHandlers, TcpServerOptions } from "modbus-rs";
+import type { ServerHandlers, TcpServerOptions } from "modbus-rs";
 import { Effect, Layer } from "effect";
 import type { ModbusError } from "./errors";
 import { toModbusError } from "./errors";
