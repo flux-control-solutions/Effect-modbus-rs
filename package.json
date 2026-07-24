@@ -36,7 +36,8 @@
     "lint:fix": "oxlint --fix",
     "test": "bun test ./src/ ./examples/",
     "test:coverage": "bun test --coverage ./src/ ./examples/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "dependencies": {
     "modbus-rs": "^0.15.6"
@@ -48,6 +49,7 @@
     "@types/bun": "latest",
     "effect": "^3.22.0",
     "fallow": "^2.104.0",
+    "husky": "^9.1.7",
     "oxfmt": "^0.60.0",
     "oxlint": "^1.75.0",
     "typedoc": "^0.28.20",
