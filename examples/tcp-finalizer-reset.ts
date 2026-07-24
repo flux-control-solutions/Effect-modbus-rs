@@ -11,9 +11,10 @@
  * @example bun run examples/tcp-finalizer-reset.ts
  */
 
-import { Console, Effect } from "effect";
-import { CoilState } from "modbus-rs";
-import { TcpTransportService } from "../src/TcpTransportService";
+import { Console, Effect } from 'effect';
+import { CoilState } from 'modbus-rs';
+
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const device = {
   unitId: 1,
@@ -46,7 +47,7 @@ const program = Effect.gen(function* () {
         address: 0,
         quantity: 3,
       });
-      yield* Console.log("Before scope exit:", {
+      yield* Console.log('Before scope exit:', {
         registers: regsBefore,
       });
 
@@ -54,7 +55,7 @@ const program = Effect.gen(function* () {
       // interruption). It resets registers and coils back to 0.
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
-          yield* Console.log(">>> Finalizer: resetting values to 0...");
+          yield* Console.log('>>> Finalizer: resetting values to 0...');
           yield* client
             .writeMultipleRegisters({
               address: 0,
@@ -79,21 +80,20 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 1,
   });
-  yield* Console.log("After finalizer:", {
+  yield* Console.log('After finalizer:', {
     registers: regsAfter,
     coils: coilsAfter,
   });
 });
 
 const mockLayer = TcpTransportService.makeMockTransport([device])({
-  host: "127.0.0.1",
+  host: '127.0.0.1',
   port: 502,
 });
 
 program.pipe(
   Effect.catchTags({
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),

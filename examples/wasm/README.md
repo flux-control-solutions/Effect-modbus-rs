@@ -62,6 +62,6 @@ republishes a working `0.15.4`+ build, this pin is unnecessary.
 This package also wraps `modbus-rs`'s experimental browser server bindings
 (`wasmWsServerLayer`, `wasmSerialRtuServerLayer`, `wasmSerialAsciiServerLayer`)
 — see the root `README.md`'s "Browser server (experimental)" section. Not
-included in this app since running a simulated Modbus *server* isn't the
+included in this app since running a simulated Modbus _server_ isn't the
 typical browser-app use case, but the same `import { wasmWsServerLayer } from
 "effect-modbus-rs"` pattern applies.

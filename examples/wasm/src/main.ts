@@ -7,32 +7,32 @@
  * read many times, disconnect explicitly) by manually managing an Effect
  * `Scope` instead of using `Effect.scoped` — see `connectWs`/`connectSerial`.
  */
-import { Context, Effect, Exit, Layer, Scope } from "effect";
+import { Context, Effect, Exit, Layer, Scope } from 'effect';
 import {
   WasmAsciiTransportService,
   WasmRtuTransportService,
   WasmWsTransportService,
   requestSerialPort,
   type EffectModbusClient,
-} from "effect-modbus-rs";
+} from 'effect-modbus-rs';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-const modeEl = $<HTMLSelectElement>("mode");
-const wsFieldsEl = $<HTMLDivElement>("ws-fields");
-const serialFieldsEl = $<HTMLDivElement>("serial-fields");
-const serialBaudRowEl = $<HTMLDivElement>("serial-baud-row");
-const wsUrlEl = $<HTMLInputElement>("wsUrl");
-const protocolEl = $<HTMLSelectElement>("protocol");
-const baudRateEl = $<HTMLSelectElement>("baudRate");
-const unitIdEl = $<HTMLInputElement>("unitId");
-const connectBtn = $<HTMLButtonElement>("connect");
-const disconnectBtn = $<HTMLButtonElement>("disconnect");
-const readBtn = $<HTMLButtonElement>("read");
-const addressEl = $<HTMLInputElement>("address");
-const quantityEl = $<HTMLInputElement>("quantity");
-const statusEl = $<HTMLSpanElement>("status");
-const logEl = $<HTMLDivElement>("log");
+const modeEl = $<HTMLSelectElement>('mode');
+const wsFieldsEl = $<HTMLDivElement>('ws-fields');
+const serialFieldsEl = $<HTMLDivElement>('serial-fields');
+const serialBaudRowEl = $<HTMLDivElement>('serial-baud-row');
+const wsUrlEl = $<HTMLInputElement>('wsUrl');
+const protocolEl = $<HTMLSelectElement>('protocol');
+const baudRateEl = $<HTMLSelectElement>('baudRate');
+const unitIdEl = $<HTMLInputElement>('unitId');
+const connectBtn = $<HTMLButtonElement>('connect');
+const disconnectBtn = $<HTMLButtonElement>('disconnect');
+const readBtn = $<HTMLButtonElement>('read');
+const addressEl = $<HTMLInputElement>('address');
+const quantityEl = $<HTMLInputElement>('quantity');
+const statusEl = $<HTMLSpanElement>('status');
+const logEl = $<HTMLDivElement>('log');
 
 const log = (msg: string) => {
   const time = new Date().toLocaleTimeString();
@@ -41,17 +41,17 @@ const log = (msg: string) => {
 
 const setStatus = (status: string) => {
   statusEl.textContent = status;
-  const connected = status === "connected";
+  const connected = status === 'connected';
   connectBtn.disabled = connected;
   disconnectBtn.disabled = !connected;
   readBtn.disabled = !connected;
 };
 
-modeEl.addEventListener("change", () => {
-  const isWs = modeEl.value === "ws";
-  wsFieldsEl.style.display = isWs ? "" : "none";
-  serialFieldsEl.style.display = isWs ? "none" : "";
-  serialBaudRowEl.style.display = isWs ? "none" : "";
+modeEl.addEventListener('change', () => {
+  const isWs = modeEl.value === 'ws';
+  wsFieldsEl.style.display = isWs ? '' : 'none';
+  serialFieldsEl.style.display = isWs ? 'none' : '';
+  serialBaudRowEl.style.display = isWs ? 'none' : '';
 });
 
 let scope: Scope.CloseableScope | null = null;
@@ -75,7 +75,7 @@ const connectSerial = async (unitId: number) => {
   const baudRate = Number(baudRateEl.value);
 
   scope = Effect.runSync(Scope.make());
-  if (protocolEl.value === "rtu") {
+  if (protocolEl.value === 'rtu') {
     const layer = WasmRtuTransportService.Default({ port, baudRate });
     const context = await Effect.runPromise(Layer.buildWithScope(layer, scope));
     const transport = Context.get(context, WasmRtuTransportService);
@@ -88,21 +88,21 @@ const connectSerial = async (unitId: number) => {
   }
 };
 
-connectBtn.addEventListener("click", async () => {
-  setStatus("connecting");
+connectBtn.addEventListener('click', async () => {
+  setStatus('connecting');
   const unitId = Number(unitIdEl.value);
   try {
-    if (modeEl.value === "ws") {
+    if (modeEl.value === 'ws') {
       await connectWs(unitId);
       log(`Connected via WebSocket gateway at ${wsUrlEl.value}`);
     } else {
       await connectSerial(unitId);
       log(`Connected via Web Serial (${protocolEl.value.toUpperCase()})`);
     }
-    setStatus("connected");
+    setStatus('connected');
   } catch (error) {
     log(`Connect failed: ${error}`);
-    setStatus("error");
+    setStatus('error');
     if (scope) {
       await Effect.runPromise(Scope.close(scope, Exit.void));
       scope = null;
@@ -110,26 +110,26 @@ connectBtn.addEventListener("click", async () => {
   }
 });
 
-disconnectBtn.addEventListener("click", async () => {
+disconnectBtn.addEventListener('click', async () => {
   if (scope) {
     await Effect.runPromise(Scope.close(scope, Exit.void));
     scope = null;
   }
   client = null;
-  log("Disconnected");
-  setStatus("disconnected");
+  log('Disconnected');
+  setStatus('disconnected');
 });
 
-readBtn.addEventListener("click", async () => {
+readBtn.addEventListener('click', async () => {
   if (!client) return;
   const address = Number(addressEl.value);
   const quantity = Number(quantityEl.value);
   try {
     const result = await Effect.runPromise(client.readHoldingRegisters({ address, quantity }));
-    log(`Read [${address}..${address + quantity - 1}]: ${Array.from(result).join(", ")}`);
+    log(`Read [${address}..${address + quantity - 1}]: ${Array.from(result).join(', ')}`);
   } catch (error) {
     log(`Read failed: ${error}`);
   }
 });
 
-log("Ready. Choose a mode and click Connect.");
+log('Ready. Choose a mode and click Connect.');

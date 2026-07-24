@@ -9,9 +9,10 @@
  * @example bun run examples/rtu-mock.ts
  */
 
-import { Console, Effect } from "effect";
-import { CoilState } from "modbus-rs";
-import { RtuTransportService } from "../src/RtuTransportService";
+import { Console, Effect } from 'effect';
+import { CoilState } from 'modbus-rs';
+
+import { RtuTransportService } from '../src/RtuTransportService';
 
 const device = {
   unitId: 1,
@@ -35,18 +36,18 @@ const program = Effect.gen(function* () {
   const client = yield* transport.withClient(1);
 
   const coils = yield* client.readCoils({ address: 0, quantity: 3 });
-  yield* Console.log("Coils (before):", coils);
+  yield* Console.log('Coils (before):', coils);
 
   yield* client.writeSingleCoil({ address: 1, value: CoilState.On });
 
   const coilsAfter = yield* client.readCoils({ address: 0, quantity: 3 });
-  yield* Console.log("Coils (after):", coilsAfter);
+  yield* Console.log('Coils (after):', coilsAfter);
 
   const registers = yield* client.readHoldingRegisters({
     address: 0,
     quantity: 3,
   });
-  yield* Console.log("Holding registers:", registers);
+  yield* Console.log('Holding registers:', registers);
 
   yield* client.writeSingleRegister({ address: 2, value: 999 });
 
@@ -54,18 +55,17 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 3,
   });
-  yield* Console.log("Holding registers (after):", registersAfter);
+  yield* Console.log('Holding registers (after):', registersAfter);
 });
 
 const mockLayer = RtuTransportService.makeMockTransport([device])({
-  portPath: "/dev/ttyUSB0",
+  portPath: '/dev/ttyUSB0',
   baudRate: 9600,
 });
 
 program.pipe(
   Effect.catchTags({
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),

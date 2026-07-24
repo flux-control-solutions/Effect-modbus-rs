@@ -1,7 +1,8 @@
-import { Effect } from "effect";
-import type { WasmSerialPortHandle } from "modbus-rs/web";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect } from 'effect';
+import type { WasmSerialPortHandle } from 'modbus-rs/web';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * Requests a browser serial port handle via the Web Serial API, for use with
@@ -29,7 +30,7 @@ import { toModbusError } from "./errors";
 export const requestSerialPort = (): Effect.Effect<WasmSerialPortHandle, ModbusError> =>
   Effect.tryPromise({
     try: async () => {
-      const mod = await import("modbus-rs/web");
+      const mod = await import('modbus-rs/web');
       return mod.requestSerialPort();
     },
     catch: (error) => toModbusError(error as Error),

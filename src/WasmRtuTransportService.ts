@@ -1,13 +1,14 @@
+import { Effect, Layer } from 'effect';
 import type {
   WasmRtuTransport,
   WasmSerialModbusClient,
   WasmSerialPortHandle,
   WasmSerialTransportOptions,
-} from "modbus-rs/web";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { makeWasmEffectModbusClient } from "./modbus-client";
-import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
+} from 'modbus-rs/web';
+
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import { makeWasmEffectModbusClient } from './modbus-client';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Options for {@link WasmRtuTransportService}. `WasmRtuTransport.open()` takes the
@@ -37,14 +38,18 @@ export type WasmRtuTransportOpenOptions = WasmSerialTransportOptions & {
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class WasmRtuTransportService extends Effect.Service<WasmRtuTransportService>()(
-  "WasmRtuTransportService",
+  'WasmRtuTransportService',
   {
-    scoped: makeTransportScoped<WasmRtuTransportOpenOptions, WasmSerialModbusClient, WasmRtuTransport>(
-      "WasmRtuTransport",
+    scoped: makeTransportScoped<
+      WasmRtuTransportOpenOptions,
+      WasmSerialModbusClient,
+      WasmRtuTransport
+    >(
+      'WasmRtuTransport',
       (TC: unknown, { port, ...rest }: WasmRtuTransportOpenOptions) =>
         (TC as typeof WasmRtuTransport).open(port, rest),
-      "WasmRtuTransportService",
-      { moduleSpecifier: "modbus-rs/web", toEffectClient: makeWasmEffectModbusClient },
+      'WasmRtuTransportService',
+      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
     ),
   },
 ) {

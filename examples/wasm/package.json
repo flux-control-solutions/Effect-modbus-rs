@@ -1,12 +1,12 @@
 {
   "name": "effect-modbus-rs-wasm-example",
-  "private": true,
   "version": "0.1.0",
-  "type": "module",
+  "private": true,
   "description": "Runnable Vite app exercising effect-modbus-rs's browser (WASM) transports — for consumers to try, or for manual testing during development.",
+  "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "tsc && vite build",
+    "dev": "vite",
     "preview": "vite preview"
   },
   "dependencies": {

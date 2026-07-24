@@ -1,7 +1,8 @@
-import type { ServerHandlers, TcpServerOptions } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { ServerHandlers, TcpServerOptions } from 'modbus-rs';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a Modbus TCP server.
@@ -36,7 +37,7 @@ export const tcpServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncTcpModbusServer } = yield* Effect.promise(() => import("modbus-rs"));
+      const { AsyncTcpModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncTcpModbusServer.bind(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -45,7 +46,7 @@ export const tcpServerLayer = (
       yield* Effect.logDebug(`TCP server bound to ${options.host}:${options.port}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("TCP server shutting down").pipe(
+        Effect.logDebug('TCP server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),

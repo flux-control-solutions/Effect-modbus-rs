@@ -9,11 +9,19 @@
  * @example bun run examples/tcp-server.ts
  */
 
-import { Console, Effect, Layer, LogLevel, Logger } from "effect";
-import { BunRuntime } from "@effect/platform-bun";
-import type { ReadCoilsRequest, ReadHoldingRegistersRequest, WriteMultipleCoilsRequest, WriteMultipleRegistersRequest, WriteSingleCoilRequest, WriteSingleRegisterRequest } from "modbus-rs";
-import { CoilState, type ServerHandlers } from "modbus-rs";
-import { tcpServerLayer } from "../src/TcpModbusServerService";
+import { BunRuntime } from '@effect/platform-bun';
+import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import type {
+  ReadCoilsRequest,
+  ReadHoldingRegistersRequest,
+  WriteMultipleCoilsRequest,
+  WriteMultipleRegistersRequest,
+  WriteSingleCoilRequest,
+  WriteSingleRegisterRequest,
+} from 'modbus-rs';
+import { CoilState, type ServerHandlers } from 'modbus-rs';
+
+import { tcpServerLayer } from '../src/TcpModbusServerService';
 
 const coils = new Map<number, boolean>();
 const holdingRegisters = new Map<number, number>();
@@ -22,7 +30,7 @@ const handlers: ServerHandlers = {
   onReadCoils: (req: ReadCoilsRequest): CoilState[] => {
     const result: CoilState[] = [];
     for (let i = 0; i < req.quantity; i++) {
-      result.push(coils.get(req.address + i) ?? false ? CoilState.On : CoilState.Off);
+      result.push((coils.get(req.address + i) ?? false) ? CoilState.On : CoilState.Off);
     }
     return result;
   },
@@ -56,10 +64,7 @@ const handlers: ServerHandlers = {
   },
 };
 
-const ServerLive = tcpServerLayer(
-  { host: "0.0.0.0", port: 8502, unitId: 1 },
-  handlers,
-);
+const ServerLive = tcpServerLayer({ host: '0.0.0.0', port: 8502, unitId: 1 }, handlers);
 
 BunRuntime.runMain(
   Layer.launch(ServerLive).pipe(

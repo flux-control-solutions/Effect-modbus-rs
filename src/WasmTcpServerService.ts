@@ -1,8 +1,9 @@
-import type { ServerHandlers } from "modbus-rs";
-import type { WasmTcpServerOptions } from "modbus-rs/web";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { ServerHandlers } from 'modbus-rs';
+import type { WasmTcpServerOptions } from 'modbus-rs/web';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a browser Modbus server proxied over a
@@ -43,7 +44,7 @@ export const wasmWsServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { WasmWsModbusServer } = yield* Effect.promise(() => import("modbus-rs/web"));
+      const { WasmWsModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmWsModbusServer.bind(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -55,13 +56,11 @@ export const wasmWsServerLayer = (
         Effect.tryPromise({
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
-        }).pipe(
-          Effect.catchAll((error) => Effect.logError("WASM WS server loop ended", error)),
-        ),
+        }).pipe(Effect.catchAll((error) => Effect.logError('WASM WS server loop ended', error))),
       );
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("WASM WS server shutting down").pipe(
+        Effect.logDebug('WASM WS server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),

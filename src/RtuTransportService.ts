@@ -1,8 +1,9 @@
-import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { makeMockTransport } from "./mocks";
-import type { SlaveDeviceDefinitions } from "./mocks";
+import { Effect, Layer } from 'effect';
+import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
+
+import { makeMockTransport } from './mocks';
+import type { SlaveDeviceDefinitions } from './mocks';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncRtuTransport}
@@ -21,13 +22,12 @@ import type { SlaveDeviceDefinitions } from "./mocks";
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class RtuTransportService extends Effect.Service<RtuTransportService>()(
-  "RtuTransportService",
+  'RtuTransportService',
   {
     scoped: makeTransportScoped<RtuTransportOptions, AsyncSerialModbusClient, AsyncRtuTransport>(
-      "AsyncRtuTransport",
-      (TC: unknown, options: RtuTransportOptions) =>
-        (TC as typeof AsyncRtuTransport).open(options),
-      "RtuTransportService",
+      'AsyncRtuTransport',
+      (TC: unknown, options: RtuTransportOptions) => (TC as typeof AsyncRtuTransport).open(options),
+      'RtuTransportService',
     ),
   },
 ) {

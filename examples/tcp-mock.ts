@@ -9,9 +9,10 @@
  * @example bun run examples/tcp-mock.ts
  */
 
-import { Console, Effect } from "effect";
-import { CoilState } from "modbus-rs";
-import { TcpTransportService } from "../src/TcpTransportService";
+import { Console, Effect } from 'effect';
+import { CoilState } from 'modbus-rs';
+
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const devices = [
   {
@@ -36,9 +37,7 @@ const devices = [
       { address: 0, default: 42 },
       { address: 1, default: 99 },
     ],
-    inputRegisters: [
-      { address: 0, default: 1000 },
-    ],
+    inputRegisters: [{ address: 0, default: 1000 }],
   },
 ];
 
@@ -47,33 +46,33 @@ const program = Effect.gen(function* () {
 
   const device1 = yield* transport.withClient(1);
   const coils = yield* device1.readCoils({ address: 0, quantity: 3 });
-  yield* Console.log("Unit 1 coils:", coils);
+  yield* Console.log('Unit 1 coils:', coils);
 
   const discreteInputs = yield* device1.readDiscreteInputs({
     address: 0,
     quantity: 2,
   });
-  yield* Console.log("Unit 1 discrete inputs:", discreteInputs);
+  yield* Console.log('Unit 1 discrete inputs:', discreteInputs);
 
   yield* device1.writeMultipleCoils({
     address: 0,
     values: [CoilState.On, CoilState.On, CoilState.On],
   });
   const coilsAfter = yield* device1.readCoils({ address: 0, quantity: 3 });
-  yield* Console.log("Unit 1 coils (after):", coilsAfter);
+  yield* Console.log('Unit 1 coils (after):', coilsAfter);
 
   const device2 = yield* transport.withClient(2);
   const holdingRegisters = yield* device2.readHoldingRegisters({
     address: 0,
     quantity: 2,
   });
-  yield* Console.log("Unit 2 holding registers:", holdingRegisters);
+  yield* Console.log('Unit 2 holding registers:', holdingRegisters);
 
   const inputRegisters = yield* device2.readInputRegisters({
     address: 0,
     quantity: 1,
   });
-  yield* Console.log("Unit 2 input registers:", inputRegisters);
+  yield* Console.log('Unit 2 input registers:', inputRegisters);
 
   yield* device2.writeMultipleRegisters({
     address: 0,
@@ -83,18 +82,17 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 2,
   });
-  yield* Console.log("Unit 2 holding registers (after):", holdingAfter);
+  yield* Console.log('Unit 2 holding registers (after):', holdingAfter);
 });
 
 const mockLayer = TcpTransportService.makeMockTransport(devices)({
-  host: "127.0.0.1",
+  host: '127.0.0.1',
   port: 502,
 });
 
 program.pipe(
   Effect.catchTags({
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),

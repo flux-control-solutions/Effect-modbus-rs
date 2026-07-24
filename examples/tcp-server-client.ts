@@ -13,8 +13,8 @@
  * @example bun run examples/tcp-server-client.ts
  */
 
-import { Console, Effect, Fiber, Layer, LogLevel, Logger, Schedule } from "effect";
-import { BunRuntime } from "@effect/platform-bun";
+import { BunRuntime } from '@effect/platform-bun';
+import { Console, Effect, Fiber, Layer, LogLevel, Logger, Schedule } from 'effect';
 import type {
   ReadCoilsRequest,
   ReadHoldingRegistersRequest,
@@ -22,10 +22,11 @@ import type {
   WriteMultipleRegistersRequest,
   WriteSingleCoilRequest,
   WriteSingleRegisterRequest,
-} from "modbus-rs";
-import { CoilState, type ServerHandlers } from "modbus-rs";
-import { TcpTransportService } from "../src/TcpTransportService";
-import { tcpServerLayer } from "../src/TcpModbusServerService";
+} from 'modbus-rs';
+import { CoilState, type ServerHandlers } from 'modbus-rs';
+
+import { tcpServerLayer } from '../src/TcpModbusServerService';
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const PORT = 8503;
 
@@ -72,29 +73,29 @@ const handlers: ServerHandlers = {
 
 const program = Effect.gen(function* () {
   yield* Effect.acquireRelease(
-    Effect.fork(Layer.launch(tcpServerLayer({ host: "0.0.0.0", port: PORT, unitId: 1 }, handlers))),
+    Effect.fork(Layer.launch(tcpServerLayer({ host: '0.0.0.0', port: PORT, unitId: 1 }, handlers))),
     (fiber) => Fiber.interrupt(fiber).pipe(Effect.catchAll(() => Effect.void)),
   );
 
-  yield* Console.log("--- Client connecting (with retries until server is ready) ---");
+  yield* Console.log('--- Client connecting (with retries until server is ready) ---');
 
   const transport = yield* TcpTransportService;
   const client = yield* transport
     .withClient(1)
-    .pipe(Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => "50 millis")));
+    .pipe(Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => '50 millis')));
 
-  yield* Console.log("--- Client connected, reading initial state ---");
+  yield* Console.log('--- Client connected, reading initial state ---');
 
   const initialCoils = yield* client.readCoils({ address: 0, quantity: 4 });
-  yield* Console.log("Coils (initial):", initialCoils);
+  yield* Console.log('Coils (initial):', initialCoils);
 
   const initialRegs = yield* client.readHoldingRegisters({
     address: 0,
     quantity: 3,
   });
-  yield* Console.log("Holding registers (initial):", initialRegs);
+  yield* Console.log('Holding registers (initial):', initialRegs);
 
-  yield* Console.log("--- Writing coils and registers ---");
+  yield* Console.log('--- Writing coils and registers ---');
 
   yield* client.writeMultipleCoils({
     address: 0,
@@ -107,22 +108,22 @@ const program = Effect.gen(function* () {
   });
 
   const coilsAfter = yield* client.readCoils({ address: 0, quantity: 5 });
-  yield* Console.log("Coils (after write):", coilsAfter);
+  yield* Console.log('Coils (after write):', coilsAfter);
 
   const regsAfter = yield* client.readHoldingRegisters({
     address: 0,
     quantity: 3,
   });
-  yield* Console.log("Holding registers (after write):", regsAfter);
+  yield* Console.log('Holding registers (after write):', regsAfter);
 
-  yield* Console.log("--- Done ---");
+  yield* Console.log('--- Done ---');
 });
 
 BunRuntime.runMain(
   program.pipe(
     Effect.provide(
       TcpTransportService.Default({
-        host: "127.0.0.1",
+        host: '127.0.0.1',
         port: PORT,
       }),
     ),

@@ -1,8 +1,15 @@
-import { Context, Effect, Layer } from "effect";
-import { WasmAsciiTransportService, type WasmAsciiTransportOpenOptions } from "./WasmAsciiTransportService";
-import { WasmRtuTransportService, type WasmRtuTransportOpenOptions } from "./WasmRtuTransportService";
-import type { TransportServiceApi } from "./shared-transport";
-import { makeMockTransport, type SlaveDeviceDefinitions } from "./mocks";
+import { Context, Effect, Layer } from 'effect';
+
+import { makeMockTransport, type SlaveDeviceDefinitions } from './mocks';
+import type { TransportServiceApi } from './shared-transport';
+import {
+  WasmAsciiTransportService,
+  type WasmAsciiTransportOpenOptions,
+} from './WasmAsciiTransportService';
+import {
+  WasmRtuTransportService,
+  type WasmRtuTransportOpenOptions,
+} from './WasmRtuTransportService';
 
 /**
  * Abstract browser (WASM) serial Modbus transport service tag.
@@ -25,9 +32,10 @@ import { makeMockTransport, type SlaveDeviceDefinitions } from "./mocks";
  *
  * @see requestSerialPort — Obtains the `port` handle both providers need (must be called from a user gesture).
  */
-export class WasmSerialTransportService extends Context.Tag(
-  "WasmSerialTransportService",
-)<WasmSerialTransportService, TransportServiceApi>() {
+export class WasmSerialTransportService extends Context.Tag('WasmSerialTransportService')<
+  WasmSerialTransportService,
+  TransportServiceApi
+>() {
   /**
    * Creates a {@link Layer} providing {@link WasmSerialTransportService}
    * backed by an ASCII transport.
@@ -46,9 +54,7 @@ export class WasmSerialTransportService extends Context.Tag(
    * Creates a {@link Layer} providing {@link WasmSerialTransportService}
    * backed by an RTU transport.
    */
-  static fromRtu(
-    options: WasmRtuTransportOpenOptions,
-  ): Layer.Layer<WasmSerialTransportService> {
+  static fromRtu(options: WasmRtuTransportOpenOptions): Layer.Layer<WasmSerialTransportService> {
     return Layer.project(
       WasmRtuTransportService,
       WasmSerialTransportService,

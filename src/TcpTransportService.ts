@@ -1,7 +1,8 @@
-import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
+import { Effect, Layer } from 'effect';
+import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from 'modbus-rs';
+
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncTcpTransport}
@@ -20,13 +21,13 @@ import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class TcpTransportService extends Effect.Service<TcpTransportService>()(
-  "TcpTransportService",
+  'TcpTransportService',
   {
     scoped: makeTransportScoped<TcpTransportOptions, AsyncTcpModbusClient, AsyncTcpTransport>(
-      "AsyncTcpTransport",
+      'AsyncTcpTransport',
       (TC: unknown, options: TcpTransportOptions) =>
         (TC as typeof AsyncTcpTransport).connect(options),
-      "TcpTransportService",
+      'TcpTransportService',
     ),
   },
 ) {

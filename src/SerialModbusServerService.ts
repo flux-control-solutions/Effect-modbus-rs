@@ -1,7 +1,8 @@
-import type { SerialServerOptions, ServerHandlers } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { SerialServerOptions, ServerHandlers } from 'modbus-rs';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a Modbus serial RTU server.
@@ -32,7 +33,7 @@ export const serialRtuServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs"));
+      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindRtu(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -41,7 +42,7 @@ export const serialRtuServerLayer = (
       yield* Effect.logDebug(`Serial RTU server bound to ${options.portPath}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("Serial RTU server shutting down").pipe(
+        Effect.logDebug('Serial RTU server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
@@ -83,7 +84,7 @@ export const serialAsciiServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs"));
+      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindAscii(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -92,7 +93,7 @@ export const serialAsciiServerLayer = (
       yield* Effect.logDebug(`Serial ASCII server bound to ${options.portPath}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("Serial ASCII server shutting down").pipe(
+        Effect.logDebug('Serial ASCII server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),

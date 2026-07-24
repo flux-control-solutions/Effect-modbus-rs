@@ -12,15 +12,16 @@
  * @example bun run examples/tcp-gateway.ts
  */
 
-import { Console, Effect, Layer, LogLevel, Logger } from "effect";
-import { BunRuntime } from "@effect/platform-bun";
-import type { GatewayConfig } from "modbus-rs";
-import { tcpGatewayLayer } from "../src/TcpGatewayService";
+import { BunRuntime } from '@effect/platform-bun';
+import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import type { GatewayConfig } from 'modbus-rs';
+
+import { tcpGatewayLayer } from '../src/TcpGatewayService';
 
 const gatewayConfig: GatewayConfig = {
   downstreams: [
-    { host: "192.168.1.10", port: 502 },
-    { host: "192.168.1.20", port: 502 },
+    { host: '192.168.1.10', port: 502 },
+    { host: '192.168.1.20', port: 502 },
   ],
   routes: [
     { unitId: 1, channel: 0 },
@@ -28,10 +29,7 @@ const gatewayConfig: GatewayConfig = {
   ],
 };
 
-const GatewayLive = tcpGatewayLayer(
-  { host: "0.0.0.0", port: 8502 },
-  gatewayConfig,
-);
+const GatewayLive = tcpGatewayLayer({ host: '0.0.0.0', port: 8502 }, gatewayConfig);
 
 BunRuntime.runMain(
   Layer.launch(GatewayLive).pipe(

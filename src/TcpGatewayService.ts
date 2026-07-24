@@ -1,7 +1,8 @@
-import type { GatewayBindOptions, GatewayConfig } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { GatewayBindOptions, GatewayConfig } from 'modbus-rs';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a Modbus TCP gateway.
@@ -43,32 +44,28 @@ import { toModbusError } from "./errors";
  */
 export const tcpGatewayLayer = (
   options: GatewayBindOptions,
-  gatewayConfig: GatewayConfig
+  gatewayConfig: GatewayConfig,
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncTcpGateway } = yield* Effect.promise(
-        () => import("modbus-rs")
-      );
+      const { AsyncTcpGateway } = yield* Effect.promise(() => import('modbus-rs'));
       const gateway = yield* Effect.tryPromise({
         try: () => AsyncTcpGateway.bind(options, gatewayConfig),
         catch: (error) => toModbusError(error as Error),
       });
 
-      yield* Effect.logDebug(
-        `TCP gateway bound to ${options.host}:${options.port}`
-      );
+      yield* Effect.logDebug(`TCP gateway bound to ${options.host}:${options.port}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("TCP gateway shutting down").pipe(
+        Effect.logDebug('TCP gateway shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => gateway.shutdown(),
               catch: (error) => toModbusError(error as Error),
-            })
+            }),
           ),
-          Effect.catchAll(() => Effect.void)
-        )
+          Effect.catchAll(() => Effect.void),
+        ),
       );
-    })
+    }),
   );

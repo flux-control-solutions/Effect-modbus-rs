@@ -8,17 +8,10 @@
  * @example bun run examples/tcp-polling-stream.ts
  */
 
-import {
-  Console,
-  Effect,
-  Either,
-  LogLevel,
-  Logger,
-  Schedule,
-  Stream,
-} from "effect";
-import { BunRuntime } from "@effect/platform-bun";
-import { TcpTransportService } from "../src/TcpTransportService";
+import { BunRuntime } from '@effect/platform-bun';
+import { Console, Effect, Either, LogLevel, Logger, Schedule, Stream } from 'effect';
+
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
@@ -41,22 +34,13 @@ const program = Effect.gen(function* () {
     ),
   );
 
-  const stream = Stream.repeatEffectWithSchedule(
-    poll,
-    Schedule.spaced("5 seconds"),
-  );
+  const stream = Stream.repeatEffectWithSchedule(poll, Schedule.spaced('5 seconds'));
 
   yield* Stream.runForEach(stream, (result) =>
     Either.match(result, {
-      onLeft: (error) =>
-        Console.log(
-          `[${new Date().toISOString()}] Poll failed: ${error.message}`,
-        ),
+      onLeft: (error) => Console.log(`[${new Date().toISOString()}] Poll failed: ${error.message}`),
       onRight: (registers) =>
-        Console.log(
-          `[${new Date().toISOString()}] Holding registers [0..9]:`,
-          registers,
-        ),
+        Console.log(`[${new Date().toISOString()}] Holding registers [0..9]:`, registers),
     }),
   );
 });
@@ -65,22 +49,18 @@ BunRuntime.runMain(
   program.pipe(
     Effect.provide(
       TcpTransportService.Default({
-        host: "localhost",
+        host: 'localhost',
         port: 502,
       }),
     ),
     Effect.catchTags({
       ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
-      ModbusTransportError: (err) =>
-        Console.log(`Transport error: ${err.message}`),
-      ModbusConnectionClosedError: (err) =>
-        Console.log(`Connection lost: ${err.message}`),
+      ModbusTransportError: (err) => Console.log(`Transport error: ${err.message}`),
+      ModbusConnectionClosedError: (err) => Console.log(`Connection lost: ${err.message}`),
       ModbusExceptionError: (err) =>
         Console.log(`Modbus exception ${err.exception}: ${err.message}`),
-      ModbusInvalidArgumentError: (err) =>
-        Console.log(`Invalid argument: ${err.message}`),
-      ModbusInternalError: (err) =>
-        Console.log(`Internal error: ${err.message}`),
+      ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
+      ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
     }),
     Logger.withMinimumLogLevel(LogLevel.Debug),
     Effect.scoped,

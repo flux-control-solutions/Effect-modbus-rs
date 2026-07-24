@@ -17,8 +17,8 @@ TypeScript only while prototyping (JS consumers will be supported before 1.0).
 ### RTU (serial)
 
 ```ts
-import { Console, Effect } from "effect";
-import { RtuTransportService } from "effect-modbus-rs";
+import { Console, Effect } from 'effect';
+import { RtuTransportService } from 'effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* RtuTransportService;
@@ -28,25 +28,19 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 10,
   });
-  console.log("Holding registers:", registers);
+  console.log('Holding registers:', registers);
 });
 
 program.pipe(
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
-    ModbusTransportError: (err) =>
-      Console.log(`Transport error: ${err.message}`),
-    ModbusConnectionClosedError: (err) =>
-      Console.log(`Connection lost: ${err.message}`),
-    ModbusExceptionError: (err) =>
-      Console.log(`Modbus exception ${err.exception}: ${err.message}`),
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusTransportError: (err) => Console.log(`Transport error: ${err.message}`),
+    ModbusConnectionClosedError: (err) => Console.log(`Connection lost: ${err.message}`),
+    ModbusExceptionError: (err) => Console.log(`Modbus exception ${err.exception}: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
-  Effect.provide(
-    RtuTransportService.Default({ portPath: "/dev/ttyUSB0", baudRate: 9600 }),
-  ),
+  Effect.provide(RtuTransportService.Default({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -55,20 +49,18 @@ program.pipe(
 ### TCP
 
 ```ts
-import { Effect } from "effect";
-import { TcpTransportService } from "effect-modbus-rs";
+import { Effect } from 'effect';
+import { TcpTransportService } from 'effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
   const client = yield* transport.withClient(1);
   const coils = yield* client.readCoils({ address: 0, quantity: 8 });
-  console.log("Coils:", coils);
+  console.log('Coils:', coils);
 });
 
 program.pipe(
-  Effect.provide(
-    TcpTransportService.Default({ host: "192.168.1.100", port: 502 }),
-  ),
+  Effect.provide(TcpTransportService.Default({ host: '192.168.1.100', port: 502 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -77,8 +69,8 @@ program.pipe(
 ### ASCII
 
 ```ts
-import { Effect } from "effect";
-import { AsciiTransportService } from "effect-modbus-rs";
+import { Effect } from 'effect';
+import { AsciiTransportService } from 'effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* AsciiTransportService;
@@ -87,13 +79,11 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 5,
   });
-  console.log("Input registers:", registers);
+  console.log('Input registers:', registers);
 });
 
 program.pipe(
-  Effect.provide(
-    AsciiTransportService.Default({ portPath: "/dev/ttyUSB0", baudRate: 9600 }),
-  ),
+  Effect.provide(AsciiTransportService.Default({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -107,18 +97,18 @@ program.pipe(
 - **`WasmRtuTransportService`** / **`WasmAsciiTransportService`** — Modbus RTU/ASCII over the [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API), via `WasmSerialTransportService.fromRtu` / `.fromAscii`.
 
 ```ts
-import { Console, Effect } from "effect";
-import { WasmWsTransportService } from "effect-modbus-rs";
+import { Console, Effect } from 'effect';
+import { WasmWsTransportService } from 'effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* WasmWsTransportService;
   const client = yield* transport.withClient(1);
   const registers = yield* client.readHoldingRegisters({ address: 0, quantity: 10 });
-  console.log("Holding registers:", registers);
+  console.log('Holding registers:', registers);
 });
 
 program.pipe(
-  Effect.provide(WasmWsTransportService.Default({ wsUrl: "ws://localhost:8080" })),
+  Effect.provide(WasmWsTransportService.Default({ wsUrl: 'ws://localhost:8080' })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -127,10 +117,10 @@ program.pipe(
 Web Serial requires a user-granted port handle. **`requestSerialPort()` must be called synchronously from within a user-gesture event handler** (e.g. a button click) — this is a Web Serial API / browser security requirement, not a library restriction:
 
 ```ts
-import { Effect, Layer } from "effect";
-import { requestSerialPort, WasmRtuTransportService } from "effect-modbus-rs";
+import { Effect, Layer } from 'effect';
+import { requestSerialPort, WasmRtuTransportService } from 'effect-modbus-rs';
 
-connectButton.addEventListener("click", () => {
+connectButton.addEventListener('click', () => {
   Effect.runPromise(
     Effect.gen(function* () {
       const port = yield* requestSerialPort();
@@ -158,14 +148,14 @@ Not demonstrated in `examples/wasm/` (see that app's README) — the same `impor
 
 Each transport is a scoped `Effect.Service`. You provide it with `Effect.provide`, and the connection is opened on service access and closed when the scope ends.
 
-| Service | Options | Connection |
-|---------|---------|------------|
-| `RtuTransportService` | `{ portPath, baudRate, ... }` | `AsyncRtuTransport.open()` |
-| `TcpTransportService` | `{ host, port, ... }` | `AsyncTcpTransport.connect()` |
-| `AsciiTransportService` | `{ portPath, baudRate, ... }` | `AsyncAsciiTransport.open()` |
-| `WasmWsTransportService` (browser) | `{ wsUrl, requestTimeoutMs? }` | `WasmWsTransport.connect()` |
-| `WasmRtuTransportService` (browser) | `{ port, baudRate, ... }` | `WasmRtuTransport.open()` |
-| `WasmAsciiTransportService` (browser) | `{ port, baudRate, ... }` | `WasmAsciiTransport.open()` |
+| Service                               | Options                        | Connection                    |
+| ------------------------------------- | ------------------------------ | ----------------------------- |
+| `RtuTransportService`                 | `{ portPath, baudRate, ... }`  | `AsyncRtuTransport.open()`    |
+| `TcpTransportService`                 | `{ host, port, ... }`          | `AsyncTcpTransport.connect()` |
+| `AsciiTransportService`               | `{ portPath, baudRate, ... }`  | `AsyncAsciiTransport.open()`  |
+| `WasmWsTransportService` (browser)    | `{ wsUrl, requestTimeoutMs? }` | `WasmWsTransport.connect()`   |
+| `WasmRtuTransportService` (browser)   | `{ port, baudRate, ... }`      | `WasmRtuTransport.open()`     |
+| `WasmAsciiTransportService` (browser) | `{ port, baudRate, ... }`      | `WasmAsciiTransport.open()`   |
 
 All transport options types are re-exported from `modbus-rs` (native transports) or `modbus-rs/web` (browser transports).
 
@@ -174,19 +164,19 @@ All transport options types are re-exported from `modbus-rs` (native transports)
 `SerialTransportService` is a transport-agnostic tag that can be backed by either RTU or ASCII framing — useful when writing code that doesn't need to commit to a specific serial protocol. Provide it with `fromRtu` or `fromAscii`:
 
 ```ts
-import { Console, Effect } from "effect";
-import { SerialTransportService } from "effect-modbus-rs";
+import { Console, Effect } from 'effect';
+import { SerialTransportService } from 'effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* SerialTransportService;
   const client = yield* transport.withClient(1);
   const coils = yield* client.readCoils({ address: 0, quantity: 2 });
-  console.log("Coils:", coils);
+  console.log('Coils:', coils);
 });
 
 // RTU framing
 program.pipe(
-  Effect.provide(SerialTransportService.fromRtu({ portPath: "/dev/ttyUSB0", baudRate: 9600 })),
+  Effect.provide(SerialTransportService.fromRtu({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -207,47 +197,47 @@ It also supports `makeMockTransport` for testing:
 
 ### Registers
 
-| Method | Returns |
-|--------|---------|
-| `readHoldingRegisters({ address, quantity })` | `number[]` |
-| `readInputRegisters({ address, quantity })` | `number[]` |
-| `writeSingleRegister({ address, value })` | `void` |
-| `writeMultipleRegisters({ address, values })` | `void` |
+| Method                                                                                 | Returns    |
+| -------------------------------------------------------------------------------------- | ---------- |
+| `readHoldingRegisters({ address, quantity })`                                          | `number[]` |
+| `readInputRegisters({ address, quantity })`                                            | `number[]` |
+| `writeSingleRegister({ address, value })`                                              | `void`     |
+| `writeMultipleRegisters({ address, values })`                                          | `void`     |
 | `readWriteMultipleRegisters({ readAddress, readQuantity, writeAddress, writeValues })` | `number[]` |
 
 ### Coils / discrete inputs
 
-| Method | Returns |
-|--------|---------|
-| `readCoils({ address, quantity })` | `boolean[]` |
-| `writeSingleCoil({ address, value })` | `void` |
-| `writeMultipleCoils({ address, values })` | `void` |
+| Method                                      | Returns     |
+| ------------------------------------------- | ----------- |
+| `readCoils({ address, quantity })`          | `boolean[]` |
+| `writeSingleCoil({ address, value })`       | `void`      |
+| `writeMultipleCoils({ address, values })`   | `void`      |
 | `readDiscreteInputs({ address, quantity })` | `boolean[]` |
 
 ### Diagnostics & file access
 
-| Method | Returns |
-|--------|---------|
-| `readExceptionStatus()` | `number` |
-| `diagnostics({ subFunction, data })` | `DiagnosticsResponse` |
-| `readFifoQueue({ address })` | `FifoQueueResponse` |
-| `readFileRecord({ requests })` | `number[][]` |
-| `writeFileRecord({ requests })` | `void` |
+| Method                                                     | Returns                        |
+| ---------------------------------------------------------- | ------------------------------ |
+| `readExceptionStatus()`                                    | `number`                       |
+| `diagnostics({ subFunction, data })`                       | `DiagnosticsResponse`          |
+| `readFifoQueue({ address })`                               | `FifoQueueResponse`            |
+| `readFileRecord({ requests })`                             | `number[][]`                   |
+| `writeFileRecord({ requests })`                            | `void`                         |
 | `readDeviceIdentification({ readDeviceIdCode, objectId })` | `DeviceIdentificationResponse` |
 
 ## Error handling
 
 Errors from the underlying Rust layer are mapped to typed `Effect` errors via `Data.TaggedError`:
 
-| Error class | Meaning |
-|-------------|---------|
-| `ModbusExceptionError` | Modbus protocol exception (contains `exception` code) |
-| `ModbusTimeoutError` | Request timed out |
-| `ModbusTransportError` | Transport-level failure |
-| `ModbusInvalidArgumentError` | Invalid parameters |
-| `ModbusConnectionClosedError` | Connection lost |
-| `ModbusNotConnectedError` | Operation attempted before connection |
-| `ModbusInternalError` | Unclassified error |
+| Error class                   | Meaning                                               |
+| ----------------------------- | ----------------------------------------------------- |
+| `ModbusExceptionError`        | Modbus protocol exception (contains `exception` code) |
+| `ModbusTimeoutError`          | Request timed out                                     |
+| `ModbusTransportError`        | Transport-level failure                               |
+| `ModbusInvalidArgumentError`  | Invalid parameters                                    |
+| `ModbusConnectionClosedError` | Connection lost                                       |
+| `ModbusNotConnectedError`     | Operation attempted before connection                 |
+| `ModbusInternalError`         | Unclassified error                                    |
 
 Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven variants.
 
@@ -256,8 +246,8 @@ Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven va
 Each transport service provides a `makeMockTransport(devices)` static method that returns an in-memory mock `Layer` — no serial port or network required.
 
 ```ts
-import { Console, Effect } from "effect";
-import { RtuTransportService } from "effect-modbus-rs";
+import { Console, Effect } from 'effect';
+import { RtuTransportService } from 'effect-modbus-rs';
 
 const device = {
   unitId: 1,
@@ -277,19 +267,15 @@ const program = Effect.gen(function* () {
   const transport = yield* RtuTransportService;
   const client = yield* transport.withClient(1);
   const coils = yield* client.readCoils({ address: 0, quantity: 2 });
-  console.log("Coils:", coils);
+  console.log('Coils:', coils);
 });
 
 const mockLayer = RtuTransportService.makeMockTransport([device])({
-  portPath: "/dev/ttyUSB0",
+  portPath: '/dev/ttyUSB0',
   baudRate: 9600,
 });
 
-program.pipe(
-  Effect.provide(mockLayer),
-  Effect.scoped,
-  Effect.runPromise,
-);
+program.pipe(Effect.provide(mockLayer), Effect.scoped, Effect.runPromise);
 ```
 
 The mock factory is identical for all three transports; swap `RtuTransportService` for `TcpTransportService` or `AsciiTransportService` and adjust the options shape accordingly — each exposes a static `makeMockTransport` method.
@@ -298,13 +284,13 @@ See `examples/rtu-mock.ts`, `examples/tcp-mock.ts`, and `examples/ascii-mock.ts`
 
 ### Slave device schema
 
-| Property | Type | Default |
-|----------|------|---------|
-| `unitId` | `number` | required |
-| `coils` | `{ address, default }[]` | `[]` |
-| `discreteInputs` | `{ address, default }[]` | `[]` |
-| `holdingRegisters` | `{ address, default }[]` | `[]` |
-| `inputRegisters` | `{ address, default }[]` | `[]` |
+| Property           | Type                     | Default  |
+| ------------------ | ------------------------ | -------- |
+| `unitId`           | `number`                 | required |
+| `coils`            | `{ address, default }[]` | `[]`     |
+| `discreteInputs`   | `{ address, default }[]` | `[]`     |
+| `holdingRegisters` | `{ address, default }[]` | `[]`     |
+| `inputRegisters`   | `{ address, default }[]` | `[]`     |
 
 Coil/default values default to `false` if omitted at the address level; register values default to `0`. Reads beyond the highest configured address produce a `ModbusInvalidArgumentError`.
 
@@ -314,11 +300,11 @@ Coil/default values default to `false` if omitted at the address level; register
 
 ## Development
 
-| Action | Command |
-|--------|---------|
-| Install | `bun install` |
-| Type-check | `bun run typecheck` |
-| Test | `bun test` |
+| Action      | Command                      |
+| ----------- | ---------------------------- |
+| Install     | `bun install`                |
+| Type-check  | `bun run typecheck`          |
+| Test        | `bun test`                   |
 | Run example | `bun run examples/<name>.ts` |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.

@@ -1,13 +1,14 @@
+import { Effect, Layer } from 'effect';
 import type {
   WasmAsciiTransport,
   WasmSerialModbusClient,
   WasmSerialPortHandle,
   WasmSerialTransportOptions,
-} from "modbus-rs/web";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { makeWasmEffectModbusClient } from "./modbus-client";
-import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
+} from 'modbus-rs/web';
+
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import { makeWasmEffectModbusClient } from './modbus-client';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Options for {@link WasmAsciiTransportService}. `WasmAsciiTransport.open()` takes the
@@ -37,14 +38,18 @@ export type WasmAsciiTransportOpenOptions = WasmSerialTransportOptions & {
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class WasmAsciiTransportService extends Effect.Service<WasmAsciiTransportService>()(
-  "WasmAsciiTransportService",
+  'WasmAsciiTransportService',
   {
-    scoped: makeTransportScoped<WasmAsciiTransportOpenOptions, WasmSerialModbusClient, WasmAsciiTransport>(
-      "WasmAsciiTransport",
+    scoped: makeTransportScoped<
+      WasmAsciiTransportOpenOptions,
+      WasmSerialModbusClient,
+      WasmAsciiTransport
+    >(
+      'WasmAsciiTransport',
       (TC: unknown, { port, ...rest }: WasmAsciiTransportOpenOptions) =>
         (TC as typeof WasmAsciiTransport).open(port, rest),
-      "WasmAsciiTransportService",
-      { moduleSpecifier: "modbus-rs/web", toEffectClient: makeWasmEffectModbusClient },
+      'WasmAsciiTransportService',
+      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
     ),
   },
 ) {

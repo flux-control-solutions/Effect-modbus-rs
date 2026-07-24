@@ -1,8 +1,9 @@
-import type { ServerHandlers } from "modbus-rs";
-import type { WasmSerialServerOptions } from "modbus-rs/web";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { ServerHandlers } from 'modbus-rs';
+import type { WasmSerialServerOptions } from 'modbus-rs/web';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a browser Modbus RTU server over the Web
@@ -46,25 +47,25 @@ export const wasmSerialRtuServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { WasmSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs/web"));
+      const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmSerialModbusServer.bindRtu(options, handlers),
         catch: (error) => toModbusError(error as Error),
       });
 
-      yield* Effect.logDebug("WASM serial RTU server bound");
+      yield* Effect.logDebug('WASM serial RTU server bound');
 
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
         }).pipe(
-          Effect.catchAll((error) => Effect.logError("WASM serial RTU server loop ended", error)),
+          Effect.catchAll((error) => Effect.logError('WASM serial RTU server loop ended', error)),
         ),
       );
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("WASM serial RTU server shutting down").pipe(
+        Effect.logDebug('WASM serial RTU server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
@@ -95,25 +96,25 @@ export const wasmSerialAsciiServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { WasmSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs/web"));
+      const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmSerialModbusServer.bindAscii(options, handlers),
         catch: (error) => toModbusError(error as Error),
       });
 
-      yield* Effect.logDebug("WASM serial ASCII server bound");
+      yield* Effect.logDebug('WASM serial ASCII server bound');
 
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
         }).pipe(
-          Effect.catchAll((error) => Effect.logError("WASM serial ASCII server loop ended", error)),
+          Effect.catchAll((error) => Effect.logError('WASM serial ASCII server loop ended', error)),
         ),
       );
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("WASM serial ASCII server shutting down").pipe(
+        Effect.logDebug('WASM serial ASCII server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),

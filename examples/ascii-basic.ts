@@ -7,8 +7,9 @@
  * @example bun run examples/ascii-basic.ts
  */
 
-import { Console, Effect, Layer, LogLevel, Logger } from "effect";
-import { AsciiTransportService } from "../src/AsciiTransportService";
+import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+
+import { AsciiTransportService } from '../src/AsciiTransportService';
 
 const program = Effect.gen(function* () {
   const transport = yield* AsciiTransportService;
@@ -20,30 +21,26 @@ const program = Effect.gen(function* () {
     quantity: 10,
   });
 
-  yield* Console.log("Holding registers:", holdingRegisters);
+  yield* Console.log('Holding registers:', holdingRegisters);
 
   const coils = yield* client.readCoils({ address: 0, quantity: 8 });
 
-  yield* Console.log("Coils:", coils);
+  yield* Console.log('Coils:', coils);
 });
 
 program.pipe(
   Effect.provide(
     AsciiTransportService.Default({
-      portPath: "/dev/ttyUSB0",
+      portPath: '/dev/ttyUSB0',
       baudRate: 9600,
     }).pipe(Layer.provide(Logger.pretty)),
   ),
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
-    ModbusTransportError: (err) =>
-      Console.log(`Transport error: ${err.message}`),
-    ModbusConnectionClosedError: (err) =>
-      Console.log(`Connection lost: ${err.message}`),
-    ModbusExceptionError: (err) =>
-      Console.log(`Modbus exception ${err.exception}: ${err.message}`),
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusTransportError: (err) => Console.log(`Transport error: ${err.message}`),
+    ModbusConnectionClosedError: (err) => Console.log(`Connection lost: ${err.message}`),
+    ModbusExceptionError: (err) => Console.log(`Modbus exception ${err.exception}: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
     ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
   }),
   Logger.withMinimumLogLevel(LogLevel.Debug),

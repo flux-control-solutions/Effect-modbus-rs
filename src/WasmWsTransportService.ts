@@ -1,8 +1,9 @@
-import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from "modbus-rs/web";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { makeWasmEffectModbusClient } from "./modbus-client";
-import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
+import { Effect, Layer } from 'effect';
+import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from 'modbus-rs/web';
+
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import { makeWasmEffectModbusClient } from './modbus-client';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping `modbus-rs`'s browser {@link WasmWsTransport}
@@ -20,13 +21,14 @@ import { SlaveDeviceDefinitions, makeMockTransport } from "./mocks";
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class WasmWsTransportService extends Effect.Service<WasmWsTransportService>()(
-  "WasmWsTransportService",
+  'WasmWsTransportService',
   {
     scoped: makeTransportScoped<WasmWsTransportOptions, WasmWsModbusClient, WasmWsTransport>(
-      "WasmWsTransport",
-      (TC: unknown, options: WasmWsTransportOptions) => (TC as typeof WasmWsTransport).connect(options),
-      "WasmWsTransportService",
-      { moduleSpecifier: "modbus-rs/web", toEffectClient: makeWasmEffectModbusClient },
+      'WasmWsTransport',
+      (TC: unknown, options: WasmWsTransportOptions) =>
+        (TC as typeof WasmWsTransport).connect(options),
+      'WasmWsTransportService',
+      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
     ),
   },
 ) {

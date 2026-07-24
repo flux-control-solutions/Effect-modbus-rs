@@ -10,8 +10,9 @@
  * @example bun run examples/serial-abstract.ts
  */
 
-import { Console, Effect } from "effect";
-import { SerialTransportService } from "../src/SerialTransportService";
+import { Console, Effect } from 'effect';
+
+import { SerialTransportService } from '../src/SerialTransportService';
 
 const device = {
   unitId: 1,
@@ -33,18 +34,18 @@ const program = Effect.gen(function* () {
   const client = yield* transport.withClient(1);
 
   const coils = yield* client.readCoils({ address: 0, quantity: 2 });
-  yield* Console.log("Coils:", coils);
+  yield* Console.log('Coils:', coils);
 
   const registers = yield* client.readHoldingRegisters({
     address: 0,
     quantity: 2,
   });
-  yield* Console.log("Holding registers:", registers);
+  yield* Console.log('Holding registers:', registers);
 });
 
 // Pick one backing implementation — same program works with all three:
 const layer = SerialTransportService.makeMockTransport([device])({
-  portPath: "/dev/ttyUSB0",
+  portPath: '/dev/ttyUSB0',
   baudRate: 9600,
 });
 // const layer = SerialTransportService.fromRtu({ path: "/dev/ttyUSB0", baudRate: 9600 });

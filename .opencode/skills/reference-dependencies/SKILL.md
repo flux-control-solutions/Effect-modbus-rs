@@ -6,11 +6,11 @@ Load this skill when you need to look up how a type, function, or module works i
 
 Shallow clones of upstream libraries exist under `references/`:
 
-| Library | Local path | Useful subdirectory |
-|---------|-----------|-------------------|
-| `effect` | `references/effect` | `packages/effect/src/` for core types |
-| `@effect/*` packages | `references/effect/packages/` | Each sub-package mirrors the npm name |
-| `modbus-rs` | `references/modbus-rs` | `mbus-ffi/nodejs/` for the Node.js binding (`index.d.ts` for types, `index.js` for impl) |
+| Library              | Local path                    | Useful subdirectory                                                                      |
+| -------------------- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `effect`             | `references/effect`           | `packages/effect/src/` for core types                                                    |
+| `@effect/*` packages | `references/effect/packages/` | Each sub-package mirrors the npm name                                                    |
+| `modbus-rs`          | `references/modbus-rs`        | `mbus-ffi/nodejs/` for the Node.js binding (`index.d.ts` for types, `index.js` for impl) |
 
 ## Rules
 

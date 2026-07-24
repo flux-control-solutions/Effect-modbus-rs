@@ -1,10 +1,11 @@
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Scope } from 'effect';
+
+import { type ModbusError, ModbusNotConnectedError, toModbusError } from './errors';
 import {
-  type ModbusError,
-  ModbusNotConnectedError,
-  toModbusError,
-} from "./errors";
-import { makeEffectModbusClient, type AnyModbusClient, type EffectModbusClient } from "./modbus-client";
+  makeEffectModbusClient,
+  type AnyModbusClient,
+  type EffectModbusClient,
+} from './modbus-client';
 
 /**
  * Shared API surface that every transport service exposes to consumers.
@@ -68,7 +69,7 @@ export function makeTransportScoped<
   serviceName: string,
   config?: {
     /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
-    moduleSpecifier?: "modbus-rs" | "modbus-rs/web";
+    moduleSpecifier?: 'modbus-rs' | 'modbus-rs/web';
     /** Wraps the raw transport client into an {@link EffectModbusClient}. Defaults to {@link makeEffectModbusClient}. */
     toEffectClient?: (client: TClient) => EffectModbusClient;
   },
@@ -77,9 +78,9 @@ export function makeTransportScoped<
     // Branched as a literal specifier (not a variable) so bundlers reliably apply
     // modbus-rs's conditional exports when resolving the dynamic import.
     const mod: Record<string, unknown> =
-      config?.moduleSpecifier === "modbus-rs/web"
-        ? yield* Effect.promise(() => import("modbus-rs/web"))
-        : yield* Effect.promise(() => import("modbus-rs"));
+      config?.moduleSpecifier === 'modbus-rs/web'
+        ? yield* Effect.promise(() => import('modbus-rs/web'))
+        : yield* Effect.promise(() => import('modbus-rs'));
     const TC = mod[transportKey];
     const toEffectClient = (config?.toEffectClient ?? makeEffectModbusClient) as unknown as (
       client: TClient,
@@ -97,16 +98,16 @@ export function makeTransportScoped<
       if (transport) {
         if (closed) {
           return yield* new ModbusNotConnectedError({
-            cause: new Error("Transport has been closed"),
-            message: "Transport has been closed",
+            cause: new Error('Transport has been closed'),
+            message: 'Transport has been closed',
           });
         }
         return transport;
       }
       if (closed) {
         return yield* new ModbusNotConnectedError({
-          cause: new Error("Transport has been closed"),
-          message: "Transport has been closed",
+          cause: new Error('Transport has been closed'),
+          message: 'Transport has been closed',
         });
       }
       if (!connectPromise) {
@@ -123,10 +124,12 @@ export function makeTransportScoped<
       );
       if (closed) {
         connectPromise = null;
-        yield* Effect.fork(Effect.promise(() => t.close()).pipe(Effect.catchAll(() => Effect.void)));
+        yield* Effect.fork(
+          Effect.promise(() => t.close()).pipe(Effect.catchAll(() => Effect.void)),
+        );
         return yield* new ModbusNotConnectedError({
-          cause: new Error("Transport has been closed"),
-          message: "Transport has been closed",
+          cause: new Error('Transport has been closed'),
+          message: 'Transport has been closed',
         });
       }
       transport = t;
@@ -144,7 +147,7 @@ export function makeTransportScoped<
       );
     });
 
-    const notConnectedMsg = "Transport is not connected. Call withClient() first.";
+    const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
     return {
       withClient: Effect.fnUntraced(function* (unitId: number) {
@@ -185,8 +188,8 @@ export function makeTransportScoped<
       reconnect: Effect.fnUntraced(function* () {
         if (closed) {
           return yield* new ModbusNotConnectedError({
-            cause: new Error("Transport has been closed"),
-            message: "Transport has been closed",
+            cause: new Error('Transport has been closed'),
+            message: 'Transport has been closed',
           });
         }
         if (transport) {

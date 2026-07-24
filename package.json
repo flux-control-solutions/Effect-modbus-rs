@@ -2,23 +2,13 @@
   "name": "effect-modbus-rs",
   "version": "1.0.0",
   "description": "Type-safe Modbus communication via Effect-TS, wrapping the modbus-rs npm bindings.",
-  "type": "module",
+  "license": "GPL-3.0",
   "files": [
     "src/**/*.ts",
     "dist/**/*.js",
     "dist/**/*.d.ts"
   ],
-  "publishConfig": {
-    "access": "public",
-    "provenance": true,
-    "exports": {
-      "./package.json": "./package.json",
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
-    }
-  },
+  "type": "module",
   "exports": {
     "./package.json": "./package.json",
     ".": {
@@ -26,16 +16,30 @@
       "default": "./index.ts"
     }
   },
+  "publishConfig": {
+    "exports": {
+      "./package.json": "./package.json",
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "test": "bun test ./src/ ./examples/",
-    "test:coverage": "bun test --coverage ./src/ ./examples/",
-    "typecheck": "tsc --noEmit",
     "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json",
     "docs": "typedoc",
+    "format": "oxfmt --check",
+    "format:fix": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "format": "oxfmt",
-    "format:fix": "oxfmt --fix"
+    "test": "bun test ./src/ ./examples/",
+    "test:coverage": "bun test --coverage ./src/ ./examples/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "modbus-rs": "^0.15.6"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
@@ -51,9 +55,5 @@
   },
   "peerDependencies": {
     "effect": "^3.22.0"
-  },
-  "dependencies": {
-    "modbus-rs": "^0.15.6"
-  },
-  "license": "GPL-3.0"
+  }
 }

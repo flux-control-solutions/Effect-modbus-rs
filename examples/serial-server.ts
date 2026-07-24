@@ -11,11 +11,19 @@
  * @example bun run examples/serial-server.ts
  */
 
-import { Console, Effect, Layer, LogLevel, Logger } from "effect";
-import { BunRuntime } from "@effect/platform-bun";
-import type { ReadCoilsRequest, ReadHoldingRegistersRequest, WriteMultipleCoilsRequest, WriteMultipleRegistersRequest, WriteSingleCoilRequest, WriteSingleRegisterRequest } from "modbus-rs";
-import { CoilState, type ServerHandlers } from "modbus-rs";
-import { serialRtuServerLayer } from "../src/SerialModbusServerService";
+import { BunRuntime } from '@effect/platform-bun';
+import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import type {
+  ReadCoilsRequest,
+  ReadHoldingRegistersRequest,
+  WriteMultipleCoilsRequest,
+  WriteMultipleRegistersRequest,
+  WriteSingleCoilRequest,
+  WriteSingleRegisterRequest,
+} from 'modbus-rs';
+import { CoilState, type ServerHandlers } from 'modbus-rs';
+
+import { serialRtuServerLayer } from '../src/SerialModbusServerService';
 
 const coils = new Map<number, boolean>();
 const holdingRegisters = new Map<number, number>();
@@ -24,7 +32,7 @@ const handlers: ServerHandlers = {
   onReadCoils: (req: ReadCoilsRequest): CoilState[] => {
     const result: CoilState[] = [];
     for (let i = 0; i < req.quantity; i++) {
-      result.push(coils.get(req.address + i) ?? false ? CoilState.On : CoilState.Off);
+      result.push((coils.get(req.address + i) ?? false) ? CoilState.On : CoilState.Off);
     }
     return result;
   },
@@ -59,7 +67,7 @@ const handlers: ServerHandlers = {
 };
 
 const ServerLive = serialRtuServerLayer(
-  { portPath: "/dev/ttyUSB0", baudRate: 9600, unitId: 1 },
+  { portPath: '/dev/ttyUSB0', baudRate: 9600, unitId: 1 },
   handlers,
 );
 

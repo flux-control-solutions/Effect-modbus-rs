@@ -1,6 +1,6 @@
-import { defineConfig } from "vite";
-import wasm from "vite-plugin-wasm";
-import topLevelAwait from "vite-plugin-top-level-await";
+import { defineConfig } from 'vite';
+import topLevelAwait from 'vite-plugin-top-level-await';
+import wasm from 'vite-plugin-wasm';
 
 // modbus-rs's WASM build is wasm-bindgen "bundler" target output — these two
 // plugins are what upstream's own examples use to consume it (see
@@ -8,7 +8,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
   build: {
-    target: "esnext",
+    target: 'esnext',
   },
   server: {
     port: 5173,
@@ -20,6 +20,6 @@ export default defineConfig({
     // section) — excluding it here lets the page still load; the actual error
     // only surfaces when Connect is clicked, which is the real failure point
     // once upstream's publish is fixed.
-    exclude: ["modbus-rs", "modbus-rs-wasm"],
+    exclude: ['modbus-rs', 'modbus-rs-wasm'],
   },
 });

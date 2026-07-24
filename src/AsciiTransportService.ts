@@ -1,7 +1,12 @@
-import type { AsyncAsciiTransport, AsyncSerialModbusClient, AsciiTransportOptions } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import { makeTransportScoped } from "./shared-transport";
-import { makeMockTransport, SlaveDeviceDefinitions } from "./mocks";
+import { Effect, Layer } from 'effect';
+import type {
+  AsyncAsciiTransport,
+  AsyncSerialModbusClient,
+  AsciiTransportOptions,
+} from 'modbus-rs';
+
+import { makeMockTransport, SlaveDeviceDefinitions } from './mocks';
+import { makeTransportScoped } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncAsciiTransport}
@@ -20,13 +25,17 @@ import { makeMockTransport, SlaveDeviceDefinitions } from "./mocks";
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class AsciiTransportService extends Effect.Service<AsciiTransportService>()(
-  "AsciiTransportService",
+  'AsciiTransportService',
   {
-    scoped: makeTransportScoped<AsciiTransportOptions, AsyncSerialModbusClient, AsyncAsciiTransport>(
-      "AsyncAsciiTransport",
+    scoped: makeTransportScoped<
+      AsciiTransportOptions,
+      AsyncSerialModbusClient,
+      AsyncAsciiTransport
+    >(
+      'AsyncAsciiTransport',
       (TC: unknown, options: AsciiTransportOptions) =>
         (TC as typeof AsyncAsciiTransport).open(options),
-      "AsciiTransportService",
+      'AsciiTransportService',
     ),
   },
 ) {

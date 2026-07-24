@@ -12,12 +12,12 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 ## Commands
 
-| Action | Command |
-|--------|---------|
-| Install | `bun install` |
-| Type-check | `bun run typecheck` |
-| Test | `bun run test` (create under `**/*.test.ts`) |
-| Run example | `bun run examples/<name>.ts` |
+| Action      | Command                                      |
+| ----------- | -------------------------------------------- |
+| Install     | `bun install`                                |
+| Type-check  | `bun run typecheck`                          |
+| Test        | `bun run test` (create under `**/*.test.ts`) |
+| Run example | `bun run examples/<name>.ts`                 |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.
 
@@ -81,9 +81,9 @@ examples/
 
 Shallow clones of key dependencies live in `references/` for offline browsing (gitignored; re-clone if stale):
 
-| Reference | Local path | Useful subdirectory |
-|-----------|-----------|-------------------|
-| effect | `references/effect` | `packages/effect/src/` for core types |
+| Reference | Local path             | Useful subdirectory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| effect    | `references/effect`    | `packages/effect/src/` for core types                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | modbus-rs | `references/modbus-rs` | `mbus-ffi/javascript/` — unified native+WASM npm package (`index.d.ts`/`index.browser.d.ts`/`index.web.d.ts` for types, `index.js`/`index.browser.js`/`index.web.js` for impl). For the WASM API specifically, `mbus-ffi/src/wasm/**` (Rust source) is current-truth — `documentation/wasm_bindings.md` and `documentation/client/wasm.md` describe an older, now-changed API (`WasmModbusClient`/`WasmTcpTransport`/snake_case methods) and should not be trusted without cross-checking the Rust source. |
 
 The skill at `.opencode/skills/reference-dependencies/SKILL.md` is the dedicated instruction for reference lookup.

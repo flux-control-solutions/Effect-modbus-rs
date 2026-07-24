@@ -1,11 +1,13 @@
-import { Effect } from "effect";
-import { test, expect } from "bun:test";
-import { CoilState } from "modbus-rs";
-import type { WasmSerialPortHandle } from "modbus-rs/web";
-import { WasmWsTransportService } from "./WasmWsTransportService";
-import { WasmRtuTransportService } from "./WasmRtuTransportService";
-import { WasmSerialTransportService } from "./WasmSerialTransportService";
-import { ModbusInvalidArgumentError } from "./errors";
+import { test, expect } from 'bun:test';
+
+import { Effect } from 'effect';
+import { CoilState } from 'modbus-rs';
+import type { WasmSerialPortHandle } from 'modbus-rs/web';
+
+import { ModbusInvalidArgumentError } from './errors';
+import { WasmRtuTransportService } from './WasmRtuTransportService';
+import { WasmSerialTransportService } from './WasmSerialTransportService';
+import { WasmWsTransportService } from './WasmWsTransportService';
 
 /**
  * `makeMockTransport` is fully transport-agnostic (see mocks.test.ts for the exhaustive
@@ -29,7 +31,7 @@ const device = {
 // its options entirely — so a fake stand-in is fine here.
 const fakePort = { isValid: () => true } as unknown as WasmSerialPortHandle;
 
-test("WasmWsTransportService mock: read/write coils and registers", async () => {
+test('WasmWsTransportService mock: read/write coils and registers', async () => {
   const result = await Effect.gen(function* () {
     const t = yield* WasmWsTransportService;
     const c = yield* t.withClient(1);
@@ -38,7 +40,7 @@ test("WasmWsTransportService mock: read/write coils and registers", async () => 
     const regs = yield* c.readHoldingRegisters({ address: 0, quantity: 1 });
     return { coils, regs };
   }).pipe(
-    Effect.provide(WasmWsTransportService.makeMockTransport([device])({ wsUrl: "ws://mock" })),
+    Effect.provide(WasmWsTransportService.makeMockTransport([device])({ wsUrl: 'ws://mock' })),
     Effect.scoped,
     Effect.runPromise,
   );
@@ -47,7 +49,7 @@ test("WasmWsTransportService mock: read/write coils and registers", async () => 
   expect(result.regs).toEqual(new Uint16Array([100]));
 });
 
-test("WasmRtuTransportService mock: unknown unitId returns error", async () => {
+test('WasmRtuTransportService mock: unknown unitId returns error', async () => {
   const error = await Effect.gen(function* () {
     const t = yield* WasmRtuTransportService;
     return yield* t.withClient(99).pipe(Effect.flip);
@@ -62,7 +64,7 @@ test("WasmRtuTransportService mock: unknown unitId returns error", async () => {
   expect(error).toBeInstanceOf(ModbusInvalidArgumentError);
 });
 
-test("WasmSerialTransportService.fromRtu mock: read holding registers", async () => {
+test('WasmSerialTransportService.fromRtu mock: read holding registers', async () => {
   const result = await Effect.gen(function* () {
     const t = yield* WasmSerialTransportService;
     const c = yield* t.withClient(1);
