@@ -7,7 +7,6 @@ import type {
 } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import { makeWasmEffectModbusClient } from './modbus-client';
 import { makeTransportScoped } from './shared-transport';
 
 /**
@@ -49,7 +48,7 @@ export class WasmAsciiTransportService extends Effect.Service<WasmAsciiTransport
       (TC: unknown, { port, ...rest }: WasmAsciiTransportOpenOptions) =>
         (TC as typeof WasmAsciiTransport).open(port, rest),
       'WasmAsciiTransportService',
-      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
+      { moduleSpecifier: 'modbus-rs/web' },
     ),
   },
 ) {

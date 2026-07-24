@@ -7,7 +7,6 @@ import type {
 } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import { makeWasmEffectModbusClient } from './modbus-client';
 import { makeTransportScoped } from './shared-transport';
 
 /**
@@ -49,7 +48,7 @@ export class WasmRtuTransportService extends Effect.Service<WasmRtuTransportServ
       (TC: unknown, { port, ...rest }: WasmRtuTransportOpenOptions) =>
         (TC as typeof WasmRtuTransport).open(port, rest),
       'WasmRtuTransportService',
-      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
+      { moduleSpecifier: 'modbus-rs/web' },
     ),
   },
 ) {

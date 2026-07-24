@@ -2,7 +2,6 @@ import { Effect, Layer } from 'effect';
 import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import { makeWasmEffectModbusClient } from './modbus-client';
 import { makeTransportScoped } from './shared-transport';
 
 /**
@@ -28,7 +27,7 @@ export class WasmWsTransportService extends Effect.Service<WasmWsTransportServic
       (TC: unknown, options: WasmWsTransportOptions) =>
         (TC as typeof WasmWsTransport).connect(options),
       'WasmWsTransportService',
-      { moduleSpecifier: 'modbus-rs/web', toEffectClient: makeWasmEffectModbusClient },
+      { moduleSpecifier: 'modbus-rs/web' },
     ),
   },
 ) {

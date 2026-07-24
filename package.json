@@ -34,10 +34,10 @@
     "format:fix": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "prepare": "husky",
     "test": "bun test ./src/ ./examples/",
     "test:coverage": "bun test --coverage ./src/ ./examples/",
-    "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "modbus-rs": "^0.15.6"

@@ -17,8 +17,8 @@ import type {
   DeviceIdentificationResponse,
   AsyncSerialModbusClient,
   AsyncTcpModbusClient,
+  CoilState,
 } from 'modbus-rs';
-import { CoilState } from 'modbus-rs';
 import type { WasmWsModbusClient, WasmSerialModbusClient } from 'modbus-rs/web';
 
 import type { ModbusError } from './errors';
@@ -41,9 +41,9 @@ const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
 /**
  * Effect-ified Modbus client wrapping a `modbus-rs` transport client.
  *
- * Each method delegates to the equivalent `AsyncSerialModbusClient` or
- * `AsyncTcpModbusClient` method, converting the Promise-based API into
- * an {@link Effect.Effect} with typed {@link ModbusError} failures.
+ * Each method delegates to the equivalent method on the underlying native
+ * or WASM client, converting the Promise-based API into an
+ * {@link Effect.Effect} with typed {@link ModbusError} failures.
  *
  * Thrown errors are classified using {@link toModbusError}, mapping
  * `modbus-rs` error codes (timeout, transport, exception, etc.) into
@@ -217,24 +217,26 @@ export interface EffectModbusClient {
 }
 
 /**
- * Wraps a raw `modbus-rs` client into an {@link EffectModbusClient}.
+ * Wraps a raw `modbus-rs` client — native (napi) or browser (WASM) — into an
+ * {@link EffectModbusClient}.
  *
  * Each method converts a Promise-based call from the upstream client
  * into an `Effect` via {@link Effect.tryPromise}, routing errors through
  * {@link toModbusError} for typed error discrimination.
  *
- * Accepts both serial (`AsyncSerialModbusClient`) and TCP
- * (`AsyncTcpModbusClient`) clients since they share the same method
- * signatures.
+ * The native and WASM clients share the same method surface (same options
+ * shapes, same resolved value shapes — `CoilState[]`, full `FifoQueueResponse`,
+ * full `DeviceIdentificationResponse`), so one factory covers both; no
+ * transport-specific reshaping is needed.
  *
- * @param client - The upstream `modbus-rs` client instance.
+ * @param client - The upstream `modbus-rs` or `modbus-rs/web` client instance.
  * @returns An `EffectModbusClient` that can be used within Effect
  *          workflows.
  *
- * @see AsyncSerialModbusClient — Upstream serial client API.
- * @see AsyncTcpModbusClient — Upstream TCP client API.
+ * @see AsyncSerialModbusClient — Upstream native serial client API.
+ * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const makeEffectModbusClient = (client: NativeModbusClient): EffectModbusClient => ({
+export const makeEffectModbusClient = (client: AnyModbusClient): EffectModbusClient => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
@@ -250,61 +252,4 @@ export const makeEffectModbusClient = (client: NativeModbusClient): EffectModbus
   readExceptionStatus: () => wrap(() => client.readExceptionStatus()),
   diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
   readDeviceIdentification: (opts) => wrap(() => client.readDeviceIdentification(opts)),
-});
-
-/**
- * Wraps a browser (WASM) `modbus-rs` client into an {@link EffectModbusClient}.
- *
- * Method surface matches {@link makeEffectModbusClient} almost exactly (same options
- * shapes, same `AbortSignal` support) — the WASM client methods just resolve slightly
- * different raw shapes for a couple of function codes, normalized here so consumers get
- * one consistent `EffectModbusClient` contract regardless of transport:
- *
- * - `readCoils`/`readDiscreteInputs` resolve `boolean[]` (or numeric 0/1, per the WASM
- *   binding's own runtime — either way `b ? On : Off` handles both) instead of native's
- *   `CoilState[]`; mapped to `CoilState[]` here. Writes need no reverse mapping — the WASM
- *   binding's own `WriteSingleCoilOptions`/`WriteMultipleCoilsOptions` types already accept
- *   `CoilState`/`CoilState[]` directly.
- * - `readFifoQueue` resolves a raw `Uint16Array` (no `count` wrapper) — reshaped into
- *   {@link FifoQueueResponse} here.
- * - `readDeviceIdentification` resolves an object missing `nextObjectId` (present in
- *   native's response) — defaulted to `0` here. This is a best-effort mapping pending a
- *   working upstream `modbus-rs-wasm` build to verify the real runtime shape against.
- *
- * @param client - The upstream `modbus-rs/web` client instance.
- * @see makeEffectModbusClient — The native-client equivalent.
- */
-export const makeWasmEffectModbusClient = (client: WasmModbusClient): EffectModbusClient => ({
-  readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
-  readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
-  writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
-  writeMultipleRegisters: (opts) => wrap(() => client.writeMultipleRegisters(opts)),
-  readWriteMultipleRegisters: (opts) => wrap(() => client.readWriteMultipleRegisters(opts)),
-  readCoils: (opts) =>
-    wrap(() => client.readCoils(opts)).pipe(
-      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off))),
-    ),
-  writeSingleCoil: (opts) => wrap(() => client.writeSingleCoil(opts)),
-  writeMultipleCoils: (opts) => wrap(() => client.writeMultipleCoils(opts)),
-  readDiscreteInputs: (opts) =>
-    wrap(() => client.readDiscreteInputs(opts)).pipe(
-      Effect.map((bits) => bits.map((b) => (b ? CoilState.On : CoilState.Off))),
-    ),
-  readFifoQueue: (opts) =>
-    wrap(() => client.readFifoQueue(opts)).pipe(Effect.map((values): FifoQueueResponse => values)),
-  readFileRecord: (opts) => wrap(() => client.readFileRecord(opts)),
-  writeFileRecord: (opts) => wrap(() => client.writeFileRecord(opts)),
-  readExceptionStatus: () => wrap(() => client.readExceptionStatus()),
-  diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
-  readDeviceIdentification: (opts) =>
-    wrap(() => client.readDeviceIdentification(opts)).pipe(
-      Effect.map(
-        (resp): DeviceIdentificationResponse => ({
-          conformityLevel: resp.conformityLevel,
-          moreFollows: resp.moreFollows,
-          nextObjectId: 0,
-          objects: resp.objects,
-        }),
-      ),
-    ),
 });
