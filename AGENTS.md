@@ -6,7 +6,7 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 - **Runtime**: Bun only — never use Node, npm, pnpm, yarn, or vite.
 - **Language**: TypeScript 6 (ESNext, `verbatimModuleSyntax`, bundler resolution, `module: "Preserve"`).
-- **Core libs**: `effect` (^3.22.0), `modbus-rs` (^0.15.4).
+- **Core libs**: `effect` (^3.22.0), `modbus-rs` (^0.15.6).
 - **LSP**: `@effect/language-service` plugin in `tsconfig.json` `compilerOptions.plugins`.
 - **License**: GPL-3.0.
 
@@ -33,7 +33,6 @@ src/
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
-  modbus-rs-web.d.ts         — TEMPORARY ambient types for `modbus-rs/web` (upstream WASM publish is broken; see below)
   WasmSerialPort.ts          — requestSerialPort() Effect helper (user-gesture gated, Web Serial API)
   WasmWsTransportService.ts  — Scoped Effect.Service wrapping WasmWsTransport (browser, TCP over WebSocket gateway)
   WasmRtuTransportService.ts — Scoped Effect.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
@@ -91,6 +90,8 @@ The skill at `.opencode/skills/reference-dependencies/SKILL.md` is the dedicated
 ## WASM/browser support
 
 - `modbus-rs`'s WASM build is published separately as `modbus-rs-wasm` and re-exported under `modbus-rs`'s `./web` subpath (`import ... from "modbus-rs/web"`). Type-only imports for `Wasm*` symbols must use that subpath, not the bare `"modbus-rs"` specifier — this project's `tsconfig.json` has no `customConditions`, so bare imports always resolve to the native (`default`) condition regardless of what environment the code will actually run in.
-- **`modbus-rs-wasm@0.15.4` is currently broken on npm** (the published tarball is missing all `.wasm`/`.js` build output — confirmed by downloading it directly). `src/modbus-rs-web.d.ts` is a hand-written, TEMPORARY ambient type shim covering the surface this package uses, derived directly from the Rust source since there's no generated `.d.ts` to import from anywhere (not on npm, not checked into the upstream repo). Delete it once upstream republishes a working build.
+- **`modbus-rs@0.15.6` ships a WASM build whose `.d.ts` does not match its JS.** The ambient shim that used to paper over this (`src/modbus-rs-web.d.ts`) was deleted in `d4a0cc6`; the WASM services now type against the real published `.d.ts` and fail loudly where upstream is wrong. Two known mismatches, both caused by upstream marking its WASM API `#[wasm_bindgen(skip_typescript)]` and hand-writing declarations in a `typescript_custom_section` that drifts from the generated JS:
+  - `ModbusErrorCode` is **declared but not exported** (`mbus-ffi/src/wasm/error_codes.rs` declares it inside an `extern "C"` + `inline_js` block, which is an _import_, so wasm-bindgen emits it to `snippets/` and never re-exports it). This breaks `src/errors.ts` in any browser bundle. Diagnose with `examples/wasm`'s `/export-check.html`.
+  - `WasmRtuTransport`/`WasmAsciiTransport` are **missing `setRequestTimeout`/`clearRequestTimeout`/`reconnect` from the `.d.ts`** although `modbus-rs_bg.js` defines all three. This is the source of the two standing `bun run typecheck` errors.
 - Two response shapes in that shim (`readFifoQueue`, `readDeviceIdentification`) are best-effort — the upstream JSDoc-declared return type and the actual Rust serialization code (`mbus-ffi/src/wasm/client/response.rs`) disagree with each other. `src/modbus-client.ts`'s `makeWasmEffectModbusClient` normalizes the gaps; re-verify against a real build once one exists.
 - The same dynamic `import("modbus-rs")` pattern used everywhere in this codebase resolves to the WASM build automatically for downstream consumers bundling for a browser target (via `modbus-rs`'s own conditional exports) — no changes to this package's own build/exports were needed for that part.

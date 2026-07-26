@@ -296,7 +296,9 @@ Coil/default values default to `false` if omitted at the address level; register
 
 ## Known limitation: WASM build
 
-`modbus-rs`'s WASM build is published separately as `modbus-rs-wasm` and re-exported under `modbus-rs`'s `./web` subpath. **As of this writing, `modbus-rs-wasm@0.15.4` is broken on npm** — the published package is missing its `.wasm` binary and JS glue. This blocks real browser/end-to-end testing of the WASM transports and servers above until upstream republishes a working build (recent commits on their `main` branch look like fixes for exactly this). The WASM services in this package are implemented and type-checked against the documented/source-verified API surface regardless — they should work as-is once upstream's publish is fixed.
+`modbus-rs`'s WASM build is published separately as `modbus-rs-wasm` and re-exported under `modbus-rs`'s `./web` subpath. The missing-tarball problem that affected `0.15.4` was fixed upstream in `0.15.6`, but **`modbus-rs@0.15.6` still cannot be loaded in a browser through this package**: its WASM `.d.ts` declares `ModbusErrorCode` while the generated JS never exports it, so `src/errors.ts`'s `import { getModbusErrorCode, ModbusErrorCode } from 'modbus-rs'` fails at module-link time under the `browser` export condition.
+
+Nothing in this repo's own checks catches that — `bun run typecheck` and `bun test` resolve `modbus-rs` under the default (napi) condition, where the export genuinely exists. Reproduce it with `cd examples/wasm && npm run dev` and open `/export-check.html`, or with `cd examples/wasm && npx vite build`. See `examples/wasm/README.md` for the full diagnosis, the upstream root cause, and the one-line local workaround.
 
 ## Development
 
@@ -324,7 +326,6 @@ src/
   TcpModbusServerService.ts  — tcpServerLayer
   SerialModbusServerService.ts — serialRtuServerLayer / serialAsciiServerLayer
   TcpGatewayService.ts       — tcpGatewayLayer
-  modbus-rs-web.d.ts         — Temporary ambient types for modbus-rs/web (see "Known limitation" above)
   WasmSerialPort.ts          — requestSerialPort() Effect helper (browser, user-gesture gated)
   WasmWsTransportService.ts  — Scoped Effect.Service wrapping WasmWsTransport (browser, WS gateway)
   WasmRtuTransportService.ts — Scoped Effect.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
