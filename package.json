@@ -40,7 +40,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "modbus-rs": "^0.15.6"
+    "modbus-rs": "0.16.1"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
