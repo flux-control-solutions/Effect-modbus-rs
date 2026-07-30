@@ -2,7 +2,11 @@
 
 **Type-safe Modbus communication via Effect-TS**, wrapping the [`modbus-rs`](https://github.com/Raghava-Ch/modbus-rs) npm bindings (Rust napi-rs under the hood).
 
+For the complete API reference, see the [GitHub Pages documentation](https://flux-control-solutions.github.io/Effect-modbus-rs/).
+
 Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU (serial), TCP, and ASCII Modbus transports. Clients expose a typed `Effect`-based API for all standard Modbus function codes.
+
+> This project is under active development. Its API may change before the 1.0 release.
 
 ## Install
 
@@ -89,9 +93,9 @@ program.pipe(
 );
 ```
 
-### Browser / WASM
+### Browser / WASM (`modbus-rs/web`)
 
-`modbus-rs` also ships WASM bindings for the browser, wrapped by this package the same way as the native transports. Since browsers can't open raw TCP or serial connections directly, there are two browser-specific transports:
+`modbus-rs` ships its browser bindings through the `modbus-rs/web` WASM module. This package loads that module dynamically and exposes the same scoped, typed `Effect` client API as its native transports. Since browsers can't open raw TCP or serial connections directly, there are two browser-specific transports:
 
 - **`WasmWsTransportService`** — Modbus TCP over a WebSocket-to-TCP gateway (e.g. the `modbus-gateway` application).
 - **`WasmRtuTransportService`** / **`WasmAsciiTransportService`** — Modbus RTU/ASCII over the [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API), via `WasmSerialTransportService.fromRtu` / `.fromAscii`.
@@ -133,7 +137,7 @@ connectButton.addEventListener('click', () => {
 });
 ```
 
-See `examples/wasm/` for a real, runnable Vite app exercising both transports in an actual browser (`cd examples/wasm && npm install && npm run dev`) — see its own README for setup details and the current [known limitation](#known-limitation-wasm-build) below.
+See `examples/wasm/` for a real, runnable Vite app exercising both transports in an actual browser (`cd examples/wasm && npm install && npm run dev`).
 
 #### Browser server (experimental)
 
@@ -293,12 +297,6 @@ See `examples/rtu-mock.ts`, `examples/tcp-mock.ts`, and `examples/ascii-mock.ts`
 | `inputRegisters`   | `{ address, default }[]` | `[]`     |
 
 Coil/default values default to `false` if omitted at the address level; register values default to `0`. Reads beyond the highest configured address produce a `ModbusInvalidArgumentError`.
-
-## Known limitation: WASM build
-
-`modbus-rs`'s WASM build is published separately as `modbus-rs-wasm` and re-exported under `modbus-rs`'s `./web` subpath. The missing-tarball problem that affected `0.15.4` was fixed upstream in `0.15.6`, but **`modbus-rs@0.15.6` still cannot be loaded in a browser through this package**: its WASM `.d.ts` declares `ModbusErrorCode` while the generated JS never exports it, so `src/errors.ts`'s `import { getModbusErrorCode, ModbusErrorCode } from 'modbus-rs'` fails at module-link time under the `browser` export condition.
-
-Nothing in this repo's own checks catches that — `bun run typecheck` and `bun test` resolve `modbus-rs` under the default (napi) condition, where the export genuinely exists. Reproduce it with `cd examples/wasm && npm run dev` and open `/export-check.html`, or with `cd examples/wasm && npx vite build`. See `examples/wasm/README.md` for the full diagnosis, the upstream root cause, and the one-line local workaround.
 
 ## Development
 

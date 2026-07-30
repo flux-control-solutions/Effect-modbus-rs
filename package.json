@@ -29,15 +29,18 @@
   },
   "scripts": {
     "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json",
-    "docs": "typedoc",
+    "changeset": "changeset",
+    "docs": "bun install --cwd tools/typedoc --frozen-lockfile && bun run --cwd \"$PWD/tools/typedoc\" generate",
     "format": "oxfmt --check",
     "format:fix": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "prepare": "husky",
+    "release": "changeset publish",
     "test": "bun test ./src/ ./examples/",
     "test:coverage": "bun test --coverage ./src/ ./examples/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "version": "changeset version"
   },
   "dependencies": {
     "modbus-rs": "0.16.1"
@@ -52,7 +55,6 @@
     "husky": "^9.1.7",
     "oxfmt": "^0.60.0",
     "oxlint": "^1.75.0",
-    "typedoc": "^0.28.20",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {

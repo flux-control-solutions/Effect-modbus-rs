@@ -15,6 +15,7 @@
  * failure being demonstrated, so it has to be quarantined to be observable.
  */
 
+/** Result produced by one runtime-export or named-import diagnostic probe. */
 interface ProbeResult {
   readonly specifier: string;
   readonly note: string;
@@ -23,6 +24,7 @@ interface ProbeResult {
   readonly exports?: readonly string[];
 }
 
+/** The upstream binding export whose browser runtime availability is checked. */
 const EXPECTED_EXPORT = 'ModbusErrorCode';
 
 /** Loads a module namespace and reports whether `ModbusErrorCode` is on it. */
@@ -74,6 +76,7 @@ const probeStaticImport = async (
 
 // Specifiers must be literals so Vite can statically analyse and rewrite them —
 // a variable specifier would not resolve as a bare package name in the browser.
+/** Runs every probe without allowing one failed module link to stop the page. */
 const runProbes = (): Promise<readonly ProbeResult[]> =>
   Promise.all([
     probeNamespace(
@@ -98,12 +101,14 @@ const runProbes = (): Promise<readonly ProbeResult[]> =>
     ),
   ]);
 
+/** Human-readable labels for the status class assigned by each probe. */
 const STATUS_LABEL: Record<ProbeResult['status'], string> = {
   ok: 'PASS',
   missing: 'FAIL — export missing',
   threw: 'FAIL — threw',
 };
 
+/** Renders the probe evidence and aggregate result into the diagnostic page. */
 const render = (results: readonly ProbeResult[]) => {
   const root = document.getElementById('results');
   if (!root) return;

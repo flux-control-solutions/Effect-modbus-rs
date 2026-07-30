@@ -57,6 +57,7 @@ interface TransportHandle<TClient> {
  * @param openMethod - A function that takes the transport constructor and options,
  *   returning a promise for the opened transport.
  * @param serviceName - Logical name used in log messages and the finalizer guard.
+ * @param config - Optional module specifier override for browser WASM transports.
  * @returns An `Effect` that produces a {@link TransportServiceApi}.
  */
 export function makeTransportScoped<

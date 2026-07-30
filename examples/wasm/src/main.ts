@@ -16,6 +16,7 @@ import {
   type EffectModbusClient,
 } from 'effect-modbus-rs';
 
+/** Returns the required DOM element with its expected concrete type. */
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 const modeEl = $<HTMLSelectElement>('mode');
@@ -34,11 +35,13 @@ const quantityEl = $<HTMLInputElement>('quantity');
 const statusEl = $<HTMLSpanElement>('status');
 const logEl = $<HTMLDivElement>('log');
 
+/** Prepends a timestamped status message to the on-page connection log. */
 const log = (msg: string) => {
   const time = new Date().toLocaleTimeString();
   logEl.textContent = `[${time}] ${msg}\n${logEl.textContent}`;
 };
 
+/** Updates the visible connection state and enables only valid actions. */
 const setStatus = (status: string) => {
   statusEl.textContent = status;
   const connected = status === 'connected';
@@ -57,6 +60,10 @@ modeEl.addEventListener('change', () => {
 let scope: Scope.CloseableScope | null = null;
 let client: EffectModbusClient | null = null;
 
+/**
+ * Builds a WebSocket transport in a manually managed scope and obtains its
+ * client. The caller closes that scope on Disconnect or failed connection.
+ */
 const connectWs = async (unitId: number) => {
   scope = Effect.runSync(Scope.make());
   const layer = WasmWsTransportService.Default({
@@ -68,6 +75,10 @@ const connectWs = async (unitId: number) => {
   client = await Effect.runPromise(transport.withClient(unitId));
 };
 
+/**
+ * Requests a Web Serial port while the click gesture is active, then builds
+ * the selected RTU or ASCII transport in a manually managed scope.
+ */
 const connectSerial = async (unitId: number) => {
   // Must run inside this click handler — Web Serial's requestPort() requires a
   // user gesture. `connect()` below is itself the click handler.
