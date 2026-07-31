@@ -1,11 +1,11 @@
 {
   "name": "@flux-control/effect-modbus-rs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Type-safe Modbus communication via Effect-TS, wrapping the modbus-rs npm bindings.",
   "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/flux-control-solutions/Effect-modbus-rs.git"
+    "url": "git+https://github.com/flux-control-solutions/Effect-modbus-rs.git"
   },
   "type": "module",
   "files": [
@@ -14,20 +14,13 @@
   ],
   "publishConfig": {
     "access": "public",
-    "provenance": true,
-    "exports": {
-      "./package.json": "./package.json",
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
-    }
+    "provenance": true
   },
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "types": "./index.ts",
-      "default": "./index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
