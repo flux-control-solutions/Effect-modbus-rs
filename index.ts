@@ -1,5 +1,5 @@
 /**
- * # effect-modbus-rs
+ * # @flux-control/effect-modbus-rs
  *
  * Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs`
  * npm bindings (Rust `napi-rs` under the hood).
@@ -46,7 +46,7 @@
  * })
  * ```
  *
- * @module effect-modbus-rs
+ * @module @flux-control/effect-modbus-rs
  */
 
 export * from './src/errors';

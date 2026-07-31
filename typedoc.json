@@ -3,7 +3,7 @@
   "entryPoints": ["index.ts"],
   "tsconfig": "./tsconfig.json",
   "out": "docs-site",
-  "name": "effect-modbus-rs",
+  "name": "@flux-control/effect-modbus-rs",
   "readme": "README.md",
   "cleanOutputDir": true,
   "excludePrivate": true,

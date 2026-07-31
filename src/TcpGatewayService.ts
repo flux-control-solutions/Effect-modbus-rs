@@ -20,7 +20,7 @@ import { toModbusError } from './errors';
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { tcpGatewayLayer } from "effect-modbus-rs";
+ * import { tcpGatewayLayer } from "@flux-control/effect-modbus-rs";
  *
  * const GatewayLive = tcpGatewayLayer(
  *   { host: "0.0.0.0", port: 8502 },

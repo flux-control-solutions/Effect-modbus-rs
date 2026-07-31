@@ -25,7 +25,7 @@ import { toModbusError } from './errors';
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { wasmWsServerLayer } from "effect-modbus-rs";
+ * import { wasmWsServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = wasmWsServerLayer(
  *   { wsUrl: "ws://localhost:8080", unitId: 1 },

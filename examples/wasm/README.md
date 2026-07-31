@@ -1,4 +1,4 @@
-# effect-modbus-rs — Browser (WASM) example
+# @flux-control/effect-modbus-rs — Browser (WASM) example
 
 A small, real Vite app exercising this package's browser transport services
 (`WasmWsTransportService`, `WasmRtuTransportService`, `WasmAsciiTransportService`,
@@ -30,8 +30,8 @@ Then open the printed `http://localhost:5173` URL in a browser. Pick a mode
 ## WASM module
 
 `modbus-rs@0.16.1` publishes browser bindings through its `modbus-rs/web`
-module. `effect-modbus-rs` loads this module internally for its WASM transport
-services; applications should import those services from `effect-modbus-rs`, not
+module. `@flux-control/effect-modbus-rs` loads this module internally for its WASM transport
+services; applications should import those services from `@flux-control/effect-modbus-rs`, not
 from the upstream module directly.
 
 `/export-check.html` remains available to inspect the browser-facing exports at
@@ -44,4 +44,4 @@ This package also wraps `modbus-rs`'s experimental browser server bindings
 — see the root `README.md`'s "Browser server (experimental)" section. Not
 included in this app since running a simulated Modbus _server_ isn't the
 typical browser-app use case, but the same `import { wasmWsServerLayer } from
-"effect-modbus-rs"` pattern applies.
+"@flux-control/effect-modbus-rs"` pattern applies.

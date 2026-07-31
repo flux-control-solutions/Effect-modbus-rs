@@ -10,8 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "effect": "^3.22.0",
-    "effect-modbus-rs": "file:../.."
+    "@flux-control/effect-modbus-rs": "file:../..",
+    "effect": "^3.22.0"
   },
   "devDependencies": {
     "typescript": "^5.4.5",

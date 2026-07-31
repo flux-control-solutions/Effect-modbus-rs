@@ -1,3 +1,10 @@
+import {
+  WasmAsciiTransportService,
+  WasmRtuTransportService,
+  WasmWsTransportService,
+  requestSerialPort,
+  type EffectModbusClient,
+} from '@flux-control/effect-modbus-rs';
 /**
  * Wires up a small vanilla-DOM UI (see ../index.html) to effect-modbus-rs's
  * browser transport services, so this can be run in a real browser for manual
@@ -8,13 +15,6 @@
  * `Scope` instead of using `Effect.scoped` — see `connectWs`/`connectSerial`.
  */
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
-import {
-  WasmAsciiTransportService,
-  WasmRtuTransportService,
-  WasmWsTransportService,
-  requestSerialPort,
-  type EffectModbusClient,
-} from 'effect-modbus-rs';
 
 /** Returns the required DOM element with its expected concrete type. */
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;

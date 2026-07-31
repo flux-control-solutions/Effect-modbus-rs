@@ -14,7 +14,7 @@ import { toModbusError } from './errors';
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { serialRtuServerLayer } from "effect-modbus-rs";
+ * import { serialRtuServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = serialRtuServerLayer(
  *   { portPath: "/dev/ttyUSB0", baudRate: 9600, unitId: 1 },
@@ -65,7 +65,7 @@ export const serialRtuServerLayer = (
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { serialAsciiServerLayer } from "effect-modbus-rs";
+ * import { serialAsciiServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = serialAsciiServerLayer(
  *   { portPath: "/dev/ttyUSB0", baudRate: 9600, unitId: 1 },

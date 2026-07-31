@@ -11,7 +11,7 @@ Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU 
 ## Install
 
 ```sh
-bun add effect-modbus-rs
+bun add @flux-control/effect-modbus-rs
 ```
 
 TypeScript only while prototyping (JS consumers will be supported before 1.0).
@@ -22,7 +22,7 @@ TypeScript only while prototyping (JS consumers will be supported before 1.0).
 
 ```ts
 import { Console, Effect } from 'effect';
-import { RtuTransportService } from 'effect-modbus-rs';
+import { RtuTransportService } from '@flux-control/effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* RtuTransportService;
@@ -54,7 +54,7 @@ program.pipe(
 
 ```ts
 import { Effect } from 'effect';
-import { TcpTransportService } from 'effect-modbus-rs';
+import { TcpTransportService } from '@flux-control/effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
@@ -74,7 +74,7 @@ program.pipe(
 
 ```ts
 import { Effect } from 'effect';
-import { AsciiTransportService } from 'effect-modbus-rs';
+import { AsciiTransportService } from '@flux-control/effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* AsciiTransportService;
@@ -102,7 +102,7 @@ program.pipe(
 
 ```ts
 import { Console, Effect } from 'effect';
-import { WasmWsTransportService } from 'effect-modbus-rs';
+import { WasmWsTransportService } from '@flux-control/effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* WasmWsTransportService;
@@ -122,7 +122,7 @@ Web Serial requires a user-granted port handle. **`requestSerialPort()` must be 
 
 ```ts
 import { Effect, Layer } from 'effect';
-import { requestSerialPort, WasmRtuTransportService } from 'effect-modbus-rs';
+import { requestSerialPort, WasmRtuTransportService } from '@flux-control/effect-modbus-rs';
 
 connectButton.addEventListener('click', () => {
   Effect.runPromise(
@@ -146,7 +146,7 @@ See `examples/wasm/` for a real, runnable Vite app exercising both transports in
 - Unlike native servers, the WASM server doesn't start serving on bind — these layers fork the required `serve()` loop into the layer's scope automatically, so usage looks the same as the native `tcpServerLayer`.
 - For the serial variants, `options.serialPort` comes from your own app's `navigator.serial.requestPort()` call (not from this package's `requestSerialPort()`, which returns a different wrapper type used only by the client transports).
 
-Not demonstrated in `examples/wasm/` (see that app's README) — the same `import { wasmWsServerLayer } from "effect-modbus-rs"` pattern applies.
+Not demonstrated in `examples/wasm/` (see that app's README) — the same `import { wasmWsServerLayer } from "@flux-control/effect-modbus-rs"` pattern applies.
 
 ## Transports
 
@@ -169,7 +169,7 @@ All transport options types are re-exported from `modbus-rs` (native transports)
 
 ```ts
 import { Console, Effect } from 'effect';
-import { SerialTransportService } from 'effect-modbus-rs';
+import { SerialTransportService } from '@flux-control/effect-modbus-rs';
 
 const program = Effect.gen(function* () {
   const transport = yield* SerialTransportService;
@@ -251,7 +251,7 @@ Each transport service provides a `makeMockTransport(devices)` static method tha
 
 ```ts
 import { Console, Effect } from 'effect';
-import { RtuTransportService } from 'effect-modbus-rs';
+import { RtuTransportService } from '@flux-control/effect-modbus-rs';
 
 const device = {
   unitId: 1,

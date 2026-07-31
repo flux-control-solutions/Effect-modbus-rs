@@ -27,7 +27,7 @@ import { toModbusError } from './errors';
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { wasmSerialRtuServerLayer } from "effect-modbus-rs";
+ * import { wasmSerialRtuServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const port = await navigator.serial.requestPort(); // user-gesture gated
  * const ServerLive = wasmSerialRtuServerLayer(

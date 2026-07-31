@@ -18,7 +18,7 @@ import { toModbusError } from './errors';
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { tcpServerLayer } from "effect-modbus-rs";
+ * import { tcpServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = tcpServerLayer(
  *   { host: "0.0.0.0", port: 502, unitId: 1 },

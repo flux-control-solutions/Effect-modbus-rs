@@ -95,9 +95,9 @@ const runProbes = (): Promise<readonly ProbeResult[]> =>
       () => import('./static-import-probe.ts'),
     ),
     probeStaticImport(
-      'effect-modbus-rs',
+      '@flux-control/effect-modbus-rs',
       'The downstream consequence: this package cannot be loaded in a browser at all while the export is missing.',
-      () => import('effect-modbus-rs'),
+      () => import('@flux-control/effect-modbus-rs'),
     ),
   ]);
 
