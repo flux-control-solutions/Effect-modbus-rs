@@ -1,10 +1,14 @@
 {
-  "name": "effect-modbus-rs",
-  "version": "1.0.0",
+  "name": "@flux-control/effect-modbus-rs",
+  "version": "0.1.0",
   "description": "Type-safe Modbus communication via Effect-TS, wrapping the modbus-rs npm bindings.",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flux-control-solutions/Effect-modbus-rs.git"
+  },
   "type": "module",
   "files": [
-    "src/**/*.ts",
     "dist/**/*.js",
     "dist/**/*.d.ts"
   ],
@@ -27,13 +31,17 @@
     }
   },
   "scripts": {
+    "changeset": "changeset",
     "test": "bun test ./src/ ./examples/",
     "test:coverage": "bun test --coverage ./src/ ./examples/",
     "typecheck": "tsc --noEmit",
     "build": "rm -rf ./dist && bun build ./index.ts --outdir ./dist --target node --external effect --external modbus-rs && tsc --noEmit false --emitDeclarationOnly --outDir ./dist --rootDir . --project tsconfig.build.json",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "release": "changeset publish",
+    "version": "changeset version"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.1",
     "@effect/language-service": "^0.86.2",
     "@effect/platform-bun": "^0.90.0",
     "@types/bun": "latest",
@@ -48,5 +56,4 @@
   "dependencies": {
     "modbus-rs": "^0.15.3"
   },
-  "license": "GPL-3.0"
 }

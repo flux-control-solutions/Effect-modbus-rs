@@ -1,0 +1,33 @@
+name: Changesets
+
+on:
+  pull_request_target:
+    branches: [main]
+
+concurrency:
+  group: changesets-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  status:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    outputs:
+      comment-body: ${{ steps.status.outputs.comment-body }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: status
+        uses: changesets/action/pr-status@v1.9.0
+
+  comment:
+    needs: status
+    runs-on: ubuntu-slim
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: changesets/action/pr-comment@v1.9.0
+        with:
+          body: ${{ needs.status.outputs.comment-body }}
