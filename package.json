@@ -1,6 +1,6 @@
 {
   "name": "@flux-control/effect-modbus-rs",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Type-safe Modbus communication via Effect-TS, wrapping the modbus-rs npm bindings.",
   "license": "GPL-3.0",
   "repository": {
