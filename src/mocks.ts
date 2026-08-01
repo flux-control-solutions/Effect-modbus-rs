@@ -1,23 +1,26 @@
-import { Effect, Schema } from "effect";
-import type {
-  AsciiTransportOptions,
-  DiagnosticsOptions,
-  ReadBitsOptions,
-  ReadDeviceIdentificationOptions,
-  ReadFifoQueueOptions,
-  ReadFileRecordOptions,
-  ReadRegistersOptions,
-  ReadWriteMultipleRegistersOptions,
-  RtuTransportOptions,
-  TcpTransportOptions,
-  WriteFileRecordOptions,
-  WriteMultipleCoilsOptions,
-  WriteMultipleRegistersOptions,
-  WriteSingleCoilOptions,
-  WriteSingleRegisterOptions,
-} from "modbus-rs";
-import { ModbusInvalidArgumentError, type ModbusError } from "./errors";
-import type { EffectModbusClient } from "./modbus-client";
+import { Effect, Schema } from 'effect';
+import {
+  CoilState,
+  type AsciiTransportOptions,
+  type DiagnosticsOptions,
+  type ReadBitsOptions,
+  type ReadDeviceIdentificationOptions,
+  type ReadFifoQueueOptions,
+  type ReadFileRecordOptions,
+  type ReadRegistersOptions,
+  type ReadWriteMultipleRegistersOptions,
+  type RtuTransportOptions,
+  type TcpTransportOptions,
+  type WriteFileRecordOptions,
+  type WriteMultipleCoilsOptions,
+  type WriteMultipleRegistersOptions,
+  type WriteSingleCoilOptions,
+  type WriteSingleRegisterOptions,
+} from 'modbus-rs';
+import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
+
+import { ModbusInvalidArgumentError, type ModbusError } from './errors';
+import type { EffectModbusClient } from './modbus-client';
 
 /**
  * Schema for a single coil (digital output) definition.
@@ -86,19 +89,13 @@ export const SlaveDeviceDefinitions = Schema.Array(SlaveDeviceDefinition);
 /** Inferred TypeScript type for a {@link CoilDefinition} schema. */
 export type CoilDefinition = Schema.Schema.Type<typeof CoilDefinition>;
 /** Inferred TypeScript type for a {@link DiscreteInputDefinition} schema. */
-export type DiscreteInputDefinition = Schema.Schema.Type<
-  typeof DiscreteInputDefinition
->;
+export type DiscreteInputDefinition = Schema.Schema.Type<typeof DiscreteInputDefinition>;
 /** Inferred TypeScript type for a {@link RegisterDefinition} schema. */
 export type RegisterDefinition = Schema.Schema.Type<typeof RegisterDefinition>;
 /** Inferred TypeScript type for a {@link SlaveDeviceDefinition} schema. */
-export type SlaveDeviceDefinition = Schema.Schema.Type<
-  typeof SlaveDeviceDefinition
->;
+export type SlaveDeviceDefinition = Schema.Schema.Type<typeof SlaveDeviceDefinition>;
 /** Inferred TypeScript type for a {@link SlaveDeviceDefinitions} schema. */
-export type SlaveDeviceDefinitions = Schema.Schema.Type<
-  typeof SlaveDeviceDefinitions
->;
+export type SlaveDeviceDefinitions = Schema.Schema.Type<typeof SlaveDeviceDefinitions>;
 
 /** Internal mutable state held by the mock transport for a single slave device. */
 interface MockDeviceState {
@@ -169,18 +166,15 @@ const failOutOfRange = (label: string, address: number, quantity?: number) =>
  * @param unitId - The Modbus unit ID this client represents (used for logging).
  * @returns An `EffectModbusClient` backed by in-memory state.
  */
-const makeMockModbusClient = (
-  state: MockDeviceState,
-  unitId: number,
-): EffectModbusClient => ({
+const makeMockModbusClient = (state: MockDeviceState, unitId: number): EffectModbusClient => ({
   readCoils: Effect.fnUntraced(function* (opts: ReadBitsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} readCoils`, opts);
     if (opts.address + opts.quantity > state.maxCoilAddress + 1) {
-      return yield* failOutOfRange("Coil", opts.address, opts.quantity);
+      return yield* failOutOfRange('Coil', opts.address, opts.quantity);
     }
-    const result: boolean[] = [];
+    const result: CoilState[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
-      result.push(state.coils.get(i) ?? false);
+      result.push((state.coils.get(i) ?? false) ? CoilState.On : CoilState.Off);
     }
     return result;
   }),
@@ -188,99 +182,69 @@ const makeMockModbusClient = (
   readDiscreteInputs: Effect.fnUntraced(function* (opts: ReadBitsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} readDiscreteInputs`, opts);
     if (opts.address + opts.quantity > state.maxDiscreteAddress + 1) {
-      return yield* failOutOfRange(
-        "DiscreteInput",
-        opts.address,
-        opts.quantity,
-      );
+      return yield* failOutOfRange('DiscreteInput', opts.address, opts.quantity);
     }
-    const result: boolean[] = [];
+    const result: CoilState[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
-      result.push(state.discreteInputs.get(i) ?? false);
+      result.push((state.discreteInputs.get(i) ?? false) ? CoilState.On : CoilState.Off);
     }
     return result;
   }),
 
-  readHoldingRegisters: Effect.fnUntraced(function* (
-    opts: ReadRegistersOptions,
-  ) {
-    yield* Effect.logDebug(
-      `[Mock] unitId=${unitId} readHoldingRegisters`,
-      opts,
-    );
+  readHoldingRegisters: Effect.fnUntraced(function* (opts: ReadRegistersOptions) {
+    yield* Effect.logDebug(`[Mock] unitId=${unitId} readHoldingRegisters`, opts);
     if (opts.address + opts.quantity > state.maxHoldingAddress + 1) {
-      return yield* failOutOfRange(
-        "HoldingRegister",
-        opts.address,
-        opts.quantity,
-      );
+      return yield* failOutOfRange('HoldingRegister', opts.address, opts.quantity);
     }
     const result: number[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
       result.push(state.holdingRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   readInputRegisters: Effect.fnUntraced(function* (opts: ReadRegistersOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} readInputRegisters`, opts);
     if (opts.address + opts.quantity > state.maxInputAddress + 1) {
-      return yield* failOutOfRange(
-        "InputRegister",
-        opts.address,
-        opts.quantity,
-      );
+      return yield* failOutOfRange('InputRegister', opts.address, opts.quantity);
     }
     const result: number[] = [];
     for (let i = opts.address; i < opts.address + opts.quantity; i++) {
       result.push(state.inputRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   writeSingleCoil: Effect.fnUntraced(function* (opts: WriteSingleCoilOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} writeSingleCoil`, opts);
     if (opts.address > state.maxCoilAddress) {
-      return yield* failOutOfRange("Coil", opts.address);
+      return yield* failOutOfRange('Coil', opts.address);
     }
-    state.coils.set(opts.address, opts.value);
+    state.coils.set(opts.address, opts.value === CoilState.On);
   }),
 
-  writeMultipleCoils: Effect.fnUntraced(function* (
-    opts: WriteMultipleCoilsOptions,
-  ) {
+  writeMultipleCoils: Effect.fnUntraced(function* (opts: WriteMultipleCoilsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} writeMultipleCoils`, opts);
     if (opts.address + opts.values.length > state.maxCoilAddress + 1) {
-      return yield* failOutOfRange("Coil", opts.address, opts.values.length);
+      return yield* failOutOfRange('Coil', opts.address, opts.values.length);
     }
     for (let i = 0; i < opts.values.length; i++) {
-      state.coils.set(opts.address + i, opts.values[i]!);
+      state.coils.set(opts.address + i, opts.values[i]! === CoilState.On);
     }
   }),
 
-  writeSingleRegister: Effect.fnUntraced(function* (
-    opts: WriteSingleRegisterOptions,
-  ) {
+  writeSingleRegister: Effect.fnUntraced(function* (opts: WriteSingleRegisterOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} writeSingleRegister`, opts);
     if (opts.address > state.maxHoldingAddress) {
-      return yield* failOutOfRange("HoldingRegister", opts.address);
+      return yield* failOutOfRange('HoldingRegister', opts.address);
     }
     state.holdingRegisters.set(opts.address, opts.value);
   }),
 
-  writeMultipleRegisters: Effect.fnUntraced(function* (
-    opts: WriteMultipleRegistersOptions,
-  ) {
-    yield* Effect.logDebug(
-      `[Mock] unitId=${unitId} writeMultipleRegisters`,
-      opts,
-    );
+  writeMultipleRegisters: Effect.fnUntraced(function* (opts: WriteMultipleRegistersOptions) {
+    yield* Effect.logDebug(`[Mock] unitId=${unitId} writeMultipleRegisters`, opts);
     if (opts.address + opts.values.length > state.maxHoldingAddress + 1) {
-      return yield* failOutOfRange(
-        "HoldingRegister",
-        opts.address,
-        opts.values.length,
-      );
+      return yield* failOutOfRange('HoldingRegister', opts.address, opts.values.length);
     }
     for (let i = 0; i < opts.values.length; i++) {
       state.holdingRegisters.set(opts.address + i, opts.values[i]!);
@@ -290,26 +254,12 @@ const makeMockModbusClient = (
   readWriteMultipleRegisters: Effect.fnUntraced(function* (
     opts: ReadWriteMultipleRegistersOptions,
   ) {
-    yield* Effect.logDebug(
-      `[Mock] unitId=${unitId} readWriteMultipleRegisters`,
-      opts,
-    );
-    if (
-      opts.writeAddress + opts.writeValues.length >
-      state.maxHoldingAddress + 1
-    ) {
-      return yield* failOutOfRange(
-        "HoldingRegister",
-        opts.writeAddress,
-        opts.writeValues.length,
-      );
+    yield* Effect.logDebug(`[Mock] unitId=${unitId} readWriteMultipleRegisters`, opts);
+    if (opts.writeAddress + opts.writeValues.length > state.maxHoldingAddress + 1) {
+      return yield* failOutOfRange('HoldingRegister', opts.writeAddress, opts.writeValues.length);
     }
     if (opts.readAddress + opts.readQuantity > state.maxHoldingAddress + 1) {
-      return yield* failOutOfRange(
-        "HoldingRegister",
-        opts.readAddress,
-        opts.readQuantity,
-      );
+      return yield* failOutOfRange('HoldingRegister', opts.readAddress, opts.readQuantity);
     }
     for (let i = 0; i < opts.writeValues.length; i++) {
       state.holdingRegisters.set(opts.writeAddress + i, opts.writeValues[i]!);
@@ -318,27 +268,27 @@ const makeMockModbusClient = (
     for (let i = opts.readAddress; i < opts.readAddress + opts.readQuantity; i++) {
       result.push(state.holdingRegisters.get(i) ?? 0);
     }
-    return result;
+    return new Uint16Array(result);
   }),
 
   readFifoQueue: Effect.fnUntraced(function* (_opts: ReadFifoQueueOptions) {
     return yield* new ModbusInvalidArgumentError({
-      cause: new Error("FIFO queue not yet supported in mock"),
-      message: "FIFO queue not yet supported in mock",
+      cause: new Error('FIFO queue not yet supported in mock'),
+      message: 'FIFO queue not yet supported in mock',
     });
   }),
 
   readFileRecord: Effect.fnUntraced(function* (_opts: ReadFileRecordOptions) {
     return yield* new ModbusInvalidArgumentError({
-      cause: new Error("File records not yet supported in mock"),
-      message: "File records not yet supported in mock",
+      cause: new Error('File records not yet supported in mock'),
+      message: 'File records not yet supported in mock',
     });
   }),
 
   writeFileRecord: Effect.fnUntraced(function* (_opts: WriteFileRecordOptions) {
     return yield* new ModbusInvalidArgumentError({
-      cause: new Error("File records not yet supported in mock"),
-      message: "File records not yet supported in mock",
+      cause: new Error('File records not yet supported in mock'),
+      message: 'File records not yet supported in mock',
     });
   }),
 
@@ -349,16 +299,11 @@ const makeMockModbusClient = (
 
   diagnostics: Effect.fnUntraced(function* (opts: DiagnosticsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} diagnostics`, opts);
-    return { subFunction: opts.subFunction, data: [] };
+    return { subFunction: opts.subFunction, data: new Uint16Array() };
   }),
 
-  readDeviceIdentification: Effect.fnUntraced(function* (
-    opts: ReadDeviceIdentificationOptions,
-  ) {
-    yield* Effect.logDebug(
-      `[Mock] unitId=${unitId} readDeviceIdentification`,
-      opts,
-    );
+  readDeviceIdentification: Effect.fnUntraced(function* (opts: ReadDeviceIdentificationOptions) {
+    yield* Effect.logDebug(`[Mock] unitId=${unitId} readDeviceIdentification`, opts);
     return {
       conformityLevel: 1,
       moreFollows: false,
@@ -408,19 +353,22 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
   }
 
   return (
-    _options: RtuTransportOptions | AsciiTransportOptions | TcpTransportOptions,
+    _options:
+      | RtuTransportOptions
+      | AsciiTransportOptions
+      | TcpTransportOptions
+      | WasmWsTransportOptions
+      | WasmSerialTransportOptions,
   ) =>
     Effect.gen(function* () {
-      yield* Effect.logDebug("Mock transport opened with devices:", deviceDefs);
+      yield* Effect.logDebug('Mock transport opened with devices:', deviceDefs);
 
       return {
         withClient: Effect.fnUntraced(function* (unitId: number) {
           const state = deviceStates.get(unitId);
           if (!state) {
             return yield* new ModbusInvalidArgumentError({
-              cause: new Error(
-                `Device with unitId ${unitId} not found in mock configuration`,
-              ),
+              cause: new Error(`Device with unitId ${unitId} not found in mock configuration`),
               message: `Device with unitId ${unitId} not found in mock configuration`,
             });
           }
@@ -430,17 +378,13 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,
         reconnect: () =>
-          Effect.asVoid(Effect.logDebug("Mock: reconnecting")) as Effect.Effect<
+          Effect.asVoid(Effect.logDebug('Mock: reconnecting')) as Effect.Effect<
             void,
             ModbusError,
             never
           >,
         close: () =>
-          Effect.logDebug("Mock: closing transport") as Effect.Effect<
-            void,
-            ModbusError,
-            never
-          >,
+          Effect.logDebug('Mock: closing transport') as Effect.Effect<void, ModbusError, never>,
         hasPendingRequests: () => false,
       };
     });

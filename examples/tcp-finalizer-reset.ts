@@ -11,8 +11,10 @@
  * @example bun run examples/tcp-finalizer-reset.ts
  */
 
-import { Console, Effect } from "effect";
-import { TcpTransportService } from "../src/TcpTransportService";
+import { Console, Effect } from 'effect';
+import { CoilState } from 'modbus-rs';
+
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const device = {
   unitId: 1,
@@ -37,15 +39,15 @@ const program = Effect.gen(function* () {
 
       yield* client.writeMultipleRegisters({
         address: 0,
-        values: [100, 200, 300],
+        values: new Uint16Array([100, 200, 300]),
       });
-      yield* client.writeSingleCoil({ address: 0, value: true });
+      yield* client.writeSingleCoil({ address: 0, value: CoilState.On });
 
       const regsBefore = yield* client.readHoldingRegisters({
         address: 0,
         quantity: 3,
       });
-      yield* Console.log("Before scope exit:", {
+      yield* Console.log('Before scope exit:', {
         registers: regsBefore,
       });
 
@@ -53,15 +55,15 @@ const program = Effect.gen(function* () {
       // interruption). It resets registers and coils back to 0.
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
-          yield* Console.log(">>> Finalizer: resetting values to 0...");
+          yield* Console.log('>>> Finalizer: resetting values to 0...');
           yield* client
             .writeMultipleRegisters({
               address: 0,
-              values: [0, 0, 0],
+              values: new Uint16Array([0, 0, 0]),
             })
             .pipe(Effect.catchAll((err) => Console.log(err.message)));
           yield* client
-            .writeSingleCoil({ address: 0, value: false })
+            .writeSingleCoil({ address: 0, value: CoilState.Off })
             .pipe(Effect.catchAll((err) => Console.log(err.message)));
         }),
       );
@@ -78,21 +80,20 @@ const program = Effect.gen(function* () {
     address: 0,
     quantity: 1,
   });
-  yield* Console.log("After finalizer:", {
+  yield* Console.log('After finalizer:', {
     registers: regsAfter,
     coils: coilsAfter,
   });
 });
 
 const mockLayer = TcpTransportService.makeMockTransport([device])({
-  host: "127.0.0.1",
+  host: '127.0.0.1',
   port: 502,
 });
 
 program.pipe(
   Effect.catchTags({
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Invalid argument: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),

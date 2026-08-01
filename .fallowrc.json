@@ -1,21 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": [
-    "index.ts",
-    "src/**/*.ts",
-    "examples/**/*.ts"
-  ],
-  "ignorePatterns": [
-    "node_modules/",
-    "references/",
-    ".opencode/"
-  ],
+  "entry": ["index.ts", "src/**/*.ts", "examples/**/*.ts"],
+  "ignorePatterns": ["node_modules/", "references/", ".opencode/"],
   "duplicates": {
     "minOccurrences": 3,
-    "ignore": [
-      "references/**",
-      "examples/**"
-    ]
+    "ignore": ["references/**", "examples/**"]
   },
   "ignoreDependencies": [
     "@babel/plugin-transform-export-namespace-from",

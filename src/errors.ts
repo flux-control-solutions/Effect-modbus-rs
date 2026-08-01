@@ -1,5 +1,5 @@
-import { Data } from "effect";
-import { getModbusErrorCode, ModbusErrorCode } from "modbus-rs";
+import { Data } from 'effect';
+import { getModbusErrorCode, ModbusErrorCode } from 'modbus-rs';
 
 /**
  * Error originating from a Modbus protocol exception response.
@@ -10,9 +10,7 @@ import { getModbusErrorCode, ModbusErrorCode } from "modbus-rs";
  *
  * @see ModbusErrorCode.EXCEPTION — `modbus-rs` error code that triggers this error.
  */
-export class ModbusExceptionError extends Data.TaggedError(
-  "ModbusExceptionError",
-)<{
+export class ModbusExceptionError extends Data.TaggedError('ModbusExceptionError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Parsed Modbus exception code extracted from the error message. */
@@ -31,7 +29,7 @@ export class ModbusExceptionError extends Data.TaggedError(
  *
  * @see ModbusErrorCode.TIMEOUT — `modbus-rs` error code that triggers this error.
  */
-export class ModbusTimeoutError extends Data.TaggedError("ModbusTimeoutError")<{
+export class ModbusTimeoutError extends Data.TaggedError('ModbusTimeoutError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Error message from the underlying `modbus-rs` error. */
@@ -46,9 +44,7 @@ export class ModbusTimeoutError extends Data.TaggedError("ModbusTimeoutError")<{
  *
  * @see ModbusErrorCode.TRANSPORT — `modbus-rs` error code that triggers this error.
  */
-export class ModbusTransportError extends Data.TaggedError(
-  "ModbusTransportError",
-)<{
+export class ModbusTransportError extends Data.TaggedError('ModbusTransportError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Error message from the underlying `modbus-rs` error. */
@@ -63,9 +59,7 @@ export class ModbusTransportError extends Data.TaggedError(
  *
  * @see ModbusErrorCode.INVALID_ARGUMENT — `modbus-rs` error code that triggers this error.
  */
-export class ModbusInvalidArgumentError extends Data.TaggedError(
-  "ModbusInvalidArgumentError",
-)<{
+export class ModbusInvalidArgumentError extends Data.TaggedError('ModbusInvalidArgumentError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Error message from the underlying `modbus-rs` error. */
@@ -80,9 +74,7 @@ export class ModbusInvalidArgumentError extends Data.TaggedError(
  *
  * @see ModbusErrorCode.CONNECTION_CLOSED — `modbus-rs` error code that triggers this error.
  */
-export class ModbusConnectionClosedError extends Data.TaggedError(
-  "ModbusConnectionClosedError",
-)<{
+export class ModbusConnectionClosedError extends Data.TaggedError('ModbusConnectionClosedError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Error message from the underlying `modbus-rs` error. */
@@ -97,9 +89,7 @@ export class ModbusConnectionClosedError extends Data.TaggedError(
  *
  * @see ModbusErrorCode.INTERNAL — `modbus-rs` error code for internal failures.
  */
-export class ModbusInternalError extends Data.TaggedError(
-  "ModbusInternalError",
-)<{
+export class ModbusInternalError extends Data.TaggedError('ModbusInternalError')<{
   /** Original error thrown by `modbus-rs`. */
   readonly cause: Error;
   /** Error message from the underlying `modbus-rs` error. */
@@ -120,9 +110,7 @@ export class ModbusInternalError extends Data.TaggedError(
  *
  * @see ModbusNotConnectedError — Triggered when the transport is null.
  */
-export class ModbusNotConnectedError extends Data.TaggedError(
-  "ModbusNotConnectedError",
-)<{
+export class ModbusNotConnectedError extends Data.TaggedError('ModbusNotConnectedError')<{
   /** The original cause (typically a descriptive error). */
   readonly cause: Error;
   /** Human-readable explanation of the error. */

@@ -1,7 +1,8 @@
-import type { SerialServerOptions, ServerHandlers } from "modbus-rs";
-import { Effect, Layer } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+import { Effect, Layer } from 'effect';
+import type { SerialServerOptions, ServerHandlers } from 'modbus-rs';
+
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
 
 /**
  * A scoped {@link Layer} that starts a Modbus serial RTU server.
@@ -13,7 +14,7 @@ import { toModbusError } from "./errors";
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { serialRtuServerLayer } from "effect-modbus-rs";
+ * import { serialRtuServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = serialRtuServerLayer(
  *   { portPath: "/dev/ttyUSB0", baudRate: 9600, unitId: 1 },
@@ -32,7 +33,7 @@ export const serialRtuServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs"));
+      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindRtu(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -41,7 +42,7 @@ export const serialRtuServerLayer = (
       yield* Effect.logDebug(`Serial RTU server bound to ${options.portPath}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("Serial RTU server shutting down").pipe(
+        Effect.logDebug('Serial RTU server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
@@ -64,7 +65,7 @@ export const serialRtuServerLayer = (
  * @example
  * ```ts
  * import { Effect, Layer } from "effect";
- * import { serialAsciiServerLayer } from "effect-modbus-rs";
+ * import { serialAsciiServerLayer } from "@flux-control/effect-modbus-rs";
  *
  * const ServerLive = serialAsciiServerLayer(
  *   { portPath: "/dev/ttyUSB0", baudRate: 9600, unitId: 1 },
@@ -83,7 +84,7 @@ export const serialAsciiServerLayer = (
 ): Layer.Layer<never, ModbusError> =>
   Layer.scopedDiscard(
     Effect.gen(function* () {
-      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import("modbus-rs"));
+      const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindAscii(options, handlers),
         catch: (error) => toModbusError(error as Error),
@@ -92,7 +93,7 @@ export const serialAsciiServerLayer = (
       yield* Effect.logDebug(`Serial ASCII server bound to ${options.portPath}`);
 
       yield* Effect.addFinalizer(() =>
-        Effect.logDebug("Serial ASCII server shutting down").pipe(
+        Effect.logDebug('Serial ASCII server shutting down').pipe(
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),

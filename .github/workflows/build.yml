@@ -1,7 +1,7 @@
 name: Build
 
 on:
-  push:
+  pull_request:
     branches: [main]
 
 jobs:
@@ -13,6 +13,8 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - run: bun run format
+      - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build

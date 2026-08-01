@@ -9,8 +9,9 @@
  * @example bun run examples/ascii-mock.ts
  */
 
-import { Console, Effect } from "effect";
-import { AsciiTransportService } from "../src/AsciiTransportService";
+import { Console, Effect } from 'effect';
+
+import { AsciiTransportService } from '../src/AsciiTransportService';
 
 const device = {
   unitId: 1,
@@ -33,48 +34,47 @@ const program = Effect.gen(function* () {
     readAddress: 0,
     readQuantity: 3,
     writeAddress: 0,
-    writeValues: [11, 22, 33],
+    writeValues: new Uint16Array([11, 22, 33]),
   });
-  yield* Console.log("ReadWriteMultipleRegisters result:", readResult);
+  yield* Console.log('ReadWriteMultipleRegisters result:', readResult);
 
   const registers = yield* client.readHoldingRegisters({
     address: 0,
     quantity: 3,
   });
-  yield* Console.log("Holding registers (after r/w):", registers);
+  yield* Console.log('Holding registers (after r/w):', registers);
 
   const discreteInputs = yield* client.readDiscreteInputs({
     address: 0,
     quantity: 1,
   });
-  yield* Console.log("Discrete inputs:", discreteInputs);
+  yield* Console.log('Discrete inputs:', discreteInputs);
 
   const inputRegisters = yield* client.readInputRegisters({
     address: 0,
     quantity: 1,
   });
-  yield* Console.log("Input registers:", inputRegisters);
+  yield* Console.log('Input registers:', inputRegisters);
 
   yield* client
     .readHoldingRegisters({ address: 10, quantity: 1 })
     .pipe(
-      Effect.catchTag("ModbusInvalidArgumentError", (err) =>
-        Console.log("Expected out-of-range error:", err.message).pipe(
-          Effect.map(() => [] as number[]),
+      Effect.catchTag('ModbusInvalidArgumentError', (err) =>
+        Console.log('Expected out-of-range error:', err.message).pipe(
+          Effect.map(() => new Uint16Array()),
         ),
       ),
     );
 });
 
 const mockLayer = AsciiTransportService.makeMockTransport([device])({
-  portPath: "/dev/ttyUSB0",
+  portPath: '/dev/ttyUSB0',
   baudRate: 9600,
 });
 
 program.pipe(
   Effect.catchTags({
-    ModbusInvalidArgumentError: (err) =>
-      Console.log(`Caught invalid argument: ${err.message}`),
+    ModbusInvalidArgumentError: (err) => Console.log(`Caught invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),

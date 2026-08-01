@@ -23,6 +23,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - run: bun install --cwd tools/typedoc --frozen-lockfile
       - run: bun run docs
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type {
   ReadRegistersOptions,
   WriteSingleRegisterOptions,
@@ -16,19 +17,33 @@ import type {
   DeviceIdentificationResponse,
   AsyncSerialModbusClient,
   AsyncTcpModbusClient,
-} from "modbus-rs";
-import { Effect } from "effect";
-import type { ModbusError } from "./errors";
-import { toModbusError } from "./errors";
+  CoilState,
+} from 'modbus-rs';
+import type { WasmWsModbusClient, WasmSerialModbusClient } from 'modbus-rs/web';
 
-export type AnyModbusClient = AsyncSerialModbusClient | AsyncTcpModbusClient;
+import type { ModbusError } from './errors';
+import { toModbusError } from './errors';
+
+/** The two native (napi) clients — same method surface, sharing one factory. */
+export type NativeModbusClient = AsyncSerialModbusClient | AsyncTcpModbusClient;
+/** The two browser (WASM) clients — same method surface, sharing one factory. */
+export type WasmModbusClient = WasmSerialModbusClient | WasmWsModbusClient;
+/** Any client this package knows how to wrap into an {@link EffectModbusClient}. */
+export type AnyModbusClient = NativeModbusClient | WasmModbusClient;
+
+/** Wraps a Promise-returning call in `Effect.tryPromise`, routing errors through {@link toModbusError}. */
+const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
+  Effect.tryPromise({
+    try: try_,
+    catch: (error) => toModbusError(error as Error),
+  });
 
 /**
  * Effect-ified Modbus client wrapping a `modbus-rs` transport client.
  *
- * Each method delegates to the equivalent `AsyncSerialModbusClient` or
- * `AsyncTcpModbusClient` method, converting the Promise-based API into
- * an {@link Effect.Effect} with typed {@link ModbusError} failures.
+ * Each method delegates to the equivalent method on the underlying native
+ * or WASM client, converting the Promise-based API into an
+ * {@link Effect.Effect} with typed {@link ModbusError} failures.
  *
  * Thrown errors are classified using {@link toModbusError}, mapping
  * `modbus-rs` error codes (timeout, transport, exception, etc.) into
@@ -48,9 +63,7 @@ export interface EffectModbusClient {
    * @see ReadRegistersOptions — Options shape from `modbus-rs`.
    * @see AsyncSerialModbusClient.readHoldingRegisters — Upstream implementation.
    */
-  readHoldingRegisters(
-    opts: ReadRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  readHoldingRegisters(opts: ReadRegistersOptions): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Reads input registers from the Modbus device (FC04).
@@ -61,9 +74,7 @@ export interface EffectModbusClient {
    * @see ReadRegistersOptions — Options shape from `modbus-rs`.
    * @see AsyncSerialModbusClient.readInputRegisters — Upstream implementation.
    */
-  readInputRegisters(
-    opts: ReadRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  readInputRegisters(opts: ReadRegistersOptions): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Writes a single holding register (FC06).
@@ -73,9 +84,7 @@ export interface EffectModbusClient {
    *
    * @see WriteSingleRegisterOptions — Options shape from `modbus-rs`.
    */
-  writeSingleRegister(
-    opts: WriteSingleRegisterOptions,
-  ): Effect.Effect<void, ModbusError>;
+  writeSingleRegister(opts: WriteSingleRegisterOptions): Effect.Effect<void, ModbusError>;
 
   /**
    * Writes multiple consecutive holding registers (FC16).
@@ -85,9 +94,7 @@ export interface EffectModbusClient {
    *
    * @see WriteMultipleRegistersOptions — Options shape from `modbus-rs`.
    */
-  writeMultipleRegisters(
-    opts: WriteMultipleRegistersOptions,
-  ): Effect.Effect<void, ModbusError>;
+  writeMultipleRegisters(opts: WriteMultipleRegistersOptions): Effect.Effect<void, ModbusError>;
 
   /**
    * Atomic read-write of multiple registers (FC23).
@@ -102,7 +109,7 @@ export interface EffectModbusClient {
    */
   readWriteMultipleRegisters(
     opts: ReadWriteMultipleRegistersOptions,
-  ): Effect.Effect<number[], ModbusError>;
+  ): Effect.Effect<Uint16Array, ModbusError>;
 
   /**
    * Reads coils (digital outputs) from the Modbus device (FC01).
@@ -112,7 +119,7 @@ export interface EffectModbusClient {
    *
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
-  readCoils(opts: ReadBitsOptions): Effect.Effect<boolean[], ModbusError>;
+  readCoils(opts: ReadBitsOptions): Effect.Effect<CoilState[], ModbusError>;
 
   /**
    * Writes a single coil (digital output) (FC05).
@@ -122,9 +129,7 @@ export interface EffectModbusClient {
    *
    * @see WriteSingleCoilOptions — Options shape from `modbus-rs`.
    */
-  writeSingleCoil(
-    opts: WriteSingleCoilOptions,
-  ): Effect.Effect<void, ModbusError>;
+  writeSingleCoil(opts: WriteSingleCoilOptions): Effect.Effect<void, ModbusError>;
 
   /**
    * Writes multiple consecutive coils (FC15).
@@ -134,9 +139,7 @@ export interface EffectModbusClient {
    *
    * @see WriteMultipleCoilsOptions — Options shape from `modbus-rs`.
    */
-  writeMultipleCoils(
-    opts: WriteMultipleCoilsOptions,
-  ): Effect.Effect<void, ModbusError>;
+  writeMultipleCoils(opts: WriteMultipleCoilsOptions): Effect.Effect<void, ModbusError>;
 
   /**
    * Reads discrete inputs (digital inputs) from the Modbus device (FC02).
@@ -146,9 +149,7 @@ export interface EffectModbusClient {
    *
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
-  readDiscreteInputs(
-    opts: ReadBitsOptions,
-  ): Effect.Effect<boolean[], ModbusError>;
+  readDiscreteInputs(opts: ReadBitsOptions): Effect.Effect<CoilState[], ModbusError>;
 
   /**
    * Reads the FIFO queue from the Modbus device (FC24).
@@ -159,9 +160,7 @@ export interface EffectModbusClient {
    * @see ReadFifoQueueOptions — Options shape from `modbus-rs`.
    * @see FifoQueueResponse — Response type from `modbus-rs`.
    */
-  readFifoQueue(
-    opts: ReadFifoQueueOptions,
-  ): Effect.Effect<FifoQueueResponse, ModbusError>;
+  readFifoQueue(opts: ReadFifoQueueOptions): Effect.Effect<FifoQueueResponse, ModbusError>;
 
   /**
    * Reads file records from the Modbus device (FC20).
@@ -171,9 +170,7 @@ export interface EffectModbusClient {
    *
    * @see ReadFileRecordOptions — Options shape from `modbus-rs`.
    */
-  readFileRecord(
-    opts: ReadFileRecordOptions,
-  ): Effect.Effect<number[][], ModbusError>;
+  readFileRecord(opts: ReadFileRecordOptions): Effect.Effect<Uint16Array[], ModbusError>;
 
   /**
    * Writes file records to the Modbus device (FC21).
@@ -183,9 +180,7 @@ export interface EffectModbusClient {
    *
    * @see WriteFileRecordOptions — Options shape from `modbus-rs`.
    */
-  writeFileRecord(
-    opts: WriteFileRecordOptions,
-  ): Effect.Effect<void, ModbusError>;
+  writeFileRecord(opts: WriteFileRecordOptions): Effect.Effect<void, ModbusError>;
 
   /**
    * Reads the Modbus exception status (FC07).
@@ -205,9 +200,7 @@ export interface EffectModbusClient {
    * @see DiagnosticsOptions — Options shape from `modbus-rs`.
    * @see DiagnosticsResponse — Response type from `modbus-rs`.
    */
-  diagnostics(
-    opts: DiagnosticsOptions,
-  ): Effect.Effect<DiagnosticsResponse, ModbusError>;
+  diagnostics(opts: DiagnosticsOptions): Effect.Effect<DiagnosticsResponse, ModbusError>;
 
   /**
    * Reads device identification from the Modbus device (FC43 / MEI type 14).
@@ -224,99 +217,39 @@ export interface EffectModbusClient {
 }
 
 /**
- * Wraps a raw `modbus-rs` client into an {@link EffectModbusClient}.
+ * Wraps a raw `modbus-rs` client — native (napi) or browser (WASM) — into an
+ * {@link EffectModbusClient}.
  *
  * Each method converts a Promise-based call from the upstream client
  * into an `Effect` via {@link Effect.tryPromise}, routing errors through
  * {@link toModbusError} for typed error discrimination.
  *
- * Accepts both serial (`AsyncSerialModbusClient`) and TCP
- * (`AsyncTcpModbusClient`) clients since they share the same method
- * signatures.
+ * The native and WASM clients share the same method surface (same options
+ * shapes, same resolved value shapes — `CoilState[]`, full `FifoQueueResponse`,
+ * full `DeviceIdentificationResponse`), so one factory covers both; no
+ * transport-specific reshaping is needed.
  *
- * @param client - The upstream `modbus-rs` client instance.
+ * @param client - The upstream `modbus-rs` or `modbus-rs/web` client instance.
  * @returns An `EffectModbusClient` that can be used within Effect
  *          workflows.
  *
- * @see AsyncSerialModbusClient — Upstream serial client API.
- * @see AsyncTcpModbusClient — Upstream TCP client API.
+ * @see AsyncSerialModbusClient — Upstream native serial client API.
+ * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const makeEffectModbusClient = (
-  client: AsyncSerialModbusClient | AsyncTcpModbusClient,
-): EffectModbusClient => ({
-  readHoldingRegisters: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readHoldingRegisters(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readInputRegisters: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readInputRegisters(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  writeSingleRegister: (opts) =>
-    Effect.tryPromise({
-      try: () => client.writeSingleRegister(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  writeMultipleRegisters: (opts) =>
-    Effect.tryPromise({
-      try: () => client.writeMultipleRegisters(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readWriteMultipleRegisters: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readWriteMultipleRegisters(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readCoils: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readCoils(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  writeSingleCoil: (opts) =>
-    Effect.tryPromise({
-      try: () => client.writeSingleCoil(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  writeMultipleCoils: (opts) =>
-    Effect.tryPromise({
-      try: () => client.writeMultipleCoils(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readDiscreteInputs: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readDiscreteInputs(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readFifoQueue: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readFifoQueue(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readFileRecord: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readFileRecord(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  writeFileRecord: (opts) =>
-    Effect.tryPromise({
-      try: () => client.writeFileRecord(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readExceptionStatus: () =>
-    Effect.tryPromise({
-      try: () => client.readExceptionStatus(),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  diagnostics: (opts) =>
-    Effect.tryPromise({
-      try: () => client.diagnostics(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
-  readDeviceIdentification: (opts) =>
-    Effect.tryPromise({
-      try: () => client.readDeviceIdentification(opts),
-      catch: (error) => toModbusError(error as Error),
-    }),
+export const makeEffectModbusClient = (client: AnyModbusClient): EffectModbusClient => ({
+  readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
+  readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
+  writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
+  writeMultipleRegisters: (opts) => wrap(() => client.writeMultipleRegisters(opts)),
+  readWriteMultipleRegisters: (opts) => wrap(() => client.readWriteMultipleRegisters(opts)),
+  readCoils: (opts) => wrap(() => client.readCoils(opts)),
+  writeSingleCoil: (opts) => wrap(() => client.writeSingleCoil(opts)),
+  writeMultipleCoils: (opts) => wrap(() => client.writeMultipleCoils(opts)),
+  readDiscreteInputs: (opts) => wrap(() => client.readDiscreteInputs(opts)),
+  readFifoQueue: (opts) => wrap(() => client.readFifoQueue(opts)),
+  readFileRecord: (opts) => wrap(() => client.readFileRecord(opts)),
+  writeFileRecord: (opts) => wrap(() => client.writeFileRecord(opts)),
+  readExceptionStatus: () => wrap(() => client.readExceptionStatus()),
+  diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
+  readDeviceIdentification: (opts) => wrap(() => client.readDeviceIdentification(opts)),
 });

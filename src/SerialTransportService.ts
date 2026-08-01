@@ -1,9 +1,10 @@
-import { Context, Effect, Layer } from "effect";
-import type { AsciiTransportOptions, RtuTransportOptions } from "modbus-rs";
-import { AsciiTransportService } from "./AsciiTransportService";
-import { RtuTransportService } from "./RtuTransportService";
-import type { TransportServiceApi } from "./shared-transport";
-import { makeMockTransport, type SlaveDeviceDefinitions } from "./mocks";
+import { Context, Effect, Layer } from 'effect';
+import type { AsciiTransportOptions, RtuTransportOptions } from 'modbus-rs';
+
+import { AsciiTransportService } from './AsciiTransportService';
+import { makeMockTransport, type SlaveDeviceDefinitions } from './mocks';
+import { RtuTransportService } from './RtuTransportService';
+import type { TransportServiceApi } from './shared-transport';
 
 /**
  * Abstract serial Modbus transport service tag.
@@ -24,16 +25,15 @@ import { makeMockTransport, type SlaveDeviceDefinitions } from "./mocks";
  * Layer.provide(SerialTransportService.fromRtu({ path: "/dev/ttyUSB0", baudRate: 9600 }))
  * ```
  */
-export class SerialTransportService extends Context.Tag(
-  "SerialTransportService",
-)<SerialTransportService, TransportServiceApi>() {
+export class SerialTransportService extends Context.Tag('SerialTransportService')<
+  SerialTransportService,
+  TransportServiceApi
+>() {
   /**
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an ASCII transport.
    */
-  static fromAscii(
-    options: AsciiTransportOptions,
-  ): Layer.Layer<SerialTransportService> {
+  static fromAscii(options: AsciiTransportOptions): Layer.Layer<SerialTransportService> {
     return Layer.project(
       AsciiTransportService,
       SerialTransportService,
@@ -45,9 +45,7 @@ export class SerialTransportService extends Context.Tag(
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an RTU transport.
    */
-  static fromRtu(
-    options: RtuTransportOptions,
-  ): Layer.Layer<SerialTransportService> {
+  static fromRtu(options: RtuTransportOptions): Layer.Layer<SerialTransportService> {
     return Layer.project(
       RtuTransportService,
       SerialTransportService,
@@ -67,9 +65,6 @@ export class SerialTransportService extends Context.Tag(
     return (
       options: AsciiTransportOptions | RtuTransportOptions,
     ): Layer.Layer<SerialTransportService> =>
-      Layer.scoped(
-        SerialTransportService,
-        factory(options) as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.scoped(SerialTransportService, factory(options) as Effect.Effect<TransportServiceApi>);
   };
 }
