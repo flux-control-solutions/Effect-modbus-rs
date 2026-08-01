@@ -46,11 +46,43 @@
  * })
  * ```
  *
+ * ## Retries
+ *
+ * Nothing retries implicitly — operations are single-shot unless a policy is
+ * applied, so timing stays predictable by default. Pick a template from
+ * {@link RetryPolicies} (or build one with {@link makeRetryPolicy}) and pipe
+ * the operations you want protected through {@link retryModbus} or
+ * {@link retryModbusWithReconnect}:
+ *
+ * ```ts
+ * client.readHoldingRegisters({ address: 0, quantity: 10 })
+ *   .pipe(retryModbus(RetryPolicies.serial()))
+ * ```
+ *
+ * Policies are error-aware: transient failures (timeouts, framing errors, a
+ * busy device) back off exponentially with jitter, while deterministic ones
+ * (illegal address, invalid argument) fail immediately.
+ *
  * @module @flux-control/effect-modbus-rs
  */
 
 export * from './src/errors';
 export type { EffectModbusClient } from './src/modbus-client';
+export {
+  makeRetryPolicy,
+  retryableExceptionCodes,
+  RetryPolicies,
+  retryModbus,
+  retryModbusWithReconnect,
+} from './src/retry';
+export type {
+  ModbusErrorTag,
+  ModbusRetryPolicy,
+  ModbusRetryPolicyOptions,
+  ReconnectableTransport,
+  RetryDelayOptions,
+  RetryErrorOptions,
+} from './src/retry';
 export { AsciiTransportService } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';
 export { TcpTransportService } from './src/TcpTransportService';
