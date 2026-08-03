@@ -247,16 +247,22 @@ Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven va
 
 ## Retries, backoff, and jitter
 
+> **These are application-level retry policies, and they are opt-in.**
+>
+> Do not mix them with the **transport-level** retry and backoff provided by the underlying `modbus-rs` library — `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on `RtuTransportOptions` / `AsciiTransportOptions` / `TcpTransportOptions`, set when the transport is created.
+>
+> The two layers do not know about each other. Running both means the transport silently retries a request several times before this library ever sees a failure, so the attempt counts multiply, the backoff curves interleave, and `maxElapsed` no longer bounds anything you can predict — a 4-retry policy over a transport doing 3 attempts of its own is up to 15 requests on the wire, and every one of this library's delays starts only after the transport has finished its own.
+>
+> Pick one layer. `modbus-rs` defaults `retryAttempts` to `0`, so leaving the transport options alone and using the policies below is the path this package is designed around. If you would rather retry in the transport, use `RetryPolicies.none()` (or simply do not apply a policy) at the application level.
+
 Operations are single-shot by default — nothing in this library retries on your behalf, so a read that takes 200 ms takes 200 ms. Resilience is opt-in: pick a template, pipe the operations you want protected through it.
 
 ```ts
 import { retryModbus, RetryPolicies } from '@flux-control/effect-modbus-rs';
 
-const registers =
-  yield *
-  client
-    .readHoldingRegisters({ address: 0, quantity: 10 })
-    .pipe(retryModbus(RetryPolicies.serial()));
+const registers = client
+  .readHoldingRegisters({ address: 0, quantity: 10 })
+  .pipe(retryModbus(RetryPolicies.serial()));
 ```
 
 ### Templates
@@ -267,6 +273,8 @@ const registers =
 | `RetryPolicies.serial()`     | 3 retries, 50 ms base, ×2, 1 s ceiling                  | RS-232/485 — collisions, noise bursts    |
 | `RetryPolicies.tcp()`        | 4 retries, 100 ms base, ×2, 5 s ceiling                 | Modbus/TCP — sockets and gateways        |
 | `RetryPolicies.persistent()` | 10 retries, 250 ms base, ×2, 30 s ceiling, 5 min budget | Long-running background polling          |
+
+All four jitter their delays — see [Jitter](#jitter) — and none of them retry `ModbusInvalidArgumentError` or a deterministic exception code.
 
 Every template is a factory taking overrides, so it doubles as a starting point. Overrides merge into the template rather than replacing it wholesale:
 
@@ -295,21 +303,37 @@ Retrying is only correct for failures that can plausibly resolve themselves, so 
 
 Any of these can be switched off (`errors: { ModbusTimeoutError: false }`), switched on, or given their own backoff curve (`errors: { ModbusConnectionClosedError: { baseDelay: '250 millis' } }`). The retry budget is shared across categories — only the delay curve is per-error — so a mixed failure sequence still stops after `maxRetries`.
 
-Delays follow `min(maxDelay, baseDelay × factor ** retryIndex)` and are jittered by ±20% (`jitter: false` to disable, or `jitter: { min, max }` to retune) so a fleet of pollers does not re-hit a recovering device in lockstep.
+### Backoff and jitter
+
+Delays follow `min(maxDelay, baseDelay × factor ** retryIndex)`, then get jittered.
+
+**Jitter is on by default** — for `makeRetryPolicy()` and for every template, none of which opts out. Each delay is multiplied by a random factor so a fleet of pollers does not re-hit a recovering device in lockstep:
+
+| `jitter`                     | Delay                                                    |
+| ---------------------------- | -------------------------------------------------------- |
+| omitted, or `true` (default) | ±20% — Effect's `0.8 – 1.2` multiplier range             |
+| `false`                      | exact, unrandomised delays — useful for assertable tests |
+| `{ min: 0.5, max: 1.5 }`     | custom multiplier range                                  |
+
+So `RetryPolicies.tcp()` waits roughly 80–120 ms before its first retry, not exactly 100 ms. Set `jitter: false` if you need the delay to be reproducible:
+
+```ts
+RetryPolicies.tcp({ jitter: false });
+```
 
 ### Reconnecting transports
 
 `retryModbusWithReconnect` reconnects the transport before retrying the errors a policy lists in `reconnectOn` — connection-closed for serial, connection-closed and transport errors for TCP:
 
 ```ts
-const transport = yield * TcpTransportService;
-const client = yield * transport.withClient(1);
+const program = Effect.gen(function* () {
+  const transport = yield* TcpTransportService;
+  const client = yield* transport.withClient(1);
 
-const registers =
-  yield *
-  client
+  return yield* client
     .readHoldingRegisters({ address: 0, quantity: 10 })
     .pipe(retryModbusWithReconnect(transport, RetryPolicies.tcp()));
+});
 ```
 
 `policy.schedule` is a plain Effect `Schedule`, so it also works with `Effect.repeat`, `Stream.retry`, and anything else that takes one.

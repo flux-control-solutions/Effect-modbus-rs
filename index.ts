@@ -60,8 +60,14 @@
  * ```
  *
  * Policies are error-aware: transient failures (timeouts, framing errors, a
- * busy device) back off exponentially with jitter, while deterministic ones
- * (illegal address, invalid argument) fail immediately.
+ * busy device) back off exponentially with jitter (on by default), while
+ * deterministic ones (illegal address, invalid argument) fail immediately.
+ *
+ * These are application-level retries. Do not combine them with the
+ * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy`
+ * options passed to a transport when it is created — the two layers are
+ * unaware of each other, so attempt counts multiply and the backoff curves
+ * interleave unpredictably. Pick one layer.
  *
  * @module @flux-control/effect-modbus-rs
  */

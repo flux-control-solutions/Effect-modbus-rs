@@ -45,6 +45,13 @@ export type RetryErrorOptions = boolean | RetryDelayOptions;
  * caller pipes an effect through {@link retryModbus} or
  * {@link retryModbusWithReconnect}. Library defaults stay single-shot so that
  * timing is predictable unless retries are explicitly opted into.
+ *
+ * These are **application-level** retries and should not be combined with the
+ * **transport-level** ones `modbus-rs` offers (`retryAttempts`,
+ * `retryDelayMs`, `retryBackoffStrategy` on the transport options). Neither
+ * layer knows about the other, so attempt counts multiply and the backoff
+ * curves interleave. `retryAttempts` defaults to `0` upstream — leave it there
+ * when using these policies.
  */
 export interface ModbusRetryPolicyOptions {
   /** Maximum number of retries (attempts = `maxRetries + 1`). Default `3`. */
