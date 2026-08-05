@@ -81,11 +81,12 @@
  * {@link retryModbus} remains for retrying a compound operation — a
  * read-modify-write driven as a unit — over a `RetryPolicies.none()` client.
  *
- * These are application-level retries. Do not combine them with the
- * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy`
- * options passed to a transport when it is created — the two layers are
- * unaware of each other, so attempt counts multiply and the backoff curves
- * interleave unpredictably. Pick one layer.
+ * Resilience lives at this layer and only at this layer. `modbus-rs`'s own
+ * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy` are
+ * **not accepted** by any transport constructor here: they retry beneath the
+ * Effect boundary where neither the policy, the circuit breaker, nor the logs
+ * can see them, and they reconnect inline, racing the supervisor fiber that
+ * owns reconnection. See {@link UpstreamRetryOptionKey}.
  *
  * @module @flux-control/effect-modbus-rs
  */
@@ -102,12 +103,19 @@ export type {
 } from './src/retry';
 export { ConnectionState } from './src/connection';
 export type { ReconnectOptions } from './src/connection';
-export type { TransportResilienceOptions } from './src/shared-transport';
+export type {
+  TransportResilienceOptions,
+  UpstreamRetryOptionKey,
+  WithoutUpstreamRetry,
+} from './src/shared-transport';
 export type { ModbusOperations } from './src/modbus-client';
 export { AsciiTransportService } from './src/AsciiTransportService';
+export type { AsciiTransportOpenOptions } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';
 export { TcpTransportService } from './src/TcpTransportService';
+export type { TcpTransportOpenOptions } from './src/TcpTransportService';
 export { RtuTransportService } from './src/RtuTransportService';
+export type { RtuTransportOpenOptions } from './src/RtuTransportService';
 export { serialRtuServerLayer, serialAsciiServerLayer } from './src/SerialModbusServerService';
 export { tcpServerLayer } from './src/TcpModbusServerService';
 export { tcpGatewayLayer } from './src/TcpGatewayService';

@@ -46,12 +46,10 @@ export type RetryErrorOptions = boolean | RetryDelayOptions;
  * {@link retryModbus}. Library defaults stay single-shot so that timing is
  * predictable unless retries are explicitly opted into.
  *
- * These are **application-level** retries and should not be combined with the
- * **transport-level** ones `modbus-rs` offers (`retryAttempts`,
- * `retryDelayMs`, `retryBackoffStrategy` on the transport options). Neither
- * layer knows about the other, so attempt counts multiply and the backoff
- * curves interleave. `retryAttempts` defaults to `0` upstream — leave it there
- * when using these policies.
+ * These are **application-level** retries, and the only ones in play: the
+ * transport-level knobs `modbus-rs` offers are withheld from every transport
+ * constructor in this package, so the two layers cannot be combined by
+ * accident. See `UpstreamRetryOptionKey` in `src/shared-transport.ts`.
  */
 export interface ModbusRetryPolicyOptions {
   /** Maximum number of retries (attempts = `maxRetries + 1`). Default `3`. */

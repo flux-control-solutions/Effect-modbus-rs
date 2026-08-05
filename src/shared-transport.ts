@@ -36,6 +36,44 @@ export interface TransportResilienceOptions {
   readonly reconnect?: ReconnectOptions;
 }
 
+/**
+ * The `modbus-rs` transport-level retry knobs this package deliberately does
+ * not expose.
+ *
+ * They are withheld rather than merely discouraged because enabling them is
+ * never the right call under this design:
+ *
+ * - **They retry below the Effect boundary.** A failure they paper over never
+ *   reaches the policy, the circuit breaker, or the logs — the caller sees one
+ *   slow success instead of several failures and a recovery, and any
+ *   caller-side timeout is measuring inflated time.
+ * - **They reconnect.** Upstream re-establishes the link inline and replays
+ *   in-flight requests after it, which races the one supervisor fiber that is
+ *   supposed to own reconnection for the whole transport.
+ * - **They multiply.** Neither layer knows about the other, so attempt counts
+ *   compound and the two backoff curves interleave.
+ * - **`retryDelayMs` is flat and unjittered**, the collision pattern that
+ *   `RetryPolicies.serial()` exists to break up; `retryBackoffStrategy` is
+ *   documented upstream as inert, so setting it does nothing at all.
+ *
+ * Use the `retry` and `reconnect` options on {@link TransportResilienceOptions}
+ * instead. Callers who genuinely need frame-level resends can construct a raw
+ * `modbus-rs` client directly, where the trade-off is explicit.
+ */
+export type UpstreamRetryOptionKey = 'retryAttempts' | 'retryDelayMs' | 'retryBackoffStrategy';
+
+/**
+ * Upstream `modbus-rs` transport options with the retry knobs removed.
+ *
+ * Applied to every transport-creation entry point this package exposes. All
+ * three keys are optional upstream, so the result stays assignable to the
+ * original type and still satisfies the upstream `open`/`connect` call.
+ *
+ * @typeParam TOptions - The upstream options type (e.g. `RtuTransportOptions`).
+ * @see UpstreamRetryOptionKey — Why these are withheld.
+ */
+export type WithoutUpstreamRetry<TOptions> = Omit<TOptions, UpstreamRetryOptionKey>;
+
 /** Cell holding the in-flight operation of a {@link singleFlight} group, if any. */
 type InFlight<A> = Ref.Ref<Option.Option<Deferred.Deferred<A, ModbusError>>>;
 

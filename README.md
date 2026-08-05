@@ -249,9 +249,7 @@ Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven va
 
 > **These are application-level policies, and they are opt-in.**
 >
-> Do not mix them with the **transport-level** retry and backoff provided by the underlying `modbus-rs` library — `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on `RtuTransportOptions` / `AsciiTransportOptions` / `TcpTransportOptions`.
->
-> The two layers do not know about each other. Running both means `modbus-rs` silently retries a request several times before this library ever sees a failure, so attempt counts multiply and the backoff curves interleave. `modbus-rs` defaults `retryAttempts` to `0`, so leaving those options alone is the path this package is designed around.
+> They are also the _only_ retries in play. The **transport-level** knobs the underlying `modbus-rs` library offers — `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` — are **not accepted** by any transport constructor here. Passing one is a type error. See [Why the upstream retry knobs are withheld](#why-the-upstream-retry-knobs-are-withheld).
 
 Resilience belongs to the **transport**, not to call sites. Attach a policy where the transport is created and every client derived from it carries it:
 
@@ -391,9 +389,32 @@ yield *
   }).pipe(retryModbus(RetryPolicies.tcp()));
 ```
 
-Take a `none` client first — piping `retryModbus` over an already-policied client stacks the two, which is the same multiplication problem as mixing in the transport-level options.
+Take a `none` client first — piping `retryModbus` over an already-policied client stacks the two, and stacked policies multiply.
 
 See `examples/retry-policies.ts` for a runnable walkthrough.
+
+### Why the upstream retry knobs are withheld
+
+`modbus-rs` exposes `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on its transport options. This package removes all three from every transport constructor, so setting one is a compile error rather than a documented hazard:
+
+```ts
+TcpTransportService.Default({ host, port, retryAttempts: 3 });
+//                                        ^^^^^^^^^^^^^ Object literal may only specify
+//                                        known properties, and 'retryAttempts' does not
+//                                        exist in type 'TcpTransportOpenOptions & …'
+```
+
+They are withheld rather than merely discouraged because enabling them is never the right call under this design:
+
+- **They retry below the Effect boundary.** A failure they paper over never reaches your policy, the circuit breaker, or your logs. The caller sees one slow success instead of several failures and a recovery, and any caller-side `Effect.timeout` is measuring inflated time.
+- **They reconnect.** Upstream re-establishes the link inline and replays in-flight requests after it, which races the single supervisor fiber that is supposed to own reconnection for the whole transport.
+- **They multiply.** Neither layer knows about the other, so attempt counts compound and the two backoff curves interleave.
+- **`retryDelayMs` is flat and unjittered** — exactly the lockstep-collision pattern `RetryPolicies.serial()` exists to break up on a shared RS-485 segment.
+- **`retryBackoffStrategy` does nothing.** It is documented upstream as inert and reserved for future implementation, so `'exponential'` silently gets you a flat delay.
+
+Use `retry` and `reconnect` on the transport instead. If you genuinely need frame-level resends, construct a raw `modbus-rs` client directly, where that trade-off is explicit rather than hidden under an Effect service.
+
+The narrowed option types are exported as `RtuTransportOpenOptions`, `AsciiTransportOpenOptions`, and `TcpTransportOpenOptions`, alongside the generic `WithoutUpstreamRetry<T>` and the `UpstreamRetryOptionKey` union.
 
 ## Testing with mocks
 
@@ -468,7 +489,7 @@ src/
   mocks.ts                   — Schema-validated mock transport + slave device definitions
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
-  shared-transport.ts        — Generic scoped transport lifecycle management
+  shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport

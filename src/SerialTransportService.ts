@@ -1,10 +1,9 @@
 import { Context, Layer } from 'effect';
-import type { AsciiTransportOptions, RtuTransportOptions } from 'modbus-rs';
 
-import { AsciiTransportService } from './AsciiTransportService';
+import { AsciiTransportService, type AsciiTransportOpenOptions } from './AsciiTransportService';
 import { makeMockTransport, type SlaveDeviceDefinitions } from './mocks';
-import { RtuTransportService } from './RtuTransportService';
-import type { TransportServiceApi } from './shared-transport';
+import { RtuTransportService, type RtuTransportOpenOptions } from './RtuTransportService';
+import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
 /**
  * Abstract serial Modbus transport service tag.
@@ -33,7 +32,9 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an ASCII transport.
    */
-  static fromAscii(options: AsciiTransportOptions): Layer.Layer<SerialTransportService> {
+  static fromAscii(
+    options: AsciiTransportOpenOptions & TransportResilienceOptions,
+  ): Layer.Layer<SerialTransportService> {
     return Layer.project(
       AsciiTransportService,
       SerialTransportService,
@@ -45,7 +46,9 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an RTU transport.
    */
-  static fromRtu(options: RtuTransportOptions): Layer.Layer<SerialTransportService> {
+  static fromRtu(
+    options: RtuTransportOpenOptions & TransportResilienceOptions,
+  ): Layer.Layer<SerialTransportService> {
     return Layer.project(
       RtuTransportService,
       SerialTransportService,
@@ -63,7 +66,7 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (
-      options: AsciiTransportOptions | RtuTransportOptions,
+      options: (AsciiTransportOpenOptions | RtuTransportOpenOptions) & TransportResilienceOptions,
     ): Layer.Layer<SerialTransportService> =>
       Layer.scoped(SerialTransportService, factory(options));
   };

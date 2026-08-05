@@ -23,7 +23,7 @@ import { ConnectionState, guardCircuit, resolveReconnect, superviseReconnect } f
 import { ModbusInvalidArgumentError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
 import type { ModbusRetryPolicy } from './retry';
-import type { TransportResilienceOptions } from './shared-transport';
+import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
 
 /**
  * Mock-only fault injection.
@@ -349,8 +349,8 @@ const makeMockModbusClient = (state: MockDeviceState, unitId: number): ModbusOpe
  * Accepts an array of {@link SlaveDeviceDefinition} that describe the
  * simulated Modbus slaves, their register maps, and coil states.
  * The returned factory matches the signature expected by the transport
- * service constructors (`RtuTransportOptions | AsciiTransportOptions |
- * TcpTransportOptions`) so it can be injected into any service layer.
+ * service constructors (`RtuTransportOpenOptions | AsciiTransportOpenOptions |
+ * TcpTransportOpenOptions`) so it can be injected into any service layer.
  *
  * Unsupported function codes (FIFO queue, file records) return
  * {@link ModbusInvalidArgumentError}.
@@ -383,9 +383,9 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
 
   return (
     options: (
-      | RtuTransportOptions
-      | AsciiTransportOptions
-      | TcpTransportOptions
+      | WithoutUpstreamRetry<RtuTransportOptions>
+      | WithoutUpstreamRetry<AsciiTransportOptions>
+      | WithoutUpstreamRetry<TcpTransportOptions>
       | WasmWsTransportOptions
       | WasmSerialTransportOptions
     ) &
