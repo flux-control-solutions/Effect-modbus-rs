@@ -5,7 +5,7 @@ import type { AsyncSerialModbusClient } from 'modbus-rs';
 
 import { ConnectionState } from './connection';
 import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
-import { makeRetryPolicy, RetryPolicies } from './retry';
+import { makeRetryPolicy, retryModbus, RetryPolicies } from './retry';
 import { makeTransportScoped } from './shared-transport';
 import { TcpTransportService } from './TcpTransportService';
 
@@ -110,6 +110,45 @@ test('withRetry replaces the policy for a single operation', async () => {
 
   expect(Array.from(result)).toEqual([42]);
   expect(calls.attempts).toBe(3);
+});
+
+test('retryModbus wraps the client policy instead of replacing it', async () => {
+  // The counterpart to the two tests above, and the reason the docs tell you to
+  // take a `none` client before piping `retryModbus`. Overrides are resolved
+  // inside the client, so they discard what came before; `retryModbus` is piped
+  // around an effect the client has already wrapped in its own retry, where
+  // nothing can see the inner policy. Both run: 3 inner attempts x 4 outer = 12.
+  const { calls, layer } = mockWith({
+    retry: makeRetryPolicy({ maxRetries: 2, baseDelay: '1 millis' }),
+    failures: 99,
+  });
+  await Effect.gen(function* () {
+    const transport = yield* TcpTransportService;
+    const client = yield* transport.withClient(1);
+    return yield* Effect.either(
+      client
+        .readHoldingRegisters({ address: 0, quantity: 1 })
+        .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
+    );
+  }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
+
+  expect(calls.attempts).toBe(12);
+});
+
+test('retryModbus over a none client does not multiply', async () => {
+  // The supported shape: the client contributes one attempt per outer try.
+  const { calls, layer } = mockWith({ retry: RetryPolicies.none(), failures: 99 });
+  await Effect.gen(function* () {
+    const transport = yield* TcpTransportService;
+    const client = yield* transport.withClient(1);
+    return yield* Effect.either(
+      client
+        .readHoldingRegisters({ address: 0, quantity: 1 })
+        .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
+    );
+  }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
+
+  expect(calls.attempts).toBe(4);
 });
 
 test('different device types on one transport carry different policies', async () => {

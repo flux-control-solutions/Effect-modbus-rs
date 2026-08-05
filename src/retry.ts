@@ -362,15 +362,30 @@ export const RetryPolicies = {
  * `ModbusInvalidArgumentError` still surfaces on the first attempt under a
  * policy tuned for flaky wiring.
  *
+ * **This wraps rather than replaces.** `withClient(unitId, { retry })` and
+ * `client.withRetry(policy)` are resolved inside the client, so they discard
+ * the policy already in force. `retryModbus` is piped *around* an effect the
+ * client has already wrapped in its own retry, and nothing in that path can see
+ * the inner policy — so over a policied client both run and the attempt counts
+ * multiply (a `maxRetries: 2` client under a `maxRetries: 3` pipe makes 3 × 4 =
+ * 12 attempts). Reach for it only over a {@link RetryPolicies.none} client, to
+ * drive a compound operation as a unit; for a single operation, prefer
+ * `client.withRetry(policy)`.
+ *
  * @param policy - The policy to apply.
  * @returns A combinator that can be piped over any effect failing with
  *   {@link ModbusError}.
  *
  * @example
  * ```ts
- * const registers = yield* client
- *   .readHoldingRegisters({ address: 0, quantity: 10 })
- *   .pipe(retryModbus(RetryPolicies.serial()));
+ * // A read-modify-write retried as a unit — retrying either frame alone
+ * // would be wrong. The client carries no policy of its own.
+ * const client = yield* transport.withClient(1, { retry: RetryPolicies.none() });
+ *
+ * yield* Effect.gen(function* () {
+ *   const current = yield* client.readHoldingRegisters({ address: 0, quantity: 2 });
+ *   yield* client.writeMultipleRegisters({ address: 0, values: bump(current) });
+ * }).pipe(retryModbus(RetryPolicies.serial()));
  * ```
  */
 export const retryModbus =

@@ -161,7 +161,7 @@ Each transport is a scoped `Effect.Service`. You provide it with `Effect.provide
 | `WasmRtuTransportService` (browser)   | `{ port, baudRate, ... }`      | `WasmRtuTransport.open()`     |
 | `WasmAsciiTransportService` (browser) | `{ port, baudRate, ... }`      | `WasmAsciiTransport.open()`   |
 
-All transport options types are re-exported from `modbus-rs` (native transports) or `modbus-rs/web` (browser transports).
+Browser transport option types are re-exported from `modbus-rs/web` unchanged. The native ones are narrowed — `RtuTransportOpenOptions`, `AsciiTransportOpenOptions`, and `TcpTransportOpenOptions` are their `modbus-rs` counterparts minus the retry knobs, for the reasons in [Why the upstream retry knobs are withheld](#why-the-upstream-retry-knobs-are-withheld).
 
 ### Abstract serial transport
 
@@ -308,7 +308,29 @@ Clients built for the same unit ID under different policies share one underlying
 yield * client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
 ```
 
-Resolution order is **per-operation → per-client → transport → none**.
+Resolution order is **per-operation → per-client → transport → none**. First match wins; the others are discarded, not combined.
+
+#### Replacing vs. wrapping
+
+Two things look alike at a call site — both read as "attach a policy here" — but behave differently, and the difference is worth internalising:
+
+| Form                            | Effect on the policy already in force |
+| ------------------------------- | ------------------------------------- |
+| `withClient(unitId, { retry })` | **Replaces** it                       |
+| `client.withRetry(policy)`      | **Replaces** it                       |
+| `.pipe(retryModbus(policy))`    | **Wraps** it — the two nest           |
+
+The deciding factor is whether the policy goes _through_ the client or _around_ it. The first two are resolved inside the client when it is built, so the previous policy is never applied. `retryModbus` is a free function piped around an effect the client has **already** wrapped in its own retry — nothing in that path can see the inner policy, so both run and the attempt counts multiply.
+
+Concretely, against a transport policy of `maxRetries: 2` (3 attempts):
+
+```ts
+transport.withClient(1, { retry: fast(3) })          // 4 attempts  (replaced)
+client.withRetry(fast(4)).readHoldingRegisters(...)  // 5 attempts  (replaced)
+client.readHoldingRegisters(...).pipe(retryModbus(fast(3))) // 12 attempts (3 × 4)
+```
+
+That last form is only correct over a `RetryPolicies.none()` client — see [Retrying a transaction](#retrying-a-transaction).
 
 ### Error-aware by construction
 
@@ -389,7 +411,7 @@ yield *
   }).pipe(retryModbus(RetryPolicies.tcp()));
 ```
 
-Take a `none` client first — piping `retryModbus` over an already-policied client stacks the two, and stacked policies multiply.
+Take a `RetryPolicies.none()` client first. Unlike `withClient({ retry })` and `client.withRetry()`, which replace the policy in force, `retryModbus` wraps whatever the client is already doing — so over a policied client the two nest and the attempt counts multiply. See [Replacing vs. wrapping](#replacing-vs-wrapping).
 
 See `examples/retry-policies.ts` for a runnable walkthrough.
 

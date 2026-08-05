@@ -80,6 +80,9 @@
  *
  * {@link retryModbus} remains for retrying a compound operation — a
  * read-modify-write driven as a unit — over a `RetryPolicies.none()` client.
+ * Note that it **wraps** rather than replaces: unlike the two overrides above,
+ * it is piped around an effect the client has already wrapped in its own retry,
+ * so over a policied client the two nest and attempt counts multiply.
  *
  * Resilience lives at this layer and only at this layer. `modbus-rs`'s own
  * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy` are
