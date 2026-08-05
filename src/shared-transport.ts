@@ -73,29 +73,31 @@ const singleFlight = <A>(
   inFlight: InFlight<A>,
   work: Effect.Effect<A, ModbusError>,
 ): Effect.Effect<A, ModbusError> =>
-  Effect.gen(function* () {
-    const fresh = yield* Deferred.make<A, ModbusError>();
-    const [deferred, isLeader] = yield* Ref.modify(
-      inFlight,
-      (current): Election<A> =>
-        Option.match(current, {
-          onSome: (existing) => [[existing, false], current],
-          onNone: () => [[fresh, true], Option.some(fresh)],
-        }),
-    );
-    if (isLeader) {
-      yield* Effect.forkDaemon(
-        work.pipe(
-          Effect.onExit((exit) =>
-            // Cleared before the deferred settles, so a waiter that immediately
-            // calls again starts a new run instead of joining a finished one.
-            Effect.zipRight(Ref.set(inFlight, Option.none()), Deferred.done(deferred, exit)),
-          ),
-        ),
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fresh = yield* Deferred.make<A, ModbusError>();
+      const [deferred, isLeader] = yield* Ref.modify(
+        inFlight,
+        (current): Election<A> =>
+          Option.match(current, {
+            onSome: (existing) => [[existing, false], current],
+            onNone: () => [[fresh, true], Option.some(fresh)],
+          }),
       );
-    }
-    return yield* Deferred.await(deferred);
-  });
+      if (isLeader) {
+        yield* Effect.forkDaemon(
+          Effect.interruptible(work).pipe(
+            Effect.onExit((exit) =>
+              // Cleared before the deferred settles, so a waiter that immediately
+              // calls again starts a new run instead of joining a finished one.
+              Effect.zipRight(Ref.set(inFlight, Option.none()), Deferred.done(deferred, exit)),
+            ),
+          ),
+        );
+      }
+      return yield* restore(Deferred.await(deferred));
+    }),
+  );
 
 /**
  * Shared API surface that every transport service exposes to consumers.

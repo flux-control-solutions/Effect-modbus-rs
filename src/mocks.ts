@@ -19,7 +19,7 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
-import { ConnectionState } from './connection';
+import { ConnectionState, guardCircuit, resolveReconnect, superviseReconnect } from './connection';
 import { ModbusInvalidArgumentError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
 import type { ModbusRetryPolicy } from './retry';
@@ -44,6 +44,11 @@ export interface MockFaultOptions {
    * ```
    */
   readonly fault?: () => ModbusError | undefined;
+  /**
+   * Called before every mock reconnect attempt. Return an error to keep the
+   * link down, or `undefined` to let the reconnect succeed.
+   */
+  readonly reconnectFault?: () => ModbusError | undefined;
 }
 
 /**
@@ -390,9 +395,42 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     Effect.gen(function* () {
       yield* Effect.logDebug('Mock transport opened with devices:', deviceDefs);
 
-      // The mock link never drops, so it reports Connected and never guards.
       const connectionState = yield* SubscriptionRef.make<ConnectionState>(
         ConnectionState.Connected(),
+      );
+      const supervised = options.reconnect ? resolveReconnect(options.reconnect) : null;
+      const serviceScope = yield* Effect.scope;
+
+      const reconnectOnce = Effect.zipRight(
+        Effect.logDebug('Mock: reconnecting'),
+        Effect.suspend(() => {
+          const injected = options.reconnectFault?.();
+          return injected ? Effect.fail(injected) : Effect.void;
+        }),
+      );
+
+      const report = (error: ModbusError): Effect.Effect<void> => {
+        if (!supervised || !supervised.triggers(error)) return Effect.void;
+        return Effect.gen(function* () {
+          const claimed = yield* SubscriptionRef.modify(connectionState, (current) =>
+            ConnectionState.$is('Connected')(current)
+              ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
+              : [false, current],
+          );
+          if (!claimed) return;
+          yield* Effect.forkIn(
+            superviseReconnect(reconnectOnce, connectionState, supervised),
+            serviceScope,
+          );
+        });
+      };
+
+      const guard = Effect.zipRight(
+        supervised ? guardCircuit(connectionState) : Effect.void,
+        Effect.suspend(() => {
+          const injected = options.fault?.();
+          return injected ? Effect.fail(injected) : Effect.void;
+        }),
       );
 
       return {
@@ -413,11 +451,8 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
           // The fault hook rides in the guard slot, which already runs once per
           // attempt — exactly where an injected failure belongs.
           return withResilience(makeMockModbusClient(state, unitId), {
-            guard: Effect.suspend(() => {
-              const injected = options.fault?.();
-              return injected ? Effect.fail(injected) : Effect.void;
-            }),
-            report: () => Effect.void,
+            guard,
+            report,
             policy: clientOptions?.retry ?? options.retry,
           });
         }),
@@ -425,13 +460,15 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,
         reconnect: () =>
-          Effect.asVoid(Effect.logDebug('Mock: reconnecting')) as Effect.Effect<
-            void,
-            ModbusError,
-            never
-          >,
+          Effect.zipRight(
+            reconnectOnce,
+            SubscriptionRef.set(connectionState, ConnectionState.Connected()),
+          ),
         close: () =>
-          Effect.logDebug('Mock: closing transport') as Effect.Effect<void, ModbusError, never>,
+          Effect.zipRight(
+            Effect.logDebug('Mock: closing transport'),
+            SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
+          ) as Effect.Effect<void, ModbusError, never>,
         hasPendingRequests: () => false,
       };
     });

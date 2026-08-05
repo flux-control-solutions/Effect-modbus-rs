@@ -4,7 +4,7 @@ import { Effect, Either, Exit, Scope, SubscriptionRef } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
 import { ConnectionState } from './connection';
-import { ModbusTimeoutError } from './errors';
+import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
 import { makeRetryPolicy, RetryPolicies } from './retry';
 import { makeTransportScoped } from './shared-transport';
 import { TcpTransportService } from './TcpTransportService';
@@ -131,6 +131,44 @@ test('different device types on one transport carry different policies', async (
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 });
 
+test('mock connection faults drive the reconnect state machine', async () => {
+  let operationFails = true;
+  let attempts = 0;
+  const linkDropped = () =>
+    new ModbusConnectionClosedError({
+      cause: new Error('mock link dropped'),
+      message: 'mock link dropped',
+    });
+  const layer = TcpTransportService.makeMockTransport(devices)({
+    host: '127.0.0.1',
+    port: 502,
+    reconnect: { policy: RetryPolicies.none(), resetAfter: '1 second' },
+    fault: () => {
+      attempts += 1;
+      if (!operationFails) return undefined;
+      operationFails = false;
+      return linkDropped();
+    },
+    reconnectFault: linkDropped,
+  });
+
+  await Effect.gen(function* () {
+    const transport = yield* TcpTransportService;
+    const client = yield* transport.withClient(1);
+
+    const failed = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Either.isLeft(failed)).toBe(true);
+
+    yield* Effect.sleep('10 millis');
+    expect((yield* transport.connectionState)._tag).toBe('Down');
+
+    const refused = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Either.isLeft(refused)).toBe(true);
+    if (Either.isLeft(refused)) expect(refused.left._tag).toBe('ModbusCircuitOpenError');
+    expect(attempts).toBe(1);
+  }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
+});
+
 // ---------------------------------------------------------------------------
 // Supervised reconnect and the circuit breaker, on a controllable fake.
 // ---------------------------------------------------------------------------
@@ -251,6 +289,27 @@ test('exhausted reconnect attempts open the circuit, then it probes and recovers
     expect((yield* api.connectionState)._tag).toBe('Connected');
     const recovered = yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
     expect(Array.from(recovered)).toEqual([7]);
+  }).pipe(Effect.scoped, Effect.runPromise);
+});
+
+test('manual recovery cancels a sleeping supervisor probe', async () => {
+  const fake = makeFake({ reconnectFailures: 3 });
+  await Effect.gen(function* () {
+    const api = yield* fake.make({ label: 'x', reconnect: reconnectFast });
+    const client = yield* api.withClient(1);
+
+    fake.breakLink();
+    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.sleep('25 millis');
+    expect((yield* api.connectionState)._tag).toBe('Down');
+
+    yield* api.reconnect();
+    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect(fake.calls.reconnect).toBe(4);
+
+    yield* Effect.sleep('60 millis');
+    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect(fake.calls.reconnect).toBe(4);
   }).pipe(Effect.scoped, Effect.runPromise);
 });
 

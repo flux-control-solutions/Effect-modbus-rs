@@ -158,6 +158,11 @@ export const superviseReconnect = (
       yield* Effect.logDebug(`Reconnect attempts exhausted: ${result.left.message}`);
       yield* SubscriptionRef.set(state, ConnectionState.Down({ cause: result.left }));
       yield* Effect.sleep(resolved.resetAfter);
-      yield* SubscriptionRef.set(state, ConnectionState.Reconnecting({ attempt: 0 }));
+      const probe = yield* SubscriptionRef.modify(state, (current) =>
+        ConnectionState.$is('Down')(current)
+          ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
+          : [false, current],
+      );
+      if (!probe) return;
     }
   });

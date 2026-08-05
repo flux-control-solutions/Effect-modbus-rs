@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 import type { AsciiTransportOptions, RtuTransportOptions } from 'modbus-rs';
 
 import { AsciiTransportService } from './AsciiTransportService';
@@ -65,6 +65,6 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
     return (
       options: AsciiTransportOptions | RtuTransportOptions,
     ): Layer.Layer<SerialTransportService> =>
-      Layer.scoped(SerialTransportService, factory(options) as Effect.Effect<TransportServiceApi>);
+      Layer.scoped(SerialTransportService, factory(options));
   };
 }
