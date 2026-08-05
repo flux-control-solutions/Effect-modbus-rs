@@ -41,10 +41,10 @@ export type RetryErrorOptions = boolean | RetryDelayOptions;
  * Options accepted by {@link makeRetryPolicy} and by every preset in
  * {@link RetryPolicies}.
  *
- * Nothing here is applied automatically — a policy only takes effect where a
- * caller pipes an effect through {@link retryModbus} or
- * {@link retryModbusWithReconnect}. Library defaults stay single-shot so that
- * timing is predictable unless retries are explicitly opted into.
+ * Nothing here is applied automatically — a policy only takes effect once it is
+ * attached to a transport, to a client, or piped over an effect with
+ * {@link retryModbus}. Library defaults stay single-shot so that timing is
+ * predictable unless retries are explicitly opted into.
  *
  * These are **application-level** retries and should not be combined with the
  * **transport-level** ones `modbus-rs` offers (`retryAttempts`,
@@ -93,19 +93,13 @@ export interface ModbusRetryPolicyOptions {
    * Only consulted when `ModbusExceptionError` is retryable at all.
    */
   readonly retryableExceptions?: ReadonlyArray<number>;
-  /**
-   * Errors that should trigger a transport `reconnect()` before the next
-   * attempt when used with {@link retryModbusWithReconnect}.
-   * Default `["ModbusConnectionClosedError"]`.
-   */
-  readonly reconnectOn?: ReadonlyArray<ModbusErrorTag>;
 }
 
 /**
  * A resolved retry policy: a schedule plus the predicates that produced it.
  *
  * Produced by {@link makeRetryPolicy} or a {@link RetryPolicies} preset, and
- * consumed by {@link retryModbus} / {@link retryModbusWithReconnect}. The
+ * attached to a transport or client (or piped with {@link retryModbus}). The
  * `schedule` is a plain Effect `Schedule`, so it can also be handed straight
  * to `Effect.retry`, `Effect.repeat`, or `Stream.retry`.
  */
@@ -117,8 +111,6 @@ export interface ModbusRetryPolicy {
   readonly schedule: Schedule.Schedule<[number, ModbusError], ModbusError>;
   /** Whether this policy retries the given error at all. */
   readonly isRetryable: (error: ModbusError) => boolean;
-  /** Whether this error should trigger a transport reconnect before retrying. */
-  readonly shouldReconnect: (error: ModbusError) => boolean;
 }
 
 /**
@@ -141,6 +133,9 @@ const defaultRetryableTags: Record<ModbusErrorTag, boolean> = {
   ModbusExceptionError: true,
   ModbusInvalidArgumentError: false,
   ModbusNotConnectedError: false,
+  // Refused without touching the wire, so retrying is cheap: a policy with
+  // enough budget rides out a transport-level reconnect.
+  ModbusCircuitOpenError: true,
   ModbusInternalError: false,
 };
 
@@ -222,8 +217,7 @@ const mergeOptions = (
  *
  * @param options - Policy configuration. Defaults to a general-purpose policy:
  *   3 retries, `100 millis` base, factor `2`, `5 seconds` ceiling, jittered.
- * @returns A resolved policy for {@link retryModbus} /
- *   {@link retryModbusWithReconnect}.
+ * @returns A resolved policy for a transport, a client, or {@link retryModbus}.
  *
  * @example
  * ```ts
@@ -240,7 +234,6 @@ export const makeRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusR
   const retryable = resolveRetryableTags(options);
   const delays = resolveDelays(options);
   const exceptions = options.retryableExceptions ?? retryableExceptionCodes;
-  const reconnectTags = options.reconnectOn ?? ['ModbusConnectionClosedError'];
 
   const isRetryable = (error: ModbusError): boolean => {
     if (!retryable[error._tag]) return false;
@@ -249,8 +242,6 @@ export const makeRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusR
     if (error._tag === 'ModbusExceptionError') return exceptions.includes(error.exception);
     return true;
   };
-
-  const shouldReconnect = (error: ModbusError): boolean => reconnectTags.includes(error._tag);
 
   const delayFor = (error: ModbusError, retryIndex: number): Duration.Duration => {
     const { baseMs, factor, maxMs } = delays[error._tag];
@@ -273,7 +264,7 @@ export const makeRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusR
   const schedule =
     options.maxElapsed === undefined ? jittered : Schedule.upTo(jittered, options.maxElapsed);
 
-  return { schedule, isRetryable, shouldReconnect };
+  return { schedule, isRetryable };
 };
 
 /**
@@ -317,7 +308,6 @@ export const RetryPolicies = {
           factor: 2,
           maxDelay: '1 second',
           errors: { ModbusTimeoutError: { baseDelay: '100 millis' } },
-          reconnectOn: ['ModbusConnectionClosedError'],
         },
         overrides,
       ),
@@ -340,7 +330,6 @@ export const RetryPolicies = {
           errors: {
             ModbusConnectionClosedError: { baseDelay: '250 millis', maxDelay: '10 seconds' },
           },
-          reconnectOn: ['ModbusConnectionClosedError', 'ModbusTransportError'],
         },
         overrides,
       ),
@@ -362,7 +351,6 @@ export const RetryPolicies = {
           factor: 2,
           maxDelay: '30 seconds',
           maxElapsed: '5 minutes',
-          reconnectOn: ['ModbusConnectionClosedError', 'ModbusTransportError'],
         },
         overrides,
       ),
@@ -391,54 +379,3 @@ export const retryModbus =
   (policy: ModbusRetryPolicy) =>
   <A, E extends ModbusError, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Effect.retry(self, policy.schedule);
-
-/**
- * The slice of a transport service {@link retryModbusWithReconnect} needs.
- *
- * Every transport service in this package (`RtuTransportService`,
- * `AsciiTransportService`, `TcpTransportService`, and the `Wasm*` variants)
- * satisfies it.
- */
-export interface ReconnectableTransport {
-  /** Reconnects the transport. */
-  reconnect(): Effect.Effect<void, ModbusError>;
-}
-
-/**
- * Applies a {@link ModbusRetryPolicy}, reconnecting the transport first for
- * the errors the policy marks with
- * {@link ModbusRetryPolicyOptions.reconnectOn | reconnectOn}.
- *
- * This replaces the hand-rolled `catchTags` + `reconnect` + `fail` dance in
- * long-running pollers. The reconnect runs immediately after the failing
- * attempt and before the backoff delay, and a failed reconnect is ignored —
- * the next attempt will report the real error.
- *
- * Note that the reconnect also runs after the final attempt, which leaves the
- * transport repaired for whatever the caller does next.
- *
- * @param transport - The transport service backing the effect.
- * @param policy - The policy to apply.
- * @returns A combinator that can be piped over any effect failing with
- *   {@link ModbusError}.
- *
- * @example
- * ```ts
- * const transport = yield* TcpTransportService;
- * const client = yield* transport.withClient(1);
- * const registers = yield* client
- *   .readHoldingRegisters({ address: 0, quantity: 10 })
- *   .pipe(retryModbusWithReconnect(transport, RetryPolicies.tcp()));
- * ```
- */
-export const retryModbusWithReconnect =
-  (transport: ReconnectableTransport, policy: ModbusRetryPolicy) =>
-  <A, E extends ModbusError, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-    Effect.retry(
-      Effect.tapError(self, (error: E) =>
-        policy.shouldReconnect(error) && policy.isRetryable(error)
-          ? Effect.ignore(transport.reconnect())
-          : Effect.void,
-      ),
-      policy.schedule,
-    );

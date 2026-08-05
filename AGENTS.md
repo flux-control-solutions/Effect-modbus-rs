@@ -29,6 +29,7 @@ src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + Effect.tryPromise wrapper (native + WASM factories)
   mocks.ts                   — Schema-validated mock transport for testing
+  connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
@@ -65,7 +66,8 @@ examples/
 - **Client caching** — clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map<number, Async*ModbusClient>`. Repeated `withClient()` calls for the same unit ID reuse the cached client.
 - **`EffectModbusClient`** — wraps the raw `modbus-rs` client methods via `Effect.tryPromise`, routing errors through `toModbusError`. All methods return `Effect.Effect<T, ModbusError>`.
 - **Error mapping** — raw `Error` → typed `ModbusError` union via `toModbusError` in `src/errors.ts`. Handle with `Effect.catchTags` (see examples).
-- **Retry policies** — `src/retry.ts` builds error-aware `Schedule`s (exponential + jitter, per-error curves, shared attempt budget). Nothing retries implicitly: a policy only applies where a caller pipes through `retryModbus` / `retryModbusWithReconnect`. Keep it that way — predictable default timing is a deliberate design decision (see issue #3). Jitter is on by default within a policy. These are application-level retries: they must not be combined with `modbus-rs`'s transport-level `retryAttempts`/`retryDelayMs`/`retryBackoffStrategy` transport options, since neither layer knows about the other.
+- **Resilience is transport-owned** — `src/retry.ts` builds error-aware `Schedule`s (exponential + jitter, per-error curves, shared attempt budget); `src/connection.ts` owns the connection state machine, the supervised reconnect, and the circuit breaker. A transport takes `retry` and `reconnect` options and applies them to every client it hands out (`withResilience` in `src/modbus-client.ts`). Overrides at `withClient(unitId, { retry })` and `client.withRetry(policy)` **replace** the policy — never compose — so attempt counts cannot multiply. Reconnection is never a call-site activity: one supervisor fiber per transport, not one per failing caller (see issue #3 and PR #10's review).
+- **Nothing retries or reconnects implicitly** — both options default to off. Predictable default timing is a deliberate design decision. Jitter, however, is on by default _within_ a policy. These are application-level retries: they must not be combined with `modbus-rs`'s transport-level `retryAttempts`/`retryDelayMs`/`retryBackoffStrategy` options, since neither layer knows about the other.
 - **`makeMockTransport`** — each service has a static `makeMockTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
 
 ## Conventions

@@ -2,8 +2,10 @@ import { Effect, Layer } from 'effect';
 import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
 
 import { makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import type { SlaveDeviceDefinitions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncRtuTransport}
@@ -46,7 +48,7 @@ export class RtuTransportService extends Effect.Service<RtuTransportService>()(
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: RtuTransportOptions) =>
+    return (options: RtuTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         RtuTransportService,
         factory(options) as unknown as Effect.Effect<RtuTransportService>,

@@ -10,13 +10,7 @@ import {
   ModbusTransportError,
   type ModbusError,
 } from './errors';
-import {
-  makeRetryPolicy,
-  retryModbus,
-  retryModbusWithReconnect,
-  RetryPolicies,
-  type ModbusRetryPolicy,
-} from './retry';
+import { makeRetryPolicy, retryModbus, RetryPolicies, type ModbusRetryPolicy } from './retry';
 
 const timeout = () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'timeout' });
 const transportError = () => new ModbusTransportError({ cause: new Error('crc'), message: 'crc' });
@@ -168,43 +162,4 @@ test('maxElapsed bounds the retry sequence', async () => {
   });
   const delays = await delaysFor(policy, Array.from({ length: 10 }, timeout));
   expect(delays.length).toBeLessThan(10);
-});
-
-test('retryModbusWithReconnect reconnects only for the configured errors', async () => {
-  const policy = makeRetryPolicy({
-    maxRetries: 2,
-    reconnectOn: ['ModbusConnectionClosedError'],
-    ...fast,
-  });
-
-  const run = (error: () => ModbusError) => {
-    let reconnects = 0;
-    const transport = {
-      reconnect: () =>
-        Effect.sync(() => {
-          reconnects += 1;
-        }),
-    };
-    return Effect.fail(error()).pipe(
-      retryModbusWithReconnect(transport, policy),
-      Effect.either,
-      Effect.runPromise,
-      (promise) => promise.then(() => reconnects),
-    );
-  };
-
-  // 3 attempts, each followed by a reconnect.
-  expect(await run(connectionClosed)).toBe(3);
-  expect(await run(timeout)).toBe(0);
-});
-
-test('retryModbusWithReconnect ignores a failing reconnect', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 2, ...fast });
-  const transport = { reconnect: () => Effect.fail(transportError()) };
-  const result = await Effect.fail(connectionClosed()).pipe(
-    retryModbusWithReconnect(transport, policy),
-    Effect.either,
-    Effect.runPromise,
-  );
-  expect(result).toMatchObject({ _tag: 'Left', left: { _tag: 'ModbusConnectionClosedError' } });
 });

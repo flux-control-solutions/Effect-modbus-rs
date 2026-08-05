@@ -245,36 +245,41 @@ Errors from the underlying Rust layer are mapped to typed `Effect` errors via `D
 
 Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven variants.
 
-## Retries, backoff, and jitter
+## Resilience: retries, reconnection, and circuit breaking
 
-> **These are application-level retry policies, and they are opt-in.**
+> **These are application-level policies, and they are opt-in.**
 >
-> Do not mix them with the **transport-level** retry and backoff provided by the underlying `modbus-rs` library — `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on `RtuTransportOptions` / `AsciiTransportOptions` / `TcpTransportOptions`, set when the transport is created.
+> Do not mix them with the **transport-level** retry and backoff provided by the underlying `modbus-rs` library — `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on `RtuTransportOptions` / `AsciiTransportOptions` / `TcpTransportOptions`.
 >
-> The two layers do not know about each other. Running both means the transport silently retries a request several times before this library ever sees a failure, so the attempt counts multiply, the backoff curves interleave, and `maxElapsed` no longer bounds anything you can predict — a 4-retry policy over a transport doing 3 attempts of its own is up to 15 requests on the wire, and every one of this library's delays starts only after the transport has finished its own.
->
-> Pick one layer. `modbus-rs` defaults `retryAttempts` to `0`, so leaving the transport options alone and using the policies below is the path this package is designed around. If you would rather retry in the transport, use `RetryPolicies.none()` (or simply do not apply a policy) at the application level.
+> The two layers do not know about each other. Running both means `modbus-rs` silently retries a request several times before this library ever sees a failure, so attempt counts multiply and the backoff curves interleave. `modbus-rs` defaults `retryAttempts` to `0`, so leaving those options alone is the path this package is designed around.
 
-Operations are single-shot by default — nothing in this library retries on your behalf, so a read that takes 200 ms takes 200 ms. Resilience is opt-in: pick a template, pipe the operations you want protected through it.
+Resilience belongs to the **transport**, not to call sites. Attach a policy where the transport is created and every client derived from it carries it:
 
 ```ts
-import { retryModbus, RetryPolicies } from '@flux-control/effect-modbus-rs';
+const layer = TcpTransportService.Default({
+  host: '192.168.1.50',
+  port: 502,
+  retry: RetryPolicies.tcp(), // applied to every operation
+  reconnect: {}, // supervised reconnect + circuit breaker
+});
 
-const registers = client
-  .readHoldingRegisters({ address: 0, quantity: 10 })
-  .pipe(retryModbus(RetryPolicies.serial()));
+// call sites never mention retries
+const client = yield * transport.withClient(1);
+yield * client.readHoldingRegisters({ address: 0, quantity: 10 });
 ```
+
+With neither option set, a transport behaves exactly as it always has: one attempt per operation, reconnection only when you ask for it.
 
 ### Templates
 
-| Template                     | Shape                                                   | For                                      |
-| ---------------------------- | ------------------------------------------------------- | ---------------------------------------- |
-| `RetryPolicies.none()`       | 1 attempt                                               | Opting a call site out of a wider policy |
-| `RetryPolicies.serial()`     | 3 retries, 50 ms base, ×2, 1 s ceiling                  | RS-232/485 — collisions, noise bursts    |
-| `RetryPolicies.tcp()`        | 4 retries, 100 ms base, ×2, 5 s ceiling                 | Modbus/TCP — sockets and gateways        |
-| `RetryPolicies.persistent()` | 10 retries, 250 ms base, ×2, 30 s ceiling, 5 min budget | Long-running background polling          |
+| Template                     | Shape                                                   | For                                   |
+| ---------------------------- | ------------------------------------------------------- | ------------------------------------- |
+| `RetryPolicies.none()`       | 1 attempt                                               | Opting out of a wider policy          |
+| `RetryPolicies.serial()`     | 3 retries, 50 ms base, ×2, 1 s ceiling                  | RS-232/485 — collisions, noise bursts |
+| `RetryPolicies.tcp()`        | 4 retries, 100 ms base, ×2, 5 s ceiling                 | Modbus/TCP — sockets and gateways     |
+| `RetryPolicies.persistent()` | 10 retries, 250 ms base, ×2, 30 s ceiling, 5 min budget | Long-running background polling       |
 
-All four jitter their delays — see [Jitter](#jitter) — and none of them retry `ModbusInvalidArgumentError` or a deterministic exception code.
+All four jitter their delays — see [Backoff and jitter](#backoff-and-jitter) — and none retry `ModbusInvalidArgumentError` or a deterministic exception code.
 
 Every template is a factory taking overrides, so it doubles as a starting point. Overrides merge into the template rather than replacing it wholesale:
 
@@ -287,19 +292,40 @@ RetryPolicies.serial({
 
 `makeRetryPolicy(options)` builds one from scratch with the same options.
 
+### Overriding per client and per operation
+
+One bus often hosts device types that need different logic. A per-client policy **replaces** the transport's, so overrides can never multiply attempt counts:
+
+```ts
+const meter = yield * transport.withClient(1, { retry: RetryPolicies.serial() });
+const plc = yield * transport.withClient(2, { retry: RetryPolicies.serial({ maxRetries: 8 }) });
+const legacy = yield * transport.withClient(3, { retry: RetryPolicies.none() });
+```
+
+Clients built for the same unit ID under different policies share one underlying connection.
+
+`client.withRetry(policy)` does the same for a single operation:
+
+```ts
+yield * client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+```
+
+Resolution order is **per-operation → per-client → transport → none**.
+
 ### Error-aware by construction
 
 Retrying is only correct for failures that can plausibly resolve themselves, so the policy decides per error:
 
-| Error                         | Retried by default                                   |
-| ----------------------------- | ---------------------------------------------------- |
-| `ModbusTimeoutError`          | yes — slow turnaround, bus contention                |
-| `ModbusTransportError`        | yes — framing/CRC corruption                         |
-| `ModbusConnectionClosedError` | yes — plus a reconnect, see below                    |
-| `ModbusExceptionError`        | only for codes `5`, `6`, `10`, `11` (busy / gateway) |
-| `ModbusInvalidArgumentError`  | no — the answer will not change                      |
-| `ModbusNotConnectedError`     | no                                                   |
-| `ModbusInternalError`         | no                                                   |
+| Error                         | Retried by default                                                 |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `ModbusTimeoutError`          | yes — slow turnaround, bus contention                              |
+| `ModbusTransportError`        | yes — framing/CRC corruption                                       |
+| `ModbusConnectionClosedError` | yes — and hands the link to the supervisor                         |
+| `ModbusCircuitOpenError`      | yes — refused without touching the bus, so it is cheap to wait out |
+| `ModbusExceptionError`        | only for codes `5`, `6`, `10`, `11` (busy / gateway)               |
+| `ModbusInvalidArgumentError`  | no — the answer will not change                                    |
+| `ModbusNotConnectedError`     | no                                                                 |
+| `ModbusInternalError`         | no                                                                 |
 
 Any of these can be switched off (`errors: { ModbusTimeoutError: false }`), switched on, or given their own backoff curve (`errors: { ModbusConnectionClosedError: { baseDelay: '250 millis' } }`). The retry budget is shared across categories — only the delay curve is per-error — so a mixed failure sequence still stops after `maxRetries`.
 
@@ -315,28 +341,57 @@ Delays follow `min(maxDelay, baseDelay × factor ** retryIndex)`, then get jitte
 | `false`                      | exact, unrandomised delays — useful for assertable tests |
 | `{ min: 0.5, max: 1.5 }`     | custom multiplier range                                  |
 
-So `RetryPolicies.tcp()` waits roughly 80–120 ms before its first retry, not exactly 100 ms. Set `jitter: false` if you need the delay to be reproducible:
+So `RetryPolicies.tcp()` waits roughly 80–120 ms before its first retry, not exactly 100 ms.
+
+### Supervised reconnection and the circuit breaker
+
+Passing `reconnect` hands reconnection to a supervisor fiber owned by the transport — **one reconnect for the whole application**, however many fibers were in flight when the link dropped:
 
 ```ts
-RetryPolicies.tcp({ jitter: false });
-```
-
-### Reconnecting transports
-
-`retryModbusWithReconnect` reconnects the transport before retrying the errors a policy lists in `reconnectOn` — connection-closed for serial, connection-closed and transport errors for TCP:
-
-```ts
-const program = Effect.gen(function* () {
-  const transport = yield* TcpTransportService;
-  const client = yield* transport.withClient(1);
-
-  return yield* client
-    .readHoldingRegisters({ address: 0, quantity: 10 })
-    .pipe(retryModbusWithReconnect(transport, RetryPolicies.tcp()));
+TcpTransportService.Default({
+  host,
+  port,
+  reconnect: {
+    policy: RetryPolicies.tcp(), // how reconnect attempts are spaced
+    resetAfter: '30 seconds', // how long the circuit stays open before probing
+    triggerOn: ['ModbusConnectionClosedError', 'ModbusTransportError'],
+  },
 });
 ```
 
-`policy.schedule` is a plain Effect `Schedule`, so it also works with `Effect.repeat`, `Stream.retry`, and anything else that takes one.
+While the link is being re-established, operations are refused with `ModbusCircuitOpenError` instead of queueing requests onto a dead bus. Because that error is retryable by default and costs nothing on the wire, a polling loop with a generous policy simply rides out the outage; one with a short budget fails fast and lets the caller decide.
+
+State transitions are published on `transport.connectionState`:
+
+| State          | Meaning                                                                                |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `Disconnected` | Never opened, or closed. The next operation opens it lazily.                           |
+| `Connected`    | Usable.                                                                                |
+| `Reconnecting` | Supervisor is re-establishing the link. Operations refused.                            |
+| `Down`         | Attempts exhausted; waiting out `resetAfter` before probing again. Operations refused. |
+
+```ts
+yield *
+  Stream.runForEach(transport.connectionState.changes, (state) =>
+    Console.log(`link: ${state._tag}`),
+  );
+```
+
+### Retrying a transaction
+
+`retryModbus(policy)` remains exported for the one case the transport cannot express: driving a **compound** operation as a unit, where retrying individual frames would be wrong.
+
+```ts
+const client = yield * transport.withClient(1, { retry: RetryPolicies.none() });
+
+yield *
+  Effect.gen(function* () {
+    const current = yield* client.readHoldingRegisters({ address: 0, quantity: 2 });
+    yield* client.writeMultipleRegisters({ address: 0, values: bump(current) });
+  }).pipe(retryModbus(RetryPolicies.tcp()));
+```
+
+Take a `none` client first — piping `retryModbus` over an already-policied client stacks the two, which is the same multiplication problem as mixing in the transport-level options.
 
 See `examples/retry-policies.ts` for a runnable walkthrough.
 
@@ -411,6 +466,7 @@ src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + factory (native + WASM)
   mocks.ts                   — Schema-validated mock transport + slave device definitions
+  connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
@@ -435,7 +491,7 @@ examples/
   rtu-mock.ts                — RTU with in-memory mock
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
-  retry-policies.ts          — Retry policies: backoff, jitter, per-error rules
+  retry-policies.ts          — Transport-owned resilience: policies, overrides, transactions
   tcp-polling-stream.ts      — TCP polling, reconnect, and stream
   tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
   tcp-server.ts              — TCP server example

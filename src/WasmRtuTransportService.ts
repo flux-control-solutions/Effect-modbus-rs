@@ -7,7 +7,9 @@ import type {
 } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Options for {@link WasmRtuTransportService}. `WasmRtuTransport.open()` takes the
@@ -67,7 +69,7 @@ export class WasmRtuTransportService extends Effect.Service<WasmRtuTransportServ
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: WasmRtuTransportOpenOptions) =>
+    return (options: WasmRtuTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         WasmRtuTransportService,
         factory(options) as unknown as Effect.Effect<WasmRtuTransportService>,

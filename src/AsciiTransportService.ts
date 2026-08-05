@@ -5,8 +5,10 @@ import type {
   AsciiTransportOptions,
 } from 'modbus-rs';
 
-import { makeMockTransport, SlaveDeviceDefinitions } from './mocks';
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncAsciiTransport}
@@ -54,7 +56,7 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: AsciiTransportOptions) =>
+    return (options: AsciiTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         AsciiTransportService,
         factory(options) as unknown as Effect.Effect<AsciiTransportService>,

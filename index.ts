@@ -46,22 +46,40 @@
  * })
  * ```
  *
- * ## Retries
+ * ## Resilience
  *
- * Nothing retries implicitly — operations are single-shot unless a policy is
- * applied, so timing stays predictable by default. Pick a template from
- * {@link RetryPolicies} (or build one with {@link makeRetryPolicy}) and pipe
- * the operations you want protected through {@link retryModbus} or
- * {@link retryModbusWithReconnect}:
+ * Nothing retries or reconnects implicitly — a transport behaves exactly as it
+ * always has until a policy is attached, so timing stays predictable by
+ * default. Resilience is configured on the **transport**, which owns it for
+ * every client derived from it:
  *
  * ```ts
- * client.readHoldingRegisters({ address: 0, quantity: 10 })
- *   .pipe(retryModbus(RetryPolicies.serial()))
+ * TcpTransportService.Default({
+ *   host, port,
+ *   retry: RetryPolicies.tcp(),      // applied to every operation
+ *   reconnect: {},                   // supervised reconnect + circuit breaker
+ * })
  * ```
  *
  * Policies are error-aware: transient failures (timeouts, framing errors, a
  * busy device) back off exponentially with jitter (on by default), while
  * deterministic ones (illegal address, invalid argument) fail immediately.
+ *
+ * Override per client — one bus, several device types — or per operation.
+ * Both replace the policy rather than composing with it:
+ *
+ * ```ts
+ * const meter = yield* transport.withClient(1, { retry: RetryPolicies.serial() });
+ * yield* meter.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+ * ```
+ *
+ * With `reconnect` enabled, the transport runs one supervised reconnect for the
+ * whole application and refuses operations with {@link ModbusCircuitOpenError}
+ * while the link is down, instead of letting every caller queue requests onto a
+ * dead bus. Watch {@link ConnectionState} via `transport.connectionState`.
+ *
+ * {@link retryModbus} remains for retrying a compound operation — a
+ * read-modify-write driven as a unit — over a `RetryPolicies.none()` client.
  *
  * These are application-level retries. Do not combine them with the
  * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy`
@@ -74,21 +92,18 @@
 
 export * from './src/errors';
 export type { EffectModbusClient } from './src/modbus-client';
-export {
-  makeRetryPolicy,
-  retryableExceptionCodes,
-  RetryPolicies,
-  retryModbus,
-  retryModbusWithReconnect,
-} from './src/retry';
+export { makeRetryPolicy, retryableExceptionCodes, RetryPolicies, retryModbus } from './src/retry';
 export type {
   ModbusErrorTag,
   ModbusRetryPolicy,
   ModbusRetryPolicyOptions,
-  ReconnectableTransport,
   RetryDelayOptions,
   RetryErrorOptions,
 } from './src/retry';
+export { ConnectionState } from './src/connection';
+export type { ReconnectOptions } from './src/connection';
+export type { TransportResilienceOptions } from './src/shared-transport';
+export type { ModbusOperations } from './src/modbus-client';
 export { AsciiTransportService } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';
 export { TcpTransportService } from './src/TcpTransportService';

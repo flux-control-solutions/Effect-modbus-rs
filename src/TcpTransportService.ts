@@ -2,7 +2,9 @@ import { Effect, Layer } from 'effect';
 import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from 'modbus-rs';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncTcpTransport}
@@ -46,7 +48,7 @@ export class TcpTransportService extends Effect.Service<TcpTransportService>()(
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: TcpTransportOptions) =>
+    return (options: TcpTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         TcpTransportService,
         factory(options) as unknown as Effect.Effect<TcpTransportService>,

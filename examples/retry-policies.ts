@@ -1,13 +1,12 @@
 /**
- * Retry policy example — backoff, jitter, and error-aware retries.
+ * Resilience example — transport-owned retries, backoff, and jitter.
  *
- * Retries are always opt-in: nothing in this library retries on your behalf.
- * You pick a template from {@link RetryPolicies} (or build one with
- * {@link makeRetryPolicy}) and pipe the operations you want protected through
- * {@link retryModbus} / {@link retryModbusWithReconnect}.
+ * Resilience is opt-in and configured on the transport: attach a policy there
+ * and every client derived from it carries it, with per-client and
+ * per-operation overrides for devices that need different logic.
  *
- * Runs against the in-memory mock transport, with a small "flaky bus" wrapper
- * that injects failures so the backoff is visible without hardware.
+ * Runs against the in-memory mock transport, whose `fault` hook injects
+ * failures underneath the client so the backoff is visible without hardware.
  *
  * @example bun run examples/retry-policies.ts
  */
@@ -20,12 +19,7 @@ import {
   ModbusInvalidArgumentError,
   ModbusTimeoutError,
 } from '../src/errors';
-import {
-  makeRetryPolicy,
-  retryModbus,
-  retryModbusWithReconnect,
-  RetryPolicies,
-} from '../src/retry';
+import { makeRetryPolicy, retryModbus, RetryPolicies } from '../src/retry';
 import { TcpTransportService } from '../src/TcpTransportService';
 
 const devices = [
@@ -39,23 +33,35 @@ const devices = [
     ],
     inputRegisters: [],
   },
+  {
+    unitId: 2,
+    coils: [],
+    discreteInputs: [],
+    holdingRegisters: [{ address: 0, default: 7 }],
+    inputRegisters: [],
+  },
 ];
 
 /**
- * Fails the first `times` invocations with `error`, then delegates to `effect`.
- * Stands in for a noisy bus so the example is runnable without a device.
+ * Fault injection driven through the mock transport, so failures happen where a
+ * real device's would: inside the client, underneath the retry policy.
  */
-const flaky = <A, R>(
-  times: number,
-  error: () => ModbusError,
-  effect: Effect.Effect<A, ModbusError, R>,
-) => {
-  let calls = 0;
-  return Effect.suspend(() => {
-    calls += 1;
-    return calls <= times ? Effect.fail(error()) : effect;
-  });
+let pending: { remaining: number; error: () => ModbusError } | null = null;
+
+const fault = () => {
+  if (!pending || pending.remaining <= 0) return undefined;
+  pending.remaining -= 1;
+  return pending.error();
 };
+
+/** Arms the next `times` attempts to fail with `error`. */
+const failNext = (times: number, error: () => ModbusError) =>
+  Effect.sync(() => {
+    pending = { remaining: times, error };
+  });
+
+const timeout = () =>
+  new ModbusTimeoutError({ cause: new Error('timeout'), message: 'no response' });
 
 const started = Date.now();
 const elapsed = () => `+${String(Date.now() - started).padStart(4, ' ')}ms`;
@@ -64,40 +70,44 @@ const log = (message: string) => Effect.suspend(() => Console.log(`[${elapsed()}
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
-  const client = yield* transport.withClient(1);
 
+  // 1. The transport's policy applies to every client it hands out — the call
+  //    site never mentions retries at all.
+  const client = yield* transport.withClient(1);
   const read = client.readHoldingRegisters({ address: 0, quantity: 2 });
 
-  // 1. A template, used as-is. Two timeouts are absorbed; the caller only sees
-  //    the successful read.
-  yield* log('reading with RetryPolicies.tcp() through two injected timeouts');
-  const registers = yield* flaky(
-    2,
-    () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'no response' }),
-    read,
-  ).pipe(retryModbus(RetryPolicies.tcp()));
+  yield* log('reading through two injected timeouts (transport policy applies)');
+  yield* failNext(2, timeout);
+  const registers = yield* read;
   yield* log(`read succeeded: ${Array.from(registers).join(', ')}`);
 
-  // 2. A template with overrides — the timeout curve is retuned for this call
-  //    site, everything else stays as the template set it.
-  yield* log('reading with a slower, longer serial policy');
-  const slowSerial = RetryPolicies.serial({
-    maxRetries: 6,
-    errors: { ModbusTimeoutError: { baseDelay: '80 millis', maxDelay: '2 seconds' } },
+  // 2. Per-client override: one bus, two device types, different logic.
+  const slowDevice = yield* transport.withClient(2, {
+    retry: RetryPolicies.serial({ maxRetries: 6, baseDelay: '80 millis' }),
   });
-  yield* flaky(
-    3,
-    () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'no response' }),
-    read,
-  ).pipe(retryModbus(slowSerial), Effect.andThen(log('read succeeded')));
+  yield* log('reading unit 2 with its own, more patient policy');
+  yield* failNext(3, timeout);
+  yield* slowDevice
+    .readHoldingRegisters({ address: 0, quantity: 1 })
+    .pipe(Effect.andThen(log('read succeeded')));
 
-  // 3. Error-aware: a device that is busy (exception 6) is worth asking again;
-  //    an illegal data address (exception 2) is not, so it fails immediately
-  //    even under a policy with a generous retry budget.
-  const policy = makeRetryPolicy({ maxRetries: 4, baseDelay: '50 millis' });
+  // 3. Per-operation override. Replaces the policy rather than stacking with
+  //    it, so a write can opt out of retries entirely.
+  yield* log('writing with retries disabled for this call only');
+  yield* failNext(1, timeout);
+  const cautious = client.withRetry(RetryPolicies.none());
+  yield* cautious
+    .writeSingleRegister({ address: 0, value: 123 })
+    .pipe(
+      Effect.catchTag('ModbusTimeoutError', (err) =>
+        log(`failed on the first attempt, as asked: ${err.message}`),
+      ),
+    );
 
+  // 4. Error-aware: a busy device (exception 6) is worth asking again; an
+  //    illegal data address (exception 2) is not, whatever the budget says.
   yield* log('exception 6 (SERVER_DEVICE_BUSY) — retried');
-  yield* flaky(
+  yield* failNext(
     2,
     () =>
       new ModbusExceptionError({
@@ -105,11 +115,11 @@ const program = Effect.gen(function* () {
         exception: 6,
         message: 'server device busy',
       }),
-    read,
-  ).pipe(retryModbus(policy), Effect.andThen(log('read succeeded')));
+  );
+  yield* read.pipe(Effect.andThen(log('read succeeded')));
 
   yield* log('exception 2 (ILLEGAL_DATA_ADDRESS) — not retried');
-  yield* flaky(
+  yield* failNext(
     99,
     () =>
       new ModbusExceptionError({
@@ -117,40 +127,49 @@ const program = Effect.gen(function* () {
         exception: 2,
         message: 'illegal data address',
       }),
-    read,
-  ).pipe(
-    retryModbus(policy),
+  );
+  yield* read.pipe(
     Effect.catchTag('ModbusExceptionError', (err) =>
       log(`failed immediately, as expected: exception ${err.exception}`),
     ),
   );
 
-  // 4. Argument errors are never retried, whatever the policy says.
-  yield* log('invalid argument — not retried');
-  yield* flaky(
+  yield* log('invalid argument — never retried');
+  yield* failNext(
     99,
     () =>
       new ModbusInvalidArgumentError({ cause: new Error('bad'), message: 'quantity too large' }),
-    read,
-  ).pipe(
-    retryModbus(policy),
+  );
+  yield* read.pipe(
     Effect.catchTag('ModbusInvalidArgumentError', (err) =>
       log(`failed immediately, as expected: ${err.message}`),
     ),
   );
 
-  // 5. Connection-level failures: reconnect the transport before retrying.
-  //    Replaces the manual catchTags + reconnect + fail dance in pollers.
-  yield* log('reading with reconnect-aware retries');
-  yield* read.pipe(
-    retryModbusWithReconnect(transport, RetryPolicies.tcp()),
-    Effect.andThen(log('read succeeded')),
+  // 5. Retrying a compound operation as a unit: take a client with no retries
+  //    of its own, then drive the whole sequence under one policy.
+  yield* log('retrying a read-modify-write as a single transaction');
+  yield* failNext(2, timeout);
+  const raw = yield* transport.withClient(1, { retry: RetryPolicies.none() });
+  yield* Effect.gen(function* () {
+    const current = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+    yield* raw.writeSingleRegister({ address: 0, value: (current[0] ?? 0) + 1 });
+  }).pipe(
+    retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '50 millis' })),
+    Effect.andThen(log('transaction committed')),
   );
+
+  // 6. The transport publishes its link state for status displays.
+  const state = yield* transport.connectionState;
+  yield* log(`connection state: ${state._tag}`);
 });
 
 const mockLayer = TcpTransportService.makeMockTransport(devices)({
   host: '127.0.0.1',
   port: 502,
+  // Attached once, here — every client from this transport inherits it.
+  retry: RetryPolicies.tcp(),
+  fault,
 });
 
 program.pipe(
