@@ -29,7 +29,9 @@ src/
   errors.ts                  — Data.TaggedError types + toModbusError converter
   modbus-client.ts           — EffectModbusClient interface + Effect.tryPromise wrapper (native + WASM factories)
   mocks.ts                   — Schema-validated mock transport for testing
-  shared-transport.ts        — Generic scoped transport lifecycle management
+  connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
+  retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
+  shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
   RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
@@ -47,6 +49,7 @@ examples/
   rtu-mock.ts                — RTU with in-memory mock
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
+  retry-policies.ts          — Retry policies: backoff, jitter, per-error rules
   tcp-polling-stream.ts      — TCP polling, reconnect, and stream
   tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
   tcp-server.ts              — TCP server example
@@ -63,6 +66,9 @@ examples/
 - **Client caching** — clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map<number, Async*ModbusClient>`. Repeated `withClient()` calls for the same unit ID reuse the cached client.
 - **`EffectModbusClient`** — wraps the raw `modbus-rs` client methods via `Effect.tryPromise`, routing errors through `toModbusError`. All methods return `Effect.Effect<T, ModbusError>`.
 - **Error mapping** — raw `Error` → typed `ModbusError` union via `toModbusError` in `src/errors.ts`. Handle with `Effect.catchTags` (see examples).
+- **Resilience is transport-owned** — `src/retry.ts` builds error-aware `Schedule`s (exponential + jitter, per-error curves, shared attempt budget); `src/connection.ts` owns the connection state machine, the supervised reconnect, and the circuit breaker. A transport takes `retry` and `reconnect` options and applies them to every client it hands out (`withResilience` in `src/modbus-client.ts`). Overrides at `withClient(unitId, { retry })` and `client.withRetry(policy)` **replace** the policy — never compose — so attempt counts cannot multiply (`clientOptions?.retry ?? transportRetry`; `withRetry` rebuilds from the raw `operations`). `retryModbus(policy)` is the exception and **wraps**: piped around an already-policied client the two nest and multiply (measured 3 × 4 = 12), so it belongs only over a `RetryPolicies.none()` client, driving a compound operation as a unit. Reconnection is never a call-site activity: one supervisor fiber per transport, not one per failing caller (see issue #3 and PR #10's review).
+- **Nothing retries or reconnects implicitly** — both options default to off. Predictable default timing is a deliberate design decision. Jitter, however, is on by default _within_ a policy.
+- **This layer owns retry exclusively** — `modbus-rs`'s transport-level `retryAttempts`/`retryDelayMs`/`retryBackoffStrategy` are stripped from every transport constructor via `WithoutUpstreamRetry<T>` (`src/shared-transport.ts`), surfacing as the exported `RtuTransportOpenOptions`/`AsciiTransportOpenOptions`/`TcpTransportOpenOptions`. They retry beneath the Effect boundary (invisible to the policy, the circuit breaker, and the logs), reconnect inline (racing the supervisor fiber), and multiply attempt counts; `retryBackoffStrategy` is inert upstream regardless. `Omit` fails open, so `src/upstream-options.test.ts` holds compile-time assertions that the keys still exist upstream and are gone from what we expose — if an upstream rename ever voids the `Omit`, `bun run typecheck` fails. Do not re-expose these; the escape hatch is a raw `modbus-rs` client.
 - **`makeMockTransport`** — each service has a static `makeMockTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
 
 ## Conventions

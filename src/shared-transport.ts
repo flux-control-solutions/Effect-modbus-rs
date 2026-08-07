@@ -1,11 +1,141 @@
-import { Effect, Exit, Scope } from 'effect';
+import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
 
+import {
+  ConnectionState,
+  resolveReconnect,
+  guardCircuit,
+  superviseReconnect,
+  type ReconnectOptions,
+} from './connection';
 import { type ModbusError, ModbusNotConnectedError, toModbusError } from './errors';
 import {
   makeEffectModbusClient,
+  withResilience,
   type AnyModbusClient,
   type EffectModbusClient,
 } from './modbus-client';
+import type { ModbusRetryPolicy } from './retry';
+
+/**
+ * Resilience configuration accepted by every transport service alongside its
+ * `modbus-rs` options.
+ *
+ * Both are opt-in: with neither set, a transport behaves exactly as it always
+ * has — one attempt per operation, reconnection only when asked for.
+ */
+export interface TransportResilienceOptions {
+  /**
+   * Retry policy applied to every operation of every client from this
+   * transport. Overridable per client and per operation.
+   */
+  readonly retry?: ModbusRetryPolicy;
+  /**
+   * Hands reconnection to a supervisor fiber owned by this transport, and
+   * enables the circuit breaker that keeps callers off a dead bus.
+   */
+  readonly reconnect?: ReconnectOptions;
+}
+
+/**
+ * The `modbus-rs` transport-level retry knobs this package deliberately does
+ * not expose.
+ *
+ * They are withheld rather than merely discouraged because enabling them is
+ * never the right call under this design:
+ *
+ * - **They retry below the Effect boundary.** A failure they paper over never
+ *   reaches the policy, the circuit breaker, or the logs — the caller sees one
+ *   slow success instead of several failures and a recovery, and any
+ *   caller-side timeout is measuring inflated time.
+ * - **They reconnect.** Upstream re-establishes the link inline and replays
+ *   in-flight requests after it, which races the one supervisor fiber that is
+ *   supposed to own reconnection for the whole transport.
+ * - **They multiply.** Neither layer knows about the other, so attempt counts
+ *   compound and the two backoff curves interleave.
+ * - **`retryDelayMs` is flat and unjittered**, the collision pattern that
+ *   `RetryPolicies.serial()` exists to break up; `retryBackoffStrategy` is
+ *   documented upstream as inert, so setting it does nothing at all.
+ *
+ * Use the `retry` and `reconnect` options on {@link TransportResilienceOptions}
+ * instead. Callers who genuinely need frame-level resends can construct a raw
+ * `modbus-rs` client directly, where the trade-off is explicit.
+ */
+export type UpstreamRetryOptionKey = 'retryAttempts' | 'retryDelayMs' | 'retryBackoffStrategy';
+
+/**
+ * Upstream `modbus-rs` transport options with the retry knobs removed.
+ *
+ * Applied to every transport-creation entry point this package exposes. All
+ * three keys are optional upstream, so the result stays assignable to the
+ * original type and still satisfies the upstream `open`/`connect` call.
+ *
+ * @typeParam TOptions - The upstream options type (e.g. `RtuTransportOptions`).
+ * @see UpstreamRetryOptionKey — Why these are withheld.
+ */
+export type WithoutUpstreamRetry<TOptions> = Omit<TOptions, UpstreamRetryOptionKey>;
+
+/** Cell holding the in-flight operation of a {@link singleFlight} group, if any. */
+type InFlight<A> = Ref.Ref<Option.Option<Deferred.Deferred<A, ModbusError>>>;
+
+/**
+ * Result of electing a leader: the {@link Deferred} to await plus whether this
+ * caller drew the short straw, paired with the cell's next value.
+ */
+type Election<A> = readonly [
+  readonly [Deferred.Deferred<A, ModbusError>, boolean],
+  Option.Option<Deferred.Deferred<A, ModbusError>>,
+];
+
+/** Creates the state cell for a {@link singleFlight} group. */
+const makeInFlight = <A>(): Effect.Effect<InFlight<A>> =>
+  Ref.make(Option.none<Deferred.Deferred<A, ModbusError>>());
+
+/**
+ * Runs `work` at most once at a time, with every concurrent caller observing
+ * the same result.
+ *
+ * The first caller to arrive becomes the leader and forks `work`; later callers
+ * await the leader's {@link Deferred} instead of starting their own run. The
+ * work is forked as a daemon rather than run by the leader directly, so
+ * interrupting any individual caller — a poller being torn down, say — can
+ * neither cancel the shared operation nor strand the fibers waiting on it.
+ *
+ * The cell is cleared as the work settles, so a failure is shared by everyone
+ * waiting on that run and the next call starts a fresh one.
+ *
+ * @param inFlight - State cell shared by the callers being coalesced.
+ * @param work - The operation to run at most once at a time.
+ * @returns An Effect resolving to the shared result.
+ */
+const singleFlight = <A>(
+  inFlight: InFlight<A>,
+  work: Effect.Effect<A, ModbusError>,
+): Effect.Effect<A, ModbusError> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fresh = yield* Deferred.make<A, ModbusError>();
+      const [deferred, isLeader] = yield* Ref.modify(
+        inFlight,
+        (current): Election<A> =>
+          Option.match(current, {
+            onSome: (existing) => [[existing, false], current],
+            onNone: () => [[fresh, true], Option.some(fresh)],
+          }),
+      );
+      if (isLeader) {
+        yield* Effect.forkDaemon(
+          Effect.interruptible(work).pipe(
+            Effect.onExit((exit) =>
+              // Cleared before the deferred settles, so a waiter that immediately
+              // calls again starts a new run instead of joining a finished one.
+              Effect.zipRight(Ref.set(inFlight, Option.none()), Deferred.done(deferred, exit)),
+            ),
+          ),
+        );
+      }
+      return yield* restore(Deferred.await(deferred));
+    }),
+  );
 
 /**
  * Shared API surface that every transport service exposes to consumers.
@@ -16,13 +146,45 @@ import {
  * @see makeTransportScoped — Factory that produces this API from a raw transport.
  */
 export interface TransportServiceApi {
-  /** Obtains (or creates) a cached {@link EffectModbusClient} for the given unit ID. */
-  withClient(unitId: number): Effect.Effect<EffectModbusClient, ModbusError>;
+  /**
+   * Obtains an {@link EffectModbusClient} for the given unit ID.
+   *
+   * The client carries the transport's retry policy unless `options.retry`
+   * replaces it — useful when one bus hosts device types that need different
+   * logic. The underlying `modbus-rs` client is cached per unit ID, so clients
+   * built with different policies still share one connection.
+   *
+   * @param unitId - Modbus unit ID to address.
+   * @param options - Per-client policy replacing the transport default.
+   */
+  withClient(
+    unitId: number,
+    options?: { readonly retry?: ModbusRetryPolicy },
+  ): Effect.Effect<EffectModbusClient, ModbusError>;
+  /**
+   * Live connection state, published by the transport.
+   *
+   * Read it with `SubscriptionRef.get`, or subscribe with `.changes` to drive
+   * a status indicator:
+   *
+   * ```ts
+   * yield* Stream.runForEach(transport.connectionState.changes, (state) =>
+   *   Console.log(`link: ${state._tag}`))
+   * ```
+   */
+  readonly connectionState: SubscriptionRef.SubscriptionRef<ConnectionState>;
   /** Sets a request timeout (ms) on the underlying transport. Fails if not connected. */
   setRequestTimeout(timeoutMs: number): Effect.Effect<void, ModbusError>;
   /** Clears the request timeout. Fails if not connected. */
   clearRequestTimeout(): Effect.Effect<void, ModbusError>;
-  /** Reconnects the transport. Opens lazily if no prior connection exists. */
+  /**
+   * Reconnects the transport. Opens lazily if no prior connection exists.
+   *
+   * Concurrent calls are coalesced: fibers arriving while a reconnect is in
+   * flight join it rather than starting another, and all of them observe its
+   * result. Fails with `ModbusNotConnectedError` if the transport was closed
+   * while the reconnect was running.
+   */
   reconnect(): Effect.Effect<void, ModbusError>;
   /** Closes the transport and its scope immediately. */
   close(): Effect.Effect<void, ModbusError, Scope.Scope>;
@@ -73,7 +235,10 @@ export function makeTransportScoped<
     moduleSpecifier?: 'modbus-rs' | 'modbus-rs/web';
   },
 ) {
-  return Effect.fnUntraced(function* (options: TOptions) {
+  return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
+    // Resilience is this package's concern; only the rest reaches modbus-rs.
+    const { retry: transportRetry, reconnect: reconnectOptions, ...rest } = options;
+    const openOptions = rest as unknown as TOptions;
     // Branched as a literal specifier (not a variable) so bundlers reliably apply
     // modbus-rs's conditional exports when resolving the dynamic import.
     const mod: Record<string, unknown> =
@@ -83,52 +248,59 @@ export function makeTransportScoped<
     const TC = mod[transportKey];
 
     let transport: TTransport | null = null;
-    let connectPromise: Promise<TTransport> | null = null;
-    let reconnectPromise: Promise<void> | null = null;
+
+    const opening = yield* makeInFlight<TTransport>();
+    const reconnecting = yield* makeInFlight<void>();
+    const connectionState = yield* SubscriptionRef.make<ConnectionState>(
+      ConnectionState.Disconnected(),
+    );
+    const supervised = reconnectOptions ? resolveReconnect(reconnectOptions) : null;
+    // Captured here so the API's methods keep `R = never` while still being
+    // able to fork the supervisor into the service's own lifetime.
+    const serviceScope = yield* Effect.scope;
 
     const clientSet = new Map<number, TClient>();
 
     let closed = false;
 
+    const transportClosed = () =>
+      new ModbusNotConnectedError({
+        cause: new Error('Transport has been closed'),
+        message: 'Transport has been closed',
+      });
+
+    /**
+     * Closes a handle nothing else will close: the scope finalizer has already
+     * run, so an open/reconnect that landed afterwards owns its own cleanup.
+     * Detached, since the caller is on its way to failing anyway.
+     */
+    const closeOrphan = (t: TTransport) =>
+      Effect.forkDaemon(Effect.ignore(Effect.tryPromise(() => t.close())));
+
+    // Assigning `transport` inside the shared work rather than in the caller
+    // keeps the handle reachable — and therefore closeable — even if every
+    // caller is interrupted before the connection completes.
+    const openTransport = Effect.tryPromise({
+      try: () => openMethod(TC, openOptions),
+      catch: (error) => toModbusError(error as Error),
+    }).pipe(
+      Effect.tap((t) =>
+        closed
+          ? closeOrphan(t)
+          : Effect.zipRight(
+              Effect.sync(() => {
+                transport = t;
+              }),
+              SubscriptionRef.set(connectionState, ConnectionState.Connected()),
+            ),
+      ),
+    );
+
     const ensureOpen = Effect.fnUntraced(function* () {
-      if (transport) {
-        if (closed) {
-          return yield* new ModbusNotConnectedError({
-            cause: new Error('Transport has been closed'),
-            message: 'Transport has been closed',
-          });
-        }
-        return transport;
-      }
-      if (closed) {
-        return yield* new ModbusNotConnectedError({
-          cause: new Error('Transport has been closed'),
-          message: 'Transport has been closed',
-        });
-      }
-      if (!connectPromise) {
-        connectPromise = openMethod(TC, options);
-      }
-      const t = yield* Effect.tryPromise({
-        try: () => connectPromise!,
-        catch: (error) => toModbusError(error as Error),
-      }).pipe(
-        Effect.catchAll((err) => {
-          connectPromise = null;
-          return Effect.fail(err);
-        }),
-      );
-      if (closed) {
-        connectPromise = null;
-        yield* Effect.fork(
-          Effect.promise(() => t.close()).pipe(Effect.catchAll(() => Effect.void)),
-        );
-        return yield* new ModbusNotConnectedError({
-          cause: new Error('Transport has been closed'),
-          message: 'Transport has been closed',
-        });
-      }
-      transport = t;
+      if (closed) return yield* transportClosed();
+      if (transport) return transport;
+      const t = yield* singleFlight(opening, openTransport);
+      if (closed) return yield* transportClosed();
       return t;
     });
 
@@ -136,17 +308,69 @@ export function makeTransportScoped<
       if (closed) return Effect.void;
       closed = true;
       const t = transport;
-      if (!t) return Effect.void;
+      if (!t) return SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
       return Effect.andThen(
         Effect.logDebug(`Closing ${serviceName}`),
-        Effect.promise(() => t.close()),
+        Effect.zipRight(
+          Effect.promise(() => t.close()),
+          SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
+        ),
       );
     });
 
     const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
+    /** The transport's own reconnect, as the supervisor drives it. */
+    const reconnectOnce = Effect.suspend(() => {
+      const t = transport;
+      if (closed || !t) return transportClosed();
+      return singleFlight(
+        reconnecting,
+        Effect.tryPromise({
+          try: () => t.reconnect(),
+          catch: (error) => toModbusError(error as Error),
+        }).pipe(Effect.tap(() => (closed ? closeOrphan(t) : Effect.void))),
+      );
+    });
+
+    /**
+     * Hands a connection-level failure to the supervisor.
+     *
+     * The transition is claimed atomically, so of the fibers that fail together
+     * exactly one starts the supervisor and the rest simply carry on failing —
+     * one reconnect for the whole application, not one per call site.
+     */
+    const report = (error: ModbusError): Effect.Effect<void> => {
+      if (!supervised || closed || !supervised.triggers(error)) return Effect.void;
+      return Effect.gen(function* () {
+        const claimed = yield* SubscriptionRef.modify(connectionState, (current) =>
+          ConnectionState.$is('Connected')(current)
+            ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
+            : [false, current],
+        );
+        if (!claimed) return;
+        yield* Effect.logDebug(`${serviceName}: reconnecting after ${error.message}`);
+        yield* Effect.forkIn(
+          superviseReconnect(reconnectOnce, connectionState, supervised),
+          serviceScope,
+        );
+      });
+    };
+
+    const resilience = {
+      // Without a supervisor there is no breaker: nothing else would ever
+      // close the circuit again.
+      guard: supervised ? guardCircuit(connectionState) : Effect.void,
+      report,
+    };
+
     return {
-      withClient: Effect.fnUntraced(function* (unitId: number) {
+      connectionState,
+
+      withClient: Effect.fnUntraced(function* (
+        unitId: number,
+        clientOptions?: { readonly retry?: ModbusRetryPolicy },
+      ) {
         const t = yield* ensureOpen();
         let client = clientSet.get(unitId);
         if (!client) {
@@ -156,7 +380,10 @@ export function makeTransportScoped<
           });
           clientSet.set(unitId, client);
         }
-        return makeEffectModbusClient(client);
+        return withResilience(makeEffectModbusClient(client), {
+          ...resilience,
+          policy: clientOptions?.retry ?? transportRetry,
+        });
       }),
 
       setRequestTimeout: Effect.fnUntraced(function* (timeoutMs: number) {
@@ -182,36 +409,33 @@ export function makeTransportScoped<
       }),
 
       reconnect: Effect.fnUntraced(function* () {
-        if (closed) {
-          return yield* new ModbusNotConnectedError({
-            cause: new Error('Transport has been closed'),
-            message: 'Transport has been closed',
-          });
-        }
-        if (transport) {
-          if (!reconnectPromise) {
-            reconnectPromise = transport
-              .reconnect()
-              .then(() => {
-                reconnectPromise = null;
-              })
-              .catch((err) => {
-                reconnectPromise = null;
-                throw err;
-              });
-          }
-          yield* Effect.tryPromise({
-            try: () => reconnectPromise!,
-            catch: (error) => toModbusError(error as Error),
-          });
-        } else {
+        if (closed) return yield* transportClosed();
+        const t = transport;
+        if (!t) {
           yield* ensureOpen();
+          return;
         }
+        yield* singleFlight(
+          reconnecting,
+          Effect.tryPromise({
+            try: () => t.reconnect(),
+            catch: (error) => toModbusError(error as Error),
+          }).pipe(
+            // A reconnect that lands after the scope finalizer has closed the
+            // transport has reopened a handle nobody owns.
+            Effect.tap(() => (closed ? closeOrphan(t) : Effect.void)),
+          ),
+        );
+        // Mirrors ensureOpen: report the closure rather than a success against
+        // a transport that was torn down while the reconnect was in flight.
+        if (closed) return yield* transportClosed();
+        yield* SubscriptionRef.set(connectionState, ConnectionState.Connected());
       }),
 
       close: Effect.fnUntraced(function* () {
         if (closed) return;
         closed = true;
+        yield* SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
         const t = transport;
         if (t) {
           yield* Effect.tryPromise({

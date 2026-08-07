@@ -2,8 +2,17 @@ import { Effect, Layer } from 'effect';
 import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
 
 import { makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import type { SlaveDeviceDefinitions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
+
+/**
+ * {@link RtuTransportOptions} minus the upstream retry knobs.
+ *
+ * @see WithoutUpstreamRetry — Why they are withheld.
+ */
+export type RtuTransportOpenOptions = WithoutUpstreamRetry<RtuTransportOptions>;
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncRtuTransport}
@@ -18,15 +27,20 @@ import { makeTransportScoped } from './shared-transport';
  * requests for the same unit ID reuse the same client.
  *
  * @see AsyncRtuTransport — Upstream `modbus-rs` RTU transport.
- * @see RtuTransportOptions — Configuration for the RTU serial port.
+ * @see RtuTransportOpenOptions — Configuration for the RTU serial port.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class RtuTransportService extends Effect.Service<RtuTransportService>()(
   'RtuTransportService',
   {
-    scoped: makeTransportScoped<RtuTransportOptions, AsyncSerialModbusClient, AsyncRtuTransport>(
+    scoped: makeTransportScoped<
+      RtuTransportOpenOptions,
+      AsyncSerialModbusClient,
+      AsyncRtuTransport
+    >(
       'AsyncRtuTransport',
-      (TC: unknown, options: RtuTransportOptions) => (TC as typeof AsyncRtuTransport).open(options),
+      (TC: unknown, options: RtuTransportOpenOptions) =>
+        (TC as typeof AsyncRtuTransport).open(options),
       'RtuTransportService',
     ),
   },
@@ -39,14 +53,14 @@ export class RtuTransportService extends Effect.Service<RtuTransportService>()(
    * simulated Modbus slaves and their register/coil maps.
    *
    * @param devices - Slave device definitions for the mock.
-   * @returns A function that takes {@link RtuTransportOptions} and
+   * @returns A function that takes {@link RtuTransportOpenOptions} and
    *          returns a scoped {@link Layer} providing the mock service.
    *
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: RtuTransportOptions) =>
+    return (options: RtuTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         RtuTransportService,
         factory(options) as unknown as Effect.Effect<RtuTransportService>,

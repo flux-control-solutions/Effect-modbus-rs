@@ -2,7 +2,9 @@ import { Effect, Layer } from 'effect';
 import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping `modbus-rs`'s browser {@link WasmWsTransport}
@@ -46,7 +48,7 @@ export class WasmWsTransportService extends Effect.Service<WasmWsTransportServic
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: WasmWsTransportOptions) =>
+    return (options: WasmWsTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         WasmWsTransportService,
         factory(options) as unknown as Effect.Effect<WasmWsTransportService>,

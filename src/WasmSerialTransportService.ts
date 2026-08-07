@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 
 import { makeMockTransport, type SlaveDeviceDefinitions } from './mocks';
 import type { TransportServiceApi } from './shared-transport';
@@ -74,9 +74,6 @@ export class WasmSerialTransportService extends Context.Tag('WasmSerialTransport
     return (
       options: WasmAsciiTransportOpenOptions | WasmRtuTransportOpenOptions,
     ): Layer.Layer<WasmSerialTransportService> =>
-      Layer.scoped(
-        WasmSerialTransportService,
-        factory(options) as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.scoped(WasmSerialTransportService, factory(options));
   };
 }

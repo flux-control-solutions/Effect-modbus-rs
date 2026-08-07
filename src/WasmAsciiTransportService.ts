@@ -7,7 +7,9 @@ import type {
 } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions } from './shared-transport';
 
 /**
  * Options for {@link WasmAsciiTransportService}. `WasmAsciiTransport.open()` takes the
@@ -67,7 +69,9 @@ export class WasmAsciiTransportService extends Effect.Service<WasmAsciiTransport
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: WasmAsciiTransportOpenOptions) =>
+    return (
+      options: WasmAsciiTransportOpenOptions & TransportResilienceOptions & MockFaultOptions,
+    ) =>
       Layer.scoped(
         WasmAsciiTransportService,
         factory(options) as unknown as Effect.Effect<WasmAsciiTransportService>,

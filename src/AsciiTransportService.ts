@@ -5,8 +5,17 @@ import type {
   AsciiTransportOptions,
 } from 'modbus-rs';
 
-import { makeMockTransport, SlaveDeviceDefinitions } from './mocks';
+import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
+import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
+import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
+
+/**
+ * {@link AsciiTransportOptions} minus the upstream retry knobs.
+ *
+ * @see WithoutUpstreamRetry — Why they are withheld.
+ */
+export type AsciiTransportOpenOptions = WithoutUpstreamRetry<AsciiTransportOptions>;
 
 /**
  * Scoped Effect service wrapping the `modbus-rs` {@link AsyncAsciiTransport}
@@ -21,19 +30,19 @@ import { makeTransportScoped } from './shared-transport';
  * requests for the same unit ID reuse the same client.
  *
  * @see AsyncAsciiTransport — Upstream `modbus-rs` ASCII transport.
- * @see AsciiTransportOptions — Configuration for the ASCII serial port.
+ * @see AsciiTransportOpenOptions — Configuration for the ASCII serial port.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class AsciiTransportService extends Effect.Service<AsciiTransportService>()(
   'AsciiTransportService',
   {
     scoped: makeTransportScoped<
-      AsciiTransportOptions,
+      AsciiTransportOpenOptions,
       AsyncSerialModbusClient,
       AsyncAsciiTransport
     >(
       'AsyncAsciiTransport',
-      (TC: unknown, options: AsciiTransportOptions) =>
+      (TC: unknown, options: AsciiTransportOpenOptions) =>
         (TC as typeof AsyncAsciiTransport).open(options),
       'AsciiTransportService',
     ),
@@ -47,14 +56,14 @@ export class AsciiTransportService extends Effect.Service<AsciiTransportService>
    * simulated Modbus slaves and their register/coil maps.
    *
    * @param devices - Slave device definitions for the mock.
-   * @returns A function that takes {@link AsciiTransportOptions} and
+   * @returns A function that takes {@link AsciiTransportOpenOptions} and
    *          returns a scoped {@link Layer} providing the mock service.
    *
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
-    return (options: AsciiTransportOptions) =>
+    return (options: AsciiTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
       Layer.scoped(
         AsciiTransportService,
         factory(options) as unknown as Effect.Effect<AsciiTransportService>,

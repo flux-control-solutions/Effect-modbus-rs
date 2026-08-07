@@ -118,6 +118,27 @@ export class ModbusNotConnectedError extends Data.TaggedError('ModbusNotConnecte
 }> {}
 
 /**
+ * Error indicating the transport's circuit breaker is open: the device is
+ * unreachable and the transport is reconnecting (or waiting to probe again),
+ * so the request was refused without touching the wire.
+ *
+ * This is a **local** error — it is never returned by `modbus-rs`. It is raised
+ * by the transport when its connection state is `Reconnecting` or `Down`,
+ * which keeps a dead device from being hammered by every caller at once.
+ *
+ * Retryable by default: a policy with enough budget rides out the outage
+ * cheaply, since each refused attempt costs nothing on the bus.
+ *
+ * @see ConnectionState — The transport state that produces this error.
+ */
+export class ModbusCircuitOpenError extends Data.TaggedError('ModbusCircuitOpenError')<{
+  /** The failure that opened the circuit, or a descriptive error. */
+  readonly cause: Error;
+  /** Human-readable explanation of the error. */
+  readonly message: string;
+}> {}
+
+/**
  * Union of all typed Modbus errors emitted by this library.
  *
  * Handle with {@linkcode Effect.catchTags}:
@@ -141,6 +162,7 @@ export type ModbusError =
   | ModbusInvalidArgumentError
   | ModbusConnectionClosedError
   | ModbusNotConnectedError
+  | ModbusCircuitOpenError
   | ModbusInternalError;
 
 /**

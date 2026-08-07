@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, SubscriptionRef } from 'effect';
 import {
   CoilState,
   type AsciiTransportOptions,
@@ -19,8 +19,37 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
+import { ConnectionState, guardCircuit, resolveReconnect, superviseReconnect } from './connection';
 import { ModbusInvalidArgumentError, type ModbusError } from './errors';
-import type { EffectModbusClient } from './modbus-client';
+import { withResilience, type ModbusOperations } from './modbus-client';
+import type { ModbusRetryPolicy } from './retry';
+import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
+
+/**
+ * Mock-only fault injection.
+ *
+ * Lets a test or example drive retry policies, backoff, and circuit-breaker
+ * behaviour end to end without hardware: the hook runs before each operation
+ * *attempt*, so returning an error is indistinguishable from a device that
+ * refused that attempt.
+ */
+export interface MockFaultOptions {
+  /**
+   * Called before every operation attempt. Return an error to fail that
+   * attempt, or `undefined` to let it through.
+   *
+   * ```ts
+   * let remaining = 2;
+   * const fault = () => (remaining-- > 0 ? new ModbusTimeoutError({ ... }) : undefined);
+   * ```
+   */
+  readonly fault?: () => ModbusError | undefined;
+  /**
+   * Called before every mock reconnect attempt. Return an error to keep the
+   * link down, or `undefined` to let the reconnect succeed.
+   */
+  readonly reconnectFault?: () => ModbusError | undefined;
+}
 
 /**
  * Schema for a single coil (digital output) definition.
@@ -164,9 +193,9 @@ const failOutOfRange = (label: string, address: number, quantity?: number) =>
  *
  * @param state - The mutable device state to read from and write to.
  * @param unitId - The Modbus unit ID this client represents (used for logging).
- * @returns An `EffectModbusClient` backed by in-memory state.
+ * @returns The Modbus operations backed by in-memory state.
  */
-const makeMockModbusClient = (state: MockDeviceState, unitId: number): EffectModbusClient => ({
+const makeMockModbusClient = (state: MockDeviceState, unitId: number): ModbusOperations => ({
   readCoils: Effect.fnUntraced(function* (opts: ReadBitsOptions) {
     yield* Effect.logDebug(`[Mock] unitId=${unitId} readCoils`, opts);
     if (opts.address + opts.quantity > state.maxCoilAddress + 1) {
@@ -320,8 +349,8 @@ const makeMockModbusClient = (state: MockDeviceState, unitId: number): EffectMod
  * Accepts an array of {@link SlaveDeviceDefinition} that describe the
  * simulated Modbus slaves, their register maps, and coil states.
  * The returned factory matches the signature expected by the transport
- * service constructors (`RtuTransportOptions | AsciiTransportOptions |
- * TcpTransportOptions`) so it can be injected into any service layer.
+ * service constructors (`RtuTransportOpenOptions | AsciiTransportOpenOptions |
+ * TcpTransportOpenOptions`) so it can be injected into any service layer.
  *
  * Unsupported function codes (FIFO queue, file records) return
  * {@link ModbusInvalidArgumentError}.
@@ -353,18 +382,64 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
   }
 
   return (
-    _options:
-      | RtuTransportOptions
-      | AsciiTransportOptions
-      | TcpTransportOptions
+    options: (
+      | WithoutUpstreamRetry<RtuTransportOptions>
+      | WithoutUpstreamRetry<AsciiTransportOptions>
+      | WithoutUpstreamRetry<TcpTransportOptions>
       | WasmWsTransportOptions
-      | WasmSerialTransportOptions,
+      | WasmSerialTransportOptions
+    ) &
+      TransportResilienceOptions &
+      MockFaultOptions,
   ) =>
     Effect.gen(function* () {
       yield* Effect.logDebug('Mock transport opened with devices:', deviceDefs);
 
+      const connectionState = yield* SubscriptionRef.make<ConnectionState>(
+        ConnectionState.Connected(),
+      );
+      const supervised = options.reconnect ? resolveReconnect(options.reconnect) : null;
+      const serviceScope = yield* Effect.scope;
+
+      const reconnectOnce = Effect.zipRight(
+        Effect.logDebug('Mock: reconnecting'),
+        Effect.suspend(() => {
+          const injected = options.reconnectFault?.();
+          return injected ? Effect.fail(injected) : Effect.void;
+        }),
+      );
+
+      const report = (error: ModbusError): Effect.Effect<void> => {
+        if (!supervised || !supervised.triggers(error)) return Effect.void;
+        return Effect.gen(function* () {
+          const claimed = yield* SubscriptionRef.modify(connectionState, (current) =>
+            ConnectionState.$is('Connected')(current)
+              ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
+              : [false, current],
+          );
+          if (!claimed) return;
+          yield* Effect.forkIn(
+            superviseReconnect(reconnectOnce, connectionState, supervised),
+            serviceScope,
+          );
+        });
+      };
+
+      const guard = Effect.zipRight(
+        supervised ? guardCircuit(connectionState) : Effect.void,
+        Effect.suspend(() => {
+          const injected = options.fault?.();
+          return injected ? Effect.fail(injected) : Effect.void;
+        }),
+      );
+
       return {
-        withClient: Effect.fnUntraced(function* (unitId: number) {
+        connectionState,
+
+        withClient: Effect.fnUntraced(function* (
+          unitId: number,
+          clientOptions?: { readonly retry?: ModbusRetryPolicy },
+        ) {
           const state = deviceStates.get(unitId);
           if (!state) {
             return yield* new ModbusInvalidArgumentError({
@@ -372,19 +447,28 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
               message: `Device with unitId ${unitId} not found in mock configuration`,
             });
           }
-          return makeMockModbusClient(state, unitId);
+          // Retry policies still apply, so a mock can exercise them end to end.
+          // The fault hook rides in the guard slot, which already runs once per
+          // attempt — exactly where an injected failure belongs.
+          return withResilience(makeMockModbusClient(state, unitId), {
+            guard,
+            report,
+            policy: clientOptions?.retry ?? options.retry,
+          });
         }),
 
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,
         reconnect: () =>
-          Effect.asVoid(Effect.logDebug('Mock: reconnecting')) as Effect.Effect<
-            void,
-            ModbusError,
-            never
-          >,
+          Effect.zipRight(
+            reconnectOnce,
+            SubscriptionRef.set(connectionState, ConnectionState.Connected()),
+          ),
         close: () =>
-          Effect.logDebug('Mock: closing transport') as Effect.Effect<void, ModbusError, never>,
+          Effect.zipRight(
+            Effect.logDebug('Mock: closing transport'),
+            SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
+          ) as Effect.Effect<void, ModbusError, never>,
         hasPendingRequests: () => false,
       };
     });

@@ -23,6 +23,7 @@ import type { WasmWsModbusClient, WasmSerialModbusClient } from 'modbus-rs/web';
 
 import type { ModbusError } from './errors';
 import { toModbusError } from './errors';
+import { retryModbus, type ModbusRetryPolicy } from './retry';
 
 /** The two native (napi) clients — same method surface, sharing one factory. */
 export type NativeModbusClient = AsyncSerialModbusClient | AsyncTcpModbusClient;
@@ -39,7 +40,7 @@ const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
   });
 
 /**
- * Effect-ified Modbus client wrapping a `modbus-rs` transport client.
+ * The Modbus function-code surface, before any resilience is layered on.
  *
  * Each method delegates to the equivalent method on the underlying native
  * or WASM client, converting the Promise-based API into an
@@ -53,7 +54,7 @@ const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
  * @see AsyncSerialModbusClient — Upstream `modbus-rs` serial client API.
  * @see AsyncTcpModbusClient — Upstream `modbus-rs` TCP client API.
  */
-export interface EffectModbusClient {
+export interface ModbusOperations {
   /**
    * Reads holding registers from the Modbus device (FC03).
    *
@@ -236,7 +237,7 @@ export interface EffectModbusClient {
  * @see AsyncSerialModbusClient — Upstream native serial client API.
  * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const makeEffectModbusClient = (client: AnyModbusClient): EffectModbusClient => ({
+export const makeEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
@@ -253,3 +254,87 @@ export const makeEffectModbusClient = (client: AnyModbusClient): EffectModbusCli
   diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
   readDeviceIdentification: (opts) => wrap(() => client.readDeviceIdentification(opts)),
 });
+
+/**
+ * Transport-owned resilience applied to every operation of a client.
+ *
+ * Assembled by the transport, not by call sites: the guard and the failure
+ * report both consult state that belongs to the transport, so a single
+ * reconnect serves every client derived from it.
+ */
+export interface ClientResilience {
+  /** Refuses the operation while the transport's circuit is open. */
+  readonly guard: Effect.Effect<void, ModbusError>;
+  /** Reports a failure so the transport can decide whether to reconnect. */
+  readonly report: (error: ModbusError) => Effect.Effect<void>;
+  /** Retry policy applied to each operation, if any. */
+  readonly policy?: ModbusRetryPolicy;
+}
+
+/**
+ * A Modbus client with the transport's resilience already applied.
+ *
+ * Obtained from `transport.withClient(unitId)`. Every operation is guarded by
+ * the transport's circuit breaker, reports connection failures to the
+ * transport's reconnect supervisor, and carries whatever retry policy the
+ * transport or the `withClient` call attached.
+ */
+export interface EffectModbusClient extends ModbusOperations {
+  /**
+   * Returns an equivalent client whose operations use `policy` **instead of**
+   * the one this client carries.
+   *
+   * Replaces rather than composes, so an override cannot accidentally multiply
+   * attempt counts. `RetryPolicies.none()` opts a call site out entirely.
+   *
+   * ```ts
+   * yield* client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value })
+   * ```
+   */
+  withRetry(policy: ModbusRetryPolicy): EffectModbusClient;
+}
+
+/**
+ * Layers transport-owned resilience over a raw {@link ModbusOperations}.
+ *
+ * Each operation runs as: circuit guard → operation → failure report, with the
+ * retry policy (if any) wrapped around the whole sequence. Ordering matters —
+ * the guard runs per *attempt*, so once the breaker opens, a retrying operation
+ * costs nothing on the wire while it waits for the link to come back.
+ *
+ * @param operations - The unwrapped function-code surface.
+ * @param resilience - Guard, failure report, and optional retry policy.
+ * @returns A client with resilience applied to every operation.
+ */
+export const withResilience = (
+  operations: ModbusOperations,
+  resilience: ClientResilience,
+): EffectModbusClient => {
+  const run = <A>(
+    operation: () => Effect.Effect<A, ModbusError>,
+  ): Effect.Effect<A, ModbusError> => {
+    const attempt = Effect.zipRight(resilience.guard, Effect.suspend(operation)).pipe(
+      Effect.tapError((error) => resilience.report(error)),
+    );
+    return resilience.policy ? retryModbus(resilience.policy)(attempt) : attempt;
+  };
+
+  return {
+    readHoldingRegisters: (opts) => run(() => operations.readHoldingRegisters(opts)),
+    readInputRegisters: (opts) => run(() => operations.readInputRegisters(opts)),
+    writeSingleRegister: (opts) => run(() => operations.writeSingleRegister(opts)),
+    writeMultipleRegisters: (opts) => run(() => operations.writeMultipleRegisters(opts)),
+    readWriteMultipleRegisters: (opts) => run(() => operations.readWriteMultipleRegisters(opts)),
+    readCoils: (opts) => run(() => operations.readCoils(opts)),
+    writeSingleCoil: (opts) => run(() => operations.writeSingleCoil(opts)),
+    writeMultipleCoils: (opts) => run(() => operations.writeMultipleCoils(opts)),
+    readDiscreteInputs: (opts) => run(() => operations.readDiscreteInputs(opts)),
+    readFifoQueue: (opts) => run(() => operations.readFifoQueue(opts)),
+    readFileRecord: (opts) => run(() => operations.readFileRecord(opts)),
+    writeFileRecord: (opts) => run(() => operations.writeFileRecord(opts)),
+    readExceptionStatus: () => run(() => operations.readExceptionStatus()),
+    diagnostics: (opts) => run(() => operations.diagnostics(opts)),
+    readDeviceIdentification: (opts) => run(() => operations.readDeviceIdentification(opts)),
+    withRetry: (policy) => withResilience(operations, { ...resilience, policy }),
+  };
+};
