@@ -13,6 +13,11 @@ permissions: {}
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Husky's pre-commit hook runs the local format, lint, and test gate. The
+    # only commit in this job is the generated "Version Packages" commit, and a
+    # hook failure there stops the release. The steps below are the gate here.
+    env:
+      HUSKY: '0'
     permissions:
       contents: write
       id-token: write
