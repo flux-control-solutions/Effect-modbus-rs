@@ -1,5 +1,5 @@
 ---
-'@flux-control/effect-modbus-rs': minor
+'@flux-control/effect-modbus-rs': patch
 ---
 
 Widen the options of the two abstract serial tags to agree with the concrete tags.
