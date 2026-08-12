@@ -193,7 +193,32 @@ program.pipe(
 // );
 ```
 
-It also supports `makeMockTransport` for testing:
+`WasmSerialTransportService` is the browser equivalent. Provide it with `fromRtu` or `fromAscii`, and give it a port handle from `requestSerialPort`.
+
+Both abstract tags also have `makeMockTransport` for tests. The option set is the same as the option set of the concrete tags. Thus a test that keeps the framing abstract can also set `retry`, `reconnect`, and the mock fault hooks:
+
+```ts
+import {
+  ModbusTimeoutError,
+  RetryPolicies,
+  SerialTransportService,
+} from '@flux-control/effect-modbus-rs';
+
+let attempts = 0;
+
+const layer = SerialTransportService.makeMockTransport([device])({
+  portPath: '/dev/ttyUSB0',
+  baudRate: 9600,
+  retry: RetryPolicies.serial(),
+  // The first two attempts of each operation fail. The policy retries them.
+  fault: () =>
+    attempts++ < 2
+      ? new ModbusTimeoutError({ message: 'no response', cause: new Error('timeout') })
+      : undefined,
+});
+```
+
+See [Testing with mocks](#testing-with-mocks) for the `fault` hook and the `reconnectFault` hook.
 
 ## Client API
 
@@ -475,9 +500,40 @@ const mockLayer = RtuTransportService.makeMockTransport([device])({
 program.pipe(Effect.provide(mockLayer), Effect.scoped, Effect.runPromise);
 ```
 
-The mock factory is identical for all three transports; swap `RtuTransportService` for `TcpTransportService` or `AsciiTransportService` and adjust the options shape accordingly — each exposes a static `makeMockTransport` method.
+The mock factory is the same for every transport. Each tag has a static `makeMockTransport` method, and each accepts the same options: the open options of that transport, the resilience options (`retry` and `reconnect`), and the two fault hooks below. To change transport, use a different tag and adjust the shape of the open options.
 
 See `examples/rtu-mock.ts`, `examples/tcp-mock.ts`, and `examples/ascii-mock.ts` for full walkthroughs covering read, write, multi-device access, and error-case testing.
+
+### Fault injection
+
+Two mock-only hooks make a policy testable without hardware:
+
+| Hook             | When it runs                   | Return value                                                                 |
+| ---------------- | ------------------------------ | ---------------------------------------------------------------------------- |
+| `fault`          | Before every operation attempt | A `ModbusError` fails that attempt. `undefined` lets it through.             |
+| `reconnectFault` | Before every reconnect attempt | A `ModbusError` keeps the link down. `undefined` lets the reconnect succeed. |
+
+Because `fault` runs before each _attempt_, an error from it is the same as a device that refused that attempt. A retry policy, the backoff, and the circuit breaker therefore behave as they do on a real bus:
+
+```ts
+import {
+  ModbusTimeoutError,
+  RetryPolicies,
+  RtuTransportService,
+} from '@flux-control/effect-modbus-rs';
+
+let attempts = 0;
+
+const mockLayer = RtuTransportService.makeMockTransport([device])({
+  portPath: '/dev/ttyUSB0',
+  baudRate: 9600,
+  retry: RetryPolicies.serial(),
+  fault: () =>
+    attempts++ < 2
+      ? new ModbusTimeoutError({ message: 'no response', cause: new Error('timeout') })
+      : undefined,
+});
+```
 
 ### Slave device schema
 

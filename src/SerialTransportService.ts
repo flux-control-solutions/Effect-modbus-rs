@@ -1,7 +1,7 @@
 import { Context, Layer } from 'effect';
 
 import { AsciiTransportService, type AsciiTransportOpenOptions } from './AsciiTransportService';
-import { makeMockTransport, type SlaveDeviceDefinitions } from './mocks';
+import { makeMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
 import { RtuTransportService, type RtuTransportOpenOptions } from './RtuTransportService';
 import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
@@ -57,16 +57,28 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
   }
 
   /**
-   * Creates a mock {@link Layer} providing {@link SerialTransportService}
-   * for testing or development.
+   * Creates a mock {@link Layer} that provides {@link SerialTransportService}
+   * for tests or development.
    *
-   * Accepts an array of {@link SlaveDeviceDefinition} describing the
-   * simulated Modbus slaves and their register/coil maps.
+   * The `devices` parameter is an array of {@link SlaveDeviceDefinition}. Each
+   * definition gives the coil map and the register map of one simulated slave.
+   *
+   * The option set is the same as the option set of the concrete tags. Thus a
+   * test that keeps the framing abstract can also set `retry`, `reconnect`,
+   * `fault`, and `reconnectFault`.
+   *
+   * @param devices - The slave device definitions for the mock.
+   * @returns A function that takes the mock options and gives a scoped
+   *          {@link Layer} that provides the mock service.
+   * @see MockFaultOptions — The `fault` hook and the `reconnectFault` hook.
+   * @see makeMockTransport — The mock factory that this method uses.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (
-      options: (AsciiTransportOpenOptions | RtuTransportOpenOptions) & TransportResilienceOptions,
+      options: (AsciiTransportOpenOptions | RtuTransportOpenOptions) &
+        TransportResilienceOptions &
+        MockFaultOptions,
     ): Layer.Layer<SerialTransportService> =>
       Layer.scoped(SerialTransportService, factory(options));
   };
