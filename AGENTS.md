@@ -81,6 +81,7 @@ examples/
 ## Tooling
 
 - **Fallow MCP** is configured via `opencode.json` (`bunx fallow-mcp`). The `.fallowrc.json` entry covers `index.ts`, `src/`, and `examples/`. Run `fallow audit` for pre-commit quality checks on changed code.
+- **`CHANGELOG.md` is in `ignorePatterns` in `.oxfmtrc.json`.** Do not remove it. `changeset version` writes this file and formats it with its own bundled prettier, which uses double quotes in fenced code blocks. `oxfmt` uses `singleQuote`. Thus the two formatters disagree about each changeset that contains a string literal. The husky pre-commit hook runs `bun run format`, so that disagreement stopped the "Version Packages" commit and the release with it (run 31605534234). The release job also sets `HUSKY: '0'`, because the workflow steps are already the gate there.
 
 ## Referencing upstream libraries
 
