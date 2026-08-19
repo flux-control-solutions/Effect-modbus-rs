@@ -42,10 +42,10 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
-    "@effect/language-service": "^0.86.6",
-    "@effect/platform-bun": "^0.90.0",
+    "@effect/language-service": "0.87.2",
+    "@effect/platform-bun": "^4.0.0-rc.109",
     "@types/bun": "latest",
-    "effect": "^3.22.0",
+    "effect": "^4.0.0-rc.109",
     "fallow": "^2.104.0",
     "husky": "^9.1.7",
     "oxfmt": "^0.60.0",
@@ -53,6 +53,6 @@
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "effect": "^3.22.0"
+    "effect": "^4.0.0-rc.109"
   }
 }

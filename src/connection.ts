@@ -1,4 +1,4 @@
-import { Data, Duration, Effect, Either, SubscriptionRef } from 'effect';
+import { Data, Duration, Effect, Result, SubscriptionRef } from 'effect';
 
 import { ModbusCircuitOpenError, type ModbusError } from './errors';
 import { makeRetryPolicy, retryModbus, type ModbusErrorTag, type ModbusRetryPolicy } from './retry';
@@ -45,7 +45,7 @@ export interface ReconnectOptions {
    * How long the circuit stays open after attempts are exhausted, before the
    * supervisor probes again. Default `30 seconds`.
    */
-  readonly resetAfter?: Duration.DurationInput;
+  readonly resetAfter?: Duration.Input;
   /**
    * Which operation failures hand control to the supervisor.
    * Default `["ModbusConnectionClosedError", "ModbusTransportError"]`.
@@ -78,7 +78,7 @@ export const resolveReconnect = (options: ReconnectOptions): ResolvedReconnect =
   const triggerTags = options.triggerOn ?? defaultTriggers;
   return {
     policy: options.policy ?? defaultReconnectPolicy,
-    resetAfter: Duration.decode(options.resetAfter ?? '30 seconds'),
+    resetAfter: Duration.fromInputUnsafe(options.resetAfter ?? '30 seconds'),
     triggers: (error) => triggerTags.includes(error._tag),
   };
 };
@@ -149,14 +149,14 @@ export const superviseReconnect = (
         retryModbus(resolved.policy),
       );
 
-      const result = yield* Effect.either(attempt);
-      if (Either.isRight(result)) {
+      const result = yield* Effect.result(attempt);
+      if (Result.isSuccess(result)) {
         yield* SubscriptionRef.set(state, ConnectionState.Connected());
         return;
       }
 
-      yield* Effect.logDebug(`Reconnect attempts exhausted: ${result.left.message}`);
-      yield* SubscriptionRef.set(state, ConnectionState.Down({ cause: result.left }));
+      yield* Effect.logDebug(`Reconnect attempts exhausted: ${result.failure.message}`);
+      yield* SubscriptionRef.set(state, ConnectionState.Down({ cause: result.failure }));
       yield* Effect.sleep(resolved.resetAfter);
       const probe = yield* SubscriptionRef.modify(state, (current) =>
         ConnectionState.$is('Down')(current)

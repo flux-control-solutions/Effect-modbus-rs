@@ -9,7 +9,7 @@
  */
 
 import { BunRuntime } from '@effect/platform-bun';
-import { Console, Effect, Either, LogLevel, Logger, Schedule, Stream } from 'effect';
+import { Console, Effect, References, Result, Schedule, Stream } from 'effect';
 
 import { TcpTransportService } from '../src/TcpTransportService';
 
@@ -17,7 +17,7 @@ const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
   const client = yield* transport.withClient(1);
 
-  const poll = Effect.either(
+  const poll = Effect.result(
     client.readHoldingRegisters({ address: 0, quantity: 10 }).pipe(
       Effect.catchTags({
         ModbusConnectionClosedError: (err) =>
@@ -34,12 +34,13 @@ const program = Effect.gen(function* () {
     ),
   );
 
-  const stream = Stream.repeatEffectWithSchedule(poll, Schedule.spaced('5 seconds'));
+  const stream = Stream.fromEffectSchedule(poll, Schedule.spaced('5 seconds'));
 
   yield* Stream.runForEach(stream, (result) =>
-    Either.match(result, {
-      onLeft: (error) => Console.log(`[${new Date().toISOString()}] Poll failed: ${error.message}`),
-      onRight: (registers) =>
+    Result.match(result, {
+      onFailure: (error) =>
+        Console.log(`[${new Date().toISOString()}] Poll failed: ${error.message}`),
+      onSuccess: (registers) =>
         Console.log(`[${new Date().toISOString()}] Holding registers [0..9]:`, registers),
     }),
   );
@@ -48,7 +49,7 @@ const program = Effect.gen(function* () {
 BunRuntime.runMain(
   program.pipe(
     Effect.provide(
-      TcpTransportService.Default({
+      TcpTransportService.make({
         host: 'localhost',
         port: 502,
       }),
@@ -62,7 +63,7 @@ BunRuntime.runMain(
       ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
       ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
     }),
-    Logger.withMinimumLogLevel(LogLevel.Debug),
+    Effect.provideService(References.MinimumLogLevel, 'Debug'),
     Effect.scoped,
   ),
 );

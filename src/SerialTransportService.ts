@@ -24,10 +24,10 @@ import type { TransportResilienceOptions, TransportServiceApi } from './shared-t
  * Layer.provide(SerialTransportService.fromRtu({ path: "/dev/ttyUSB0", baudRate: 9600 }))
  * ```
  */
-export class SerialTransportService extends Context.Tag('SerialTransportService')<
+export class SerialTransportService extends Context.Service<
   SerialTransportService,
   TransportServiceApi
->() {
+>()('SerialTransportService') {
   /**
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an ASCII transport.
@@ -35,11 +35,9 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
   static fromAscii(
     options: AsciiTransportOpenOptions & TransportResilienceOptions,
   ): Layer.Layer<SerialTransportService> {
-    return Layer.project(
-      AsciiTransportService,
-      SerialTransportService,
-      (ascii) => ascii,
-    )(AsciiTransportService.Default(options));
+    return Layer.flatMap(AsciiTransportService.make(options), (context) =>
+      Layer.succeed(SerialTransportService, Context.get(context, AsciiTransportService)),
+    );
   }
 
   /**
@@ -49,11 +47,9 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
   static fromRtu(
     options: RtuTransportOpenOptions & TransportResilienceOptions,
   ): Layer.Layer<SerialTransportService> {
-    return Layer.project(
-      RtuTransportService,
-      SerialTransportService,
-      (rtu) => rtu,
-    )(RtuTransportService.Default(options));
+    return Layer.flatMap(RtuTransportService.make(options), (context) =>
+      Layer.succeed(SerialTransportService, Context.get(context, RtuTransportService)),
+    );
   }
 
   /**
@@ -80,6 +76,6 @@ export class SerialTransportService extends Context.Tag('SerialTransportService'
         TransportResilienceOptions &
         MockFaultOptions,
     ): Layer.Layer<SerialTransportService> =>
-      Layer.scoped(SerialTransportService, factory(options));
+      Layer.effect(SerialTransportService, factory(options));
   };
 }

@@ -57,7 +57,7 @@ modeEl.addEventListener('change', () => {
   serialBaudRowEl.style.display = isWs ? 'none' : '';
 });
 
-let scope: Scope.CloseableScope | null = null;
+let scope: Scope.Closeable | null = null;
 let client: EffectModbusClient | null = null;
 
 /**

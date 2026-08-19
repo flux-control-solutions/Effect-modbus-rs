@@ -1,4 +1,4 @@
-import { Effect, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type {
   WasmAsciiTransport,
   WasmSerialModbusClient,
@@ -9,7 +9,7 @@ import type {
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
 import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
-import type { TransportResilienceOptions } from './shared-transport';
+import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
 /**
  * Options for {@link WasmAsciiTransportService}. `WasmAsciiTransport.open()` takes the
@@ -38,22 +38,35 @@ export type WasmAsciiTransportOpenOptions = WasmSerialTransportOptions & {
  * @see requestSerialPort — Obtains the serial port handle this service's `port` option needs.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
-export class WasmAsciiTransportService extends Effect.Service<WasmAsciiTransportService>()(
-  'WasmAsciiTransportService',
-  {
-    scoped: makeTransportScoped<
-      WasmAsciiTransportOpenOptions,
-      WasmSerialModbusClient,
-      WasmAsciiTransport
-    >(
-      'WasmAsciiTransport',
-      (TC: unknown, { port, ...rest }: WasmAsciiTransportOpenOptions) =>
-        (TC as typeof WasmAsciiTransport).open(port, rest),
-      'WasmAsciiTransportService',
-      { moduleSpecifier: 'modbus-rs/web' },
-    ),
-  },
-) {
+export class WasmAsciiTransportService extends Context.Service<
+  WasmAsciiTransportService,
+  TransportServiceApi
+>()('WasmAsciiTransportService') {
+  /**
+   * Scoped constructor effect for the service. v4 does not auto-generate a
+   * layer from this, so {@link WasmAsciiTransportService.make} builds one explicitly.
+   */
+  static readonly makeScoped = makeTransportScoped<
+    WasmAsciiTransportOpenOptions,
+    WasmSerialModbusClient,
+    WasmAsciiTransport
+  >(
+    'WasmAsciiTransport',
+    (TC: unknown, { port, ...rest }: WasmAsciiTransportOpenOptions) =>
+      (TC as typeof WasmAsciiTransport).open(port, rest),
+    'WasmAsciiTransportService',
+    { moduleSpecifier: 'modbus-rs/web' },
+  );
+
+  /**
+   * Creates a {@link Layer} providing a live {@link WasmAsciiTransportService}.
+   *
+   * @param options - Connection and resilience options for the transport.
+   */
+  static readonly make = (
+    options: WasmAsciiTransportOpenOptions & TransportResilienceOptions,
+  ): Layer.Layer<WasmAsciiTransportService> =>
+    Layer.effect(WasmAsciiTransportService, WasmAsciiTransportService.makeScoped(options));
   /**
    * Creates a {@link Layer} providing an in-memory mock
    * {@link WasmAsciiTransportService} for testing or development.
@@ -72,9 +85,9 @@ export class WasmAsciiTransportService extends Effect.Service<WasmAsciiTransport
     return (
       options: WasmAsciiTransportOpenOptions & TransportResilienceOptions & MockFaultOptions,
     ) =>
-      Layer.scoped(
+      Layer.effect(
         WasmAsciiTransportService,
-        factory(options) as unknown as Effect.Effect<WasmAsciiTransportService>,
+        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
       );
   };
 }

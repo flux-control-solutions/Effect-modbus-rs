@@ -12,7 +12,7 @@
  */
 
 import { BunRuntime } from '@effect/platform-bun';
-import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import { Console, Effect, Layer, Logger, References } from 'effect';
 import type {
   ReadCoilsRequest,
   ReadHoldingRegistersRequest,
@@ -73,8 +73,8 @@ const ServerLive = serialRtuServerLayer(
 
 BunRuntime.runMain(
   Layer.launch(ServerLive).pipe(
-    Effect.catchAll((err) => Console.log(`Server error: ${err.message}`)),
-    Effect.provide(Logger.pretty),
-    Logger.withMinimumLogLevel(LogLevel.Debug),
+    Effect.catch((err) => Console.log(`Server error: ${err.message}`)),
+    Effect.provide(Logger.layer([Logger.consolePretty(), Logger.tracerLogger])),
+    Effect.provideService(References.MinimumLogLevel, 'Debug'),
   ),
 );

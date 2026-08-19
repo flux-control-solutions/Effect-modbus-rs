@@ -32,10 +32,10 @@ import {
  *
  * @see requestSerialPort — Obtains the `port` handle both providers need (must be called from a user gesture).
  */
-export class WasmSerialTransportService extends Context.Tag('WasmSerialTransportService')<
+export class WasmSerialTransportService extends Context.Service<
   WasmSerialTransportService,
   TransportServiceApi
->() {
+>()('WasmSerialTransportService') {
   /**
    * Creates a {@link Layer} providing {@link WasmSerialTransportService}
    * backed by an ASCII transport.
@@ -43,11 +43,9 @@ export class WasmSerialTransportService extends Context.Tag('WasmSerialTransport
   static fromAscii(
     options: WasmAsciiTransportOpenOptions & TransportResilienceOptions,
   ): Layer.Layer<WasmSerialTransportService> {
-    return Layer.project(
-      WasmAsciiTransportService,
-      WasmSerialTransportService,
-      (ascii) => ascii,
-    )(WasmAsciiTransportService.Default(options));
+    return Layer.flatMap(WasmAsciiTransportService.make(options), (context) =>
+      Layer.succeed(WasmSerialTransportService, Context.get(context, WasmAsciiTransportService)),
+    );
   }
 
   /**
@@ -57,11 +55,9 @@ export class WasmSerialTransportService extends Context.Tag('WasmSerialTransport
   static fromRtu(
     options: WasmRtuTransportOpenOptions & TransportResilienceOptions,
   ): Layer.Layer<WasmSerialTransportService> {
-    return Layer.project(
-      WasmRtuTransportService,
-      WasmSerialTransportService,
-      (rtu) => rtu,
-    )(WasmRtuTransportService.Default(options));
+    return Layer.flatMap(WasmRtuTransportService.make(options), (context) =>
+      Layer.succeed(WasmSerialTransportService, Context.get(context, WasmRtuTransportService)),
+    );
   }
 
   /**
@@ -88,6 +84,6 @@ export class WasmSerialTransportService extends Context.Tag('WasmSerialTransport
         TransportResilienceOptions &
         MockFaultOptions,
     ): Layer.Layer<WasmSerialTransportService> =>
-      Layer.scoped(WasmSerialTransportService, factory(options));
+      Layer.effect(WasmSerialTransportService, factory(options));
   };
 }

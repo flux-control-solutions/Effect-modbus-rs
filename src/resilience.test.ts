@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 
-import { Effect, Either, Exit, Scope, SubscriptionRef } from 'effect';
+import { Effect, Result, Exit, Scope, SubscriptionRef } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
 import { ConnectionState } from './connection';
@@ -67,10 +67,10 @@ test('without a policy the operation is single-shot', async () => {
   const result = await Effect.gen(function* () {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1);
-    return yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    return yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 
-  expect(Either.isLeft(result)).toBe(true);
+  expect(Result.isFailure(result)).toBe(true);
   expect(calls.attempts).toBe(1);
 });
 
@@ -83,7 +83,7 @@ test('a per-client policy replaces the transport policy rather than stacking', a
     const client = yield* transport.withClient(1, {
       retry: makeRetryPolicy({ maxRetries: 1, baseDelay: '1 millis' }),
     });
-    return yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    return yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 
   expect(calls.attempts).toBe(2);
@@ -94,7 +94,7 @@ test('a per-client policy can opt a device out of the transport policy', async (
   await Effect.gen(function* () {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1, { retry: RetryPolicies.none() });
-    return yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    return yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 
   expect(calls.attempts).toBe(1);
@@ -125,7 +125,7 @@ test('retryModbus wraps the client policy instead of replacing it', async () => 
   await Effect.gen(function* () {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1);
-    return yield* Effect.either(
+    return yield* Effect.result(
       client
         .readHoldingRegisters({ address: 0, quantity: 1 })
         .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
@@ -141,7 +141,7 @@ test('retryModbus over a none client does not multiply', async () => {
   await Effect.gen(function* () {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1);
-    return yield* Effect.either(
+    return yield* Effect.result(
       client
         .readHoldingRegisters({ address: 0, quantity: 1 })
         .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
@@ -164,8 +164,8 @@ test('different device types on one transport carry different policies', async (
 
     // The strict client, sharing the same connection, gives up on the first.
     failNext(2);
-    const result = yield* Effect.either(strict.readHoldingRegisters({ address: 0, quantity: 1 }));
-    expect(Either.isLeft(result)).toBe(true);
+    const result = yield* Effect.result(strict.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Result.isFailure(result)).toBe(true);
     expect(calls.attempts).toBe(4);
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 });
@@ -195,15 +195,15 @@ test('mock connection faults drive the reconnect state machine', async () => {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1);
 
-    const failed = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
-    expect(Either.isLeft(failed)).toBe(true);
+    const failed = yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Result.isFailure(failed)).toBe(true);
 
     yield* Effect.sleep('10 millis');
-    expect((yield* transport.connectionState)._tag).toBe('Down');
+    expect((yield* SubscriptionRef.get(transport.connectionState))._tag).toBe('Down');
 
-    const refused = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
-    expect(Either.isLeft(refused)).toBe(true);
-    if (Either.isLeft(refused)) expect(refused.left._tag).toBe('ModbusCircuitOpenError');
+    const refused = yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Result.isFailure(refused)).toBe(true);
+    if (Result.isFailure(refused)) expect(refused.failure._tag).toBe('ModbusCircuitOpenError');
     expect(attempts).toBe(1);
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 });
@@ -274,15 +274,15 @@ test('a connection failure hands control to the transport supervisor', async () 
     const api = yield* fake.make({ label: 'x', reconnect: reconnectFast });
     const client = yield* api.withClient(1);
     yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
 
     // The supervisor takes over; the call site never asked for a reconnect.
     yield* Effect.sleep('40 millis');
     expect(fake.calls.reconnect).toBe(1);
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
   }).pipe(Effect.scoped, Effect.runPromise);
 });
 
@@ -294,13 +294,13 @@ test('the breaker refuses operations while the link is being re-established', as
     yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
     yield* Effect.sleep('5 millis');
 
-    expect((yield* api.connectionState)._tag).toBe('Reconnecting');
-    const refused = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
-    expect(Either.isLeft(refused)).toBe(true);
-    if (Either.isLeft(refused)) expect(refused.left._tag).toBe('ModbusCircuitOpenError');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Reconnecting');
+    const refused = yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    expect(Result.isFailure(refused)).toBe(true);
+    if (Result.isFailure(refused)) expect(refused.failure._tag).toBe('ModbusCircuitOpenError');
   }).pipe(Effect.scoped, Effect.runPromise);
 });
 
@@ -313,19 +313,19 @@ test('exhausted reconnect attempts open the circuit, then it probes and recovers
     yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
     yield* Effect.sleep('25 millis');
 
-    const down = yield* api.connectionState;
+    const down = yield* SubscriptionRef.get(api.connectionState);
     expect(down._tag).toBe('Down');
     expect(fake.calls.reconnect).toBe(3);
 
-    const refused = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
-    if (Either.isLeft(refused)) expect(refused.left._tag).toBe('ModbusCircuitOpenError');
+    const refused = yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    if (Result.isFailure(refused)) expect(refused.failure._tag).toBe('ModbusCircuitOpenError');
 
     // resetAfter elapses and the supervisor probes again — this time it works.
     yield* Effect.sleep('80 millis');
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
     const recovered = yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
     expect(Array.from(recovered)).toEqual([7]);
   }).pipe(Effect.scoped, Effect.runPromise);
@@ -338,16 +338,16 @@ test('manual recovery cancels a sleeping supervisor probe', async () => {
     const client = yield* api.withClient(1);
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
     yield* Effect.sleep('25 millis');
-    expect((yield* api.connectionState)._tag).toBe('Down');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Down');
 
     yield* api.reconnect();
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
     expect(fake.calls.reconnect).toBe(4);
 
     yield* Effect.sleep('60 millis');
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
     expect(fake.calls.reconnect).toBe(4);
   }).pipe(Effect.scoped, Effect.runPromise);
 });
@@ -362,7 +362,7 @@ test('many fibers failing together produce one reconnect, not one each', async (
     fake.breakLink();
     yield* Effect.all(
       Array.from({ length: 20 }, () =>
-        Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 })),
+        Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 })),
       ),
       { concurrency: 'unbounded' },
     );
@@ -380,15 +380,15 @@ test('without a reconnect policy there is no supervisor and no breaker', async (
     yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
 
     fake.breakLink();
-    const failed = yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    const failed = yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
 
     // The original error surfaces, not a circuit-open refusal.
-    expect(Either.isLeft(failed)).toBe(true);
-    if (Either.isLeft(failed)) expect(failed.left._tag).toBe('ModbusConnectionClosedError');
+    expect(Result.isFailure(failed)).toBe(true);
+    if (Result.isFailure(failed)) expect(failed.failure._tag).toBe('ModbusConnectionClosedError');
 
     yield* Effect.sleep('20 millis');
     expect(fake.calls.reconnect).toBe(0);
-    expect((yield* api.connectionState)._tag).toBe('Connected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
   }).pipe(Effect.scoped, Effect.runPromise);
 });
 
@@ -396,12 +396,12 @@ test('teardown stops the supervisor', async () => {
   const fake = makeFake({ reconnectFailures: 99 });
   await Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const api = yield* Scope.extend(fake.make({ label: 'x', reconnect: reconnectFast }), scope);
+    const api = yield* Scope.provide(fake.make({ label: 'x', reconnect: reconnectFast }), scope);
     const client = yield* api.withClient(1);
     yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
     yield* Effect.sleep('20 millis');
 
     yield* Scope.close(scope, Exit.void);
@@ -418,14 +418,16 @@ test('connection state changes are observable', async () => {
   const fake = makeFake();
   await Effect.gen(function* () {
     const api = yield* fake.make({ label: 'x', reconnect: reconnectFast });
-    expect((yield* api.connectionState)._tag).toBe('Disconnected');
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Disconnected');
 
     const client = yield* api.withClient(1);
-    expect(ConnectionState.$is('Connected')(yield* api.connectionState)).toBe(true);
+    expect(ConnectionState.$is('Connected')(yield* SubscriptionRef.get(api.connectionState))).toBe(
+      true,
+    );
 
     fake.breakLink();
-    yield* Effect.either(client.readHoldingRegisters({ address: 0, quantity: 1 }));
-    const reconnecting = yield* api.connectionState;
+    yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
+    const reconnecting = yield* SubscriptionRef.get(api.connectionState);
     expect(ConnectionState.$is('Reconnecting')(reconnecting)).toBe(true);
   }).pipe(Effect.scoped, Effect.runPromise);
 });

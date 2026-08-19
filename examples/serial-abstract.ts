@@ -52,7 +52,7 @@ const layer = SerialTransportService.makeMockTransport([device])({
 // const layer = SerialTransportService.fromAscii({ path: "/dev/ttyUSB0", baudRate: 9600 });
 
 program.pipe(
-  Effect.catchAll((err) => Console.log(`Error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Error: ${err.message}`)),
   Effect.provide(layer),
   Effect.scoped,
   Effect.runPromise,

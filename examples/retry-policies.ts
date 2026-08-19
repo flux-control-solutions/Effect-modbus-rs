@@ -11,7 +11,7 @@
  * @example bun run examples/retry-policies.ts
  */
 
-import { Console, Effect } from 'effect';
+import { Console, Effect, SubscriptionRef } from 'effect';
 
 import type { ModbusError } from '../src/errors';
 import {
@@ -160,7 +160,7 @@ const program = Effect.gen(function* () {
   );
 
   // 6. The transport publishes its link state for status displays.
-  const state = yield* transport.connectionState;
+  const state = yield* SubscriptionRef.get(transport.connectionState);
   yield* log(`connection state: ${state._tag}`);
 });
 
@@ -173,7 +173,7 @@ const mockLayer = TcpTransportService.makeMockTransport(devices)({
 });
 
 program.pipe(
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),
   Effect.scoped,
   Effect.runPromise,

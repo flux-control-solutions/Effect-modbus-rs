@@ -31,7 +31,7 @@ export const serialRtuServerLayer = (
   options: SerialServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
@@ -49,7 +49,7 @@ export const serialRtuServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),
@@ -82,7 +82,7 @@ export const serialAsciiServerLayer = (
   options: SerialServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
@@ -100,7 +100,7 @@ export const serialAsciiServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),

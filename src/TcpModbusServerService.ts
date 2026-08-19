@@ -35,7 +35,7 @@ export const tcpServerLayer = (
   options: TcpServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { AsyncTcpModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
@@ -53,7 +53,7 @@ export const tcpServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),

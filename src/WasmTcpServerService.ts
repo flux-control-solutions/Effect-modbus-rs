@@ -42,7 +42,7 @@ export const wasmWsServerLayer = (
   options: WasmTcpServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { WasmWsModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
@@ -56,7 +56,7 @@ export const wasmWsServerLayer = (
         Effect.tryPromise({
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
-        }).pipe(Effect.catchAll((error) => Effect.logError('WASM WS server loop ended', error))),
+        }).pipe(Effect.catch((error) => Effect.logError('WASM WS server loop ended', error))),
       );
 
       yield* Effect.addFinalizer(() =>
@@ -67,7 +67,7 @@ export const wasmWsServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),

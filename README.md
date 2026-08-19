@@ -4,7 +4,7 @@
 
 For the complete API reference, see the [GitHub Pages documentation](https://flux-control-solutions.github.io/Effect-modbus-rs/).
 
-Provides scoped [`Effect.Service`](https://effect.website) constructors for RTU (serial), TCP, and ASCII Modbus transports. Clients expose a typed `Effect`-based API for all standard Modbus function codes.
+Provides scoped [`Context.Service`](https://effect.website) constructors for RTU (serial), TCP, and ASCII Modbus transports. Clients expose a typed `Effect`-based API for all standard Modbus function codes.
 
 > This project is under active development. Its API may change before the 1.0 release.
 
@@ -44,7 +44,7 @@ program.pipe(
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
   Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
-  Effect.provide(RtuTransportService.Default({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
+  Effect.provide(RtuTransportService.make({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -64,7 +64,7 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
-  Effect.provide(TcpTransportService.Default({ host: '192.168.1.100', port: 502 })),
+  Effect.provide(TcpTransportService.make({ host: '192.168.1.100', port: 502 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -87,7 +87,7 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
-  Effect.provide(AsciiTransportService.Default({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
+  Effect.provide(AsciiTransportService.make({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -112,7 +112,7 @@ const program = Effect.gen(function* () {
 });
 
 program.pipe(
-  Effect.provide(WasmWsTransportService.Default({ wsUrl: 'ws://localhost:8080' })),
+  Effect.provide(WasmWsTransportService.make({ wsUrl: 'ws://localhost:8080' })),
   Effect.scoped,
   Effect.runPromise,
 );
@@ -129,7 +129,7 @@ connectButton.addEventListener('click', () => {
     Effect.gen(function* () {
       const port = yield* requestSerialPort();
       yield* program.pipe(
-        Effect.provide(WasmRtuTransportService.Default({ port, baudRate: 19200 })),
+        Effect.provide(WasmRtuTransportService.make({ port, baudRate: 19200 })),
         Effect.scoped,
       );
     }),
@@ -150,7 +150,7 @@ Not demonstrated in `examples/wasm/` (see that app's README) — the same `impor
 
 ## Transports
 
-Each transport is a scoped `Effect.Service`. You provide it with `Effect.provide`, and the connection is opened on service access and closed when the scope ends.
+Each transport is a scoped `Context.Service`. You provide it with `Effect.provide`, and the connection is opened on service access and closed when the scope ends.
 
 | Service                               | Options                        | Connection                    |
 | ------------------------------------- | ------------------------------ | ----------------------------- |
@@ -279,7 +279,7 @@ Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven va
 Resilience belongs to the **transport**, not to call sites. Attach a policy where the transport is created and every client derived from it carries it:
 
 ```ts
-const layer = TcpTransportService.Default({
+const layer = TcpTransportService.make({
   host: '192.168.1.50',
   port: 502,
   retry: RetryPolicies.tcp(), // applied to every operation
@@ -393,7 +393,7 @@ So `RetryPolicies.tcp()` waits roughly 80–120 ms before its first retry, not e
 Passing `reconnect` hands reconnection to a supervisor fiber owned by the transport — **one reconnect for the whole application**, however many fibers were in flight when the link dropped:
 
 ```ts
-TcpTransportService.Default({
+TcpTransportService.make({
   host,
   port,
   reconnect: {
@@ -445,7 +445,7 @@ See `examples/retry-policies.ts` for a runnable walkthrough.
 `modbus-rs` exposes `retryAttempts`, `retryDelayMs`, and `retryBackoffStrategy` on its transport options. This package removes all three from every transport constructor, so setting one is a compile error rather than a documented hazard:
 
 ```ts
-TcpTransportService.Default({ host, port, retryAttempts: 3 });
+TcpTransportService.make({ host, port, retryAttempts: 3 });
 //                                        ^^^^^^^^^^^^^ Object literal may only specify
 //                                        known properties, and 'retryAttempts' does not
 //                                        exist in type 'TcpTransportOpenOptions & …'
@@ -568,17 +568,17 @@ src/
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
-  RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
-  TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
-  AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
+  RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
+  TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport
+  AsciiTransportService.ts   — Scoped Context.Service wrapping AsyncAsciiTransport
   SerialTransportService.ts  — Abstract serial transport (RTU/ASCII) tag
   TcpModbusServerService.ts  — tcpServerLayer
   SerialModbusServerService.ts — serialRtuServerLayer / serialAsciiServerLayer
   TcpGatewayService.ts       — tcpGatewayLayer
   WasmSerialPort.ts          — requestSerialPort() Effect helper (browser, user-gesture gated)
-  WasmWsTransportService.ts  — Scoped Effect.Service wrapping WasmWsTransport (browser, WS gateway)
-  WasmRtuTransportService.ts — Scoped Effect.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
-  WasmAsciiTransportService.ts — Scoped Effect.Service wrapping WasmAsciiTransport (browser, Web Serial ASCII)
+  WasmWsTransportService.ts  — Scoped Context.Service wrapping WasmWsTransport (browser, WS gateway)
+  WasmRtuTransportService.ts — Scoped Context.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
+  WasmAsciiTransportService.ts — Scoped Context.Service wrapping WasmAsciiTransport (browser, Web Serial ASCII)
   WasmSerialTransportService.ts — Abstract browser serial transport (RTU/ASCII) tag
   WasmTcpServerService.ts    — wasmWsServerLayer (experimental)
   WasmSerialModbusServerService.ts — wasmSerialRtuServerLayer / wasmSerialAsciiServerLayer (experimental)
