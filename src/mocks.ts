@@ -19,7 +19,7 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
-import { ConnectionState, guardCircuit, resolveReconnect, superviseReconnect } from './connection';
+import { claimReconnect, ConnectionState, guardCircuit, resolveReconnect } from './connection';
 import { ModbusInvalidArgumentError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
 import type { ModbusRetryPolicy } from './retry';
@@ -407,20 +407,15 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         }),
       );
 
+      /**
+       * Mirrors the real transport's failure reporting, so a mock exercises the
+       * same claim protocol a live transport does. The mock has no closed flag
+       * and logs its reconnect from `reconnectOnce`, so there is nothing to add
+       * on either side of the claim.
+       */
       const report = (error: ModbusError): Effect.Effect<void> => {
         if (!supervised || !supervised.triggers(error)) return Effect.void;
-        return Effect.gen(function* () {
-          const claimed = yield* SubscriptionRef.modify(connectionState, (current) =>
-            ConnectionState.$is('Connected')(current)
-              ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
-              : [false, current],
-          );
-          if (!claimed) return;
-          yield* Effect.forkIn(
-            superviseReconnect(reconnectOnce, connectionState, supervised),
-            serviceScope,
-          );
-        });
+        return claimReconnect(reconnectOnce, connectionState, supervised, serviceScope);
       };
 
       const guard = Effect.andThen(

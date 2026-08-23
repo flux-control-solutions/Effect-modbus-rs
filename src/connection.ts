@@ -1,4 +1,4 @@
-import { Data, Duration, Effect, Result, SubscriptionRef } from 'effect';
+import { Data, Duration, Effect, Result, type Scope, SubscriptionRef } from 'effect';
 
 import { ModbusCircuitOpenError, type ModbusError } from './errors';
 import { makeRetryPolicy, retryModbus, type ModbusErrorTag, type ModbusRetryPolicy } from './retry';
@@ -165,4 +165,45 @@ export const superviseReconnect = (
       );
       if (!probe) return;
     }
+  });
+
+/**
+ * Claims the `Connected` → `Reconnecting` transition and starts the supervisor.
+ *
+ * The transition is claimed atomically, so of the fibers that fail together
+ * exactly one starts the supervisor and the rest simply carry on failing — one
+ * reconnect for the whole transport, not one per call site. Fibers that lose
+ * the claim do nothing at all; `onClaim` runs in the winner only, after the
+ * transition is published and before the supervisor is forked.
+ *
+ * Callers decide *whether* a failure is worth reporting (the supervisor's
+ * `triggers` predicate, plus whatever local state means "no longer eligible");
+ * this owns *how* the transition is made, so the claim protocol has one
+ * implementation.
+ *
+ * @param reconnect - The transport's own reconnect operation.
+ * @param state - The state cell the transition is claimed on.
+ * @param resolved - Reconnect configuration with defaults applied.
+ * @param scope - Scope the supervisor fiber is forked into; it is interrupted
+ *   when the scope closes.
+ * @param onClaim - Optional effect run by the claiming fiber only.
+ * @returns An Effect that completes once the supervisor is forked, or
+ *   immediately when another fiber already holds the claim.
+ */
+export const claimReconnect = (
+  reconnect: Effect.Effect<void, ModbusError>,
+  state: SubscriptionRef.SubscriptionRef<ConnectionState>,
+  resolved: ResolvedReconnect,
+  scope: Scope.Scope,
+  onClaim?: Effect.Effect<void>,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const claimed = yield* SubscriptionRef.modify(state, (current) =>
+      ConnectionState.$is('Connected')(current)
+        ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
+        : [false, current],
+    );
+    if (!claimed) return;
+    if (onClaim) yield* onClaim;
+    yield* Effect.forkIn(superviseReconnect(reconnect, state, resolved), scope);
   });
