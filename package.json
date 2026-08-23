@@ -30,6 +30,7 @@
     "format:fix": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "lock": "bash tools/refresh-lockfile.sh",
     "prepare": "husky",
     "release": "changeset publish",
     "test": "bun test ./src/ ./examples/",
