@@ -1,10 +1,10 @@
 import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
 
 import {
+  claimReconnect,
   ConnectionState,
   resolveReconnect,
   guardCircuit,
-  superviseReconnect,
   type ReconnectOptions,
 } from './connection';
 import { type ModbusError, ModbusNotConnectedError, toModbusError } from './errors';
@@ -336,25 +336,20 @@ export function makeTransportScoped<
     /**
      * Hands a connection-level failure to the supervisor.
      *
-     * The transition is claimed atomically, so of the fibers that fail together
-     * exactly one starts the supervisor and the rest simply carry on failing —
-     * one reconnect for the whole application, not one per call site.
+     * A closed transport is never worth reconnecting, so it is filtered here
+     * rather than in {@link claimReconnect}, which owns the claim protocol
+     * itself — see there for why only one of the fibers that fail together
+     * ends up starting the supervisor.
      */
     const report = (error: ModbusError): Effect.Effect<void> => {
       if (!supervised || closed || !supervised.triggers(error)) return Effect.void;
-      return Effect.gen(function* () {
-        const claimed = yield* SubscriptionRef.modify(connectionState, (current) =>
-          ConnectionState.$is('Connected')(current)
-            ? [true, ConnectionState.Reconnecting({ attempt: 0 })]
-            : [false, current],
-        );
-        if (!claimed) return;
-        yield* Effect.logDebug(`${serviceName}: reconnecting after ${error.message}`);
-        yield* Effect.forkIn(
-          superviseReconnect(reconnectOnce, connectionState, supervised),
-          serviceScope,
-        );
-      });
+      return claimReconnect(
+        reconnectOnce,
+        connectionState,
+        supervised,
+        serviceScope,
+        Effect.logDebug(`${serviceName}: reconnecting after ${error.message}`),
+      );
     };
 
     const resilience = {
