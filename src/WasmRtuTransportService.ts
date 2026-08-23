@@ -1,4 +1,4 @@
-import { Effect, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type {
   WasmRtuTransport,
   WasmSerialModbusClient,
@@ -9,7 +9,7 @@ import type {
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
 import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
-import type { TransportResilienceOptions } from './shared-transport';
+import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
 /**
  * Options for {@link WasmRtuTransportService}. `WasmRtuTransport.open()` takes the
@@ -38,22 +38,35 @@ export type WasmRtuTransportOpenOptions = WasmSerialTransportOptions & {
  * @see requestSerialPort — Obtains the serial port handle this service's `port` option needs.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
-export class WasmRtuTransportService extends Effect.Service<WasmRtuTransportService>()(
-  'WasmRtuTransportService',
-  {
-    scoped: makeTransportScoped<
-      WasmRtuTransportOpenOptions,
-      WasmSerialModbusClient,
-      WasmRtuTransport
-    >(
-      'WasmRtuTransport',
-      (TC: unknown, { port, ...rest }: WasmRtuTransportOpenOptions) =>
-        (TC as typeof WasmRtuTransport).open(port, rest),
-      'WasmRtuTransportService',
-      { moduleSpecifier: 'modbus-rs/web' },
-    ),
-  },
-) {
+export class WasmRtuTransportService extends Context.Service<
+  WasmRtuTransportService,
+  TransportServiceApi
+>()('WasmRtuTransportService') {
+  /**
+   * Scoped constructor effect for the service. v4 does not auto-generate a
+   * layer from this, so {@link WasmRtuTransportService.make} builds one explicitly.
+   */
+  static readonly makeScoped = makeTransportScoped<
+    WasmRtuTransportOpenOptions,
+    WasmSerialModbusClient,
+    WasmRtuTransport
+  >(
+    'WasmRtuTransport',
+    (TC: unknown, { port, ...rest }: WasmRtuTransportOpenOptions) =>
+      (TC as typeof WasmRtuTransport).open(port, rest),
+    'WasmRtuTransportService',
+    { moduleSpecifier: 'modbus-rs/web' },
+  );
+
+  /**
+   * Creates a {@link Layer} providing a live {@link WasmRtuTransportService}.
+   *
+   * @param options - Connection and resilience options for the transport.
+   */
+  static readonly make = (
+    options: WasmRtuTransportOpenOptions & TransportResilienceOptions,
+  ): Layer.Layer<WasmRtuTransportService> =>
+    Layer.effect(WasmRtuTransportService, WasmRtuTransportService.makeScoped(options));
   /**
    * Creates a {@link Layer} providing an in-memory mock
    * {@link WasmRtuTransportService} for testing or development.
@@ -70,9 +83,9 @@ export class WasmRtuTransportService extends Effect.Service<WasmRtuTransportServ
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: WasmRtuTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.scoped(
+      Layer.effect(
         WasmRtuTransportService,
-        factory(options) as unknown as Effect.Effect<WasmRtuTransportService>,
+        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
       );
   };
 }

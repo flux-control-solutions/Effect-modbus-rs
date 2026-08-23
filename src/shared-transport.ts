@@ -123,12 +123,12 @@ const singleFlight = <A>(
           }),
       );
       if (isLeader) {
-        yield* Effect.forkDaemon(
+        yield* Effect.forkDetach(
           Effect.interruptible(work).pipe(
             Effect.onExit((exit) =>
               // Cleared before the deferred settles, so a waiter that immediately
               // calls again starts a new run instead of joining a finished one.
-              Effect.zipRight(Ref.set(inFlight, Option.none()), Deferred.done(deferred, exit)),
+              Effect.andThen(Ref.set(inFlight, Option.none()), Deferred.done(deferred, exit)),
             ),
           ),
         );
@@ -275,7 +275,7 @@ export function makeTransportScoped<
      * Detached, since the caller is on its way to failing anyway.
      */
     const closeOrphan = (t: TTransport) =>
-      Effect.forkDaemon(Effect.ignore(Effect.tryPromise(() => t.close())));
+      Effect.forkDetach(Effect.ignore(Effect.tryPromise(() => t.close())));
 
     // Assigning `transport` inside the shared work rather than in the caller
     // keeps the handle reachable — and therefore closeable — even if every
@@ -287,7 +287,7 @@ export function makeTransportScoped<
       Effect.tap((t) =>
         closed
           ? closeOrphan(t)
-          : Effect.zipRight(
+          : Effect.andThen(
               Effect.sync(() => {
                 transport = t;
               }),
@@ -311,7 +311,7 @@ export function makeTransportScoped<
       if (!t) return SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
       return Effect.andThen(
         Effect.logDebug(`Closing ${serviceName}`),
-        Effect.zipRight(
+        Effect.andThen(
           Effect.promise(() => t.close()),
           SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
         ),
@@ -444,7 +444,7 @@ export function makeTransportScoped<
           });
         }
         const scope = yield* Effect.scope;
-        yield* Scope.close(scope as Scope.CloseableScope, Exit.void);
+        yield* Scope.close(scope as Scope.Closeable, Exit.void);
       }),
 
       hasPendingRequests: () => {

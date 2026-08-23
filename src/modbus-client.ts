@@ -313,7 +313,7 @@ export const withResilience = (
   const run = <A>(
     operation: () => Effect.Effect<A, ModbusError>,
   ): Effect.Effect<A, ModbusError> => {
-    const attempt = Effect.zipRight(resilience.guard, Effect.suspend(operation)).pipe(
+    const attempt = Effect.andThen(resilience.guard, Effect.suspend(operation)).pipe(
       Effect.tapError((error) => resilience.report(error)),
     );
     return resilience.policy ? retryModbus(resilience.policy)(attempt) : attempt;

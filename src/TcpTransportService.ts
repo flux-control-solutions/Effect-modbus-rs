@@ -1,10 +1,14 @@
-import { Effect, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from 'modbus-rs';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
 import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
-import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
+import type {
+  TransportResilienceOptions,
+  TransportServiceApi,
+  WithoutUpstreamRetry,
+} from './shared-transport';
 
 /**
  * {@link TcpTransportOptions} minus the upstream retry knobs.
@@ -29,17 +33,35 @@ export type TcpTransportOpenOptions = WithoutUpstreamRetry<TcpTransportOptions>;
  * @see TcpTransportOpenOptions — Configuration for the TCP connection.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
-export class TcpTransportService extends Effect.Service<TcpTransportService>()(
-  'TcpTransportService',
-  {
-    scoped: makeTransportScoped<TcpTransportOpenOptions, AsyncTcpModbusClient, AsyncTcpTransport>(
-      'AsyncTcpTransport',
-      (TC: unknown, options: TcpTransportOpenOptions) =>
-        (TC as typeof AsyncTcpTransport).connect(options),
-      'TcpTransportService',
-    ),
-  },
-) {
+export class TcpTransportService extends Context.Service<
+  TcpTransportService,
+  TransportServiceApi
+>()('TcpTransportService') {
+  /**
+   * Scoped constructor effect for the service. v4 does not auto-generate a
+   * layer from this, so {@link TcpTransportService.make} builds one explicitly.
+   */
+  static readonly makeScoped = makeTransportScoped<
+    TcpTransportOpenOptions,
+    AsyncTcpModbusClient,
+    AsyncTcpTransport
+  >(
+    'AsyncTcpTransport',
+    (TC: unknown, options: TcpTransportOpenOptions) =>
+      (TC as typeof AsyncTcpTransport).connect(options),
+    'TcpTransportService',
+  );
+
+  /**
+   * Creates a {@link Layer} providing a live {@link TcpTransportService}.
+   *
+   * @param options - Connection and resilience options for the TCP transport.
+   */
+  static readonly make = (
+    options: TcpTransportOpenOptions & TransportResilienceOptions,
+  ): Layer.Layer<TcpTransportService> =>
+    Layer.effect(TcpTransportService, TcpTransportService.makeScoped(options));
+
   /**
    * Creates a {@link Layer} providing an in-memory mock
    * {@link TcpTransportService} for testing or development.
@@ -56,9 +78,9 @@ export class TcpTransportService extends Effect.Service<TcpTransportService>()(
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: TcpTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.scoped(
+      Layer.effect(
         TcpTransportService,
-        factory(options) as unknown as Effect.Effect<TcpTransportService>,
+        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
       );
   };
 }

@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 
-import { Effect, Either, Exit, Fiber, Scope } from 'effect';
+import { Effect, Result, Exit, Fiber, Scope } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
 import { makeTransportScoped } from './shared-transport';
@@ -97,15 +97,15 @@ test('a failed reconnect is shared by every waiter, and the next call retries', 
       yield* api.withClient(1);
 
       const results = yield* Effect.all(
-        Array.from({ length: 3 }, () => Effect.either(api.reconnect())),
+        Array.from({ length: 3 }, () => Effect.result(api.reconnect())),
         { concurrency: 'unbounded' },
       );
 
-      expect(results.every(Either.isLeft)).toBe(true);
+      expect(results.every(Result.isFailure)).toBe(true);
       expect(fake.calls.reconnect).toBe(1);
       // Every waiter observes the very same failure, not a re-run of the work.
       const [first, second, third] = results.map((r) =>
-        Either.getLeft(r).pipe((o) => (o._tag === 'Some' ? o.value : null)),
+        Result.getFailure(r).pipe((o) => (o._tag === 'Some' ? o.value : null)),
       );
       expect(first).toBe(second);
       expect(second).toBe(third);
@@ -125,9 +125,9 @@ test('interrupting one caller does not cancel or strand the others', async () =>
       const api = yield* fake.make();
       yield* api.withClient(1);
 
-      const leader = yield* Effect.fork(api.reconnect());
+      const leader = yield* Effect.forkChild(api.reconnect());
       yield* Effect.sleep('5 millis');
-      const follower = yield* Effect.fork(api.reconnect());
+      const follower = yield* Effect.forkChild(api.reconnect());
       yield* Effect.sleep('5 millis');
 
       // The fiber that started the reconnect goes away mid-flight.
@@ -145,10 +145,10 @@ test('a reconnect landing after teardown fails the waiter and closes the handle'
 
   await Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const api = yield* Scope.extend(fake.make(), scope);
+    const api = yield* Scope.provide(fake.make(), scope);
     yield* api.withClient(1);
 
-    const waiter = yield* Effect.fork(api.reconnect());
+    const waiter = yield* Effect.forkChild(api.reconnect());
     yield* Effect.sleep('5 millis');
 
     // Scope teardown closes the transport while the reconnect is in flight.
@@ -157,7 +157,7 @@ test('a reconnect landing after teardown fails the waiter and closes the handle'
 
     const exit = yield* Fiber.await(waiter);
     expect(Exit.isFailure(exit)).toBe(true);
-    const error = Exit.isFailure(exit) ? Exit.causeOption(exit) : null;
+    const error = Exit.isFailure(exit) ? Exit.getCause(exit) : null;
     expect(JSON.stringify(error)).toContain('ModbusNotConnectedError');
 
     // The reopened handle is not left dangling.
@@ -171,9 +171,9 @@ test('a connection completing after its caller is gone is still closed on teardo
 
   await Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const api = yield* Scope.extend(fake.make(), scope);
+    const api = yield* Scope.provide(fake.make(), scope);
 
-    const caller = yield* Effect.fork(api.withClient(1));
+    const caller = yield* Effect.forkChild(api.withClient(1));
     yield* Effect.sleep('5 millis');
     // Nobody is waiting for the connection any more, but it is still coming.
     yield* Fiber.interrupt(caller);
@@ -201,12 +201,12 @@ test('reconnect after close fails with ModbusNotConnectedError', async () => {
   const fake = makeFake();
   await Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const api = yield* Scope.extend(fake.make(), scope);
+    const api = yield* Scope.provide(fake.make(), scope);
     yield* api.withClient(1);
     yield* Scope.close(scope, Exit.void);
 
-    const result = yield* Effect.either(api.reconnect());
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left._tag).toBe('ModbusNotConnectedError');
+    const result = yield* Effect.result(api.reconnect());
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure._tag).toBe('ModbusNotConnectedError');
   }).pipe(Effect.runPromise);
 });

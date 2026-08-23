@@ -54,7 +54,7 @@
  * every client derived from it:
  *
  * ```ts
- * TcpTransportService.Default({
+ * TcpTransportService.make({
  *   host, port,
  *   retry: RetryPolicies.tcp(),      // applied to every operation
  *   reconnect: {},                   // supervised reconnect + circuit breaker

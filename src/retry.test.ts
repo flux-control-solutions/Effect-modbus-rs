@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 
-import { Chunk, Duration, Effect, Schedule } from 'effect';
+import { Duration, Effect, Result, Schedule } from 'effect';
 
 import {
   ModbusConnectionClosedError,
@@ -21,13 +21,24 @@ const invalidArgument = () =>
 const exception = (code: number) =>
   new ModbusExceptionError({ cause: new Error('exc'), exception: code, message: 'exc' });
 
-/** Delays the policy would impose for a given sequence of failures, in ms. */
+/**
+ * Delays the policy would impose for a given sequence of failures, in ms.
+ *
+ * v4 removed `Schedule.run` / `Schedule.delays`; the replacement is to acquire
+ * the step function and drive it manually, reading each recurrence delay off
+ * the step metadata and stopping when the schedule halts.
+ */
 const delaysFor = (policy: ModbusRetryPolicy, errors: ReadonlyArray<ModbusError>) =>
-  Schedule.run(Schedule.delays(policy.schedule), 0, errors).pipe(
-    Effect.map(Chunk.toReadonlyArray),
-    Effect.map((ds) => ds.map(Duration.toMillis)),
-    Effect.runPromise,
-  );
+  Effect.gen(function* () {
+    const step = yield* Schedule.toStepWithMetadata(policy.schedule);
+    const delays: number[] = [];
+    for (const error of errors) {
+      const stepped = yield* Effect.result(step(error));
+      if (Result.isFailure(stepped)) break;
+      delays.push(Duration.toMillis(stepped.success.duration));
+    }
+    return delays;
+  }).pipe(Effect.runPromise);
 
 /** Runs an effect that fails `failures` times before succeeding, counting attempts. */
 const runWithFailures = (policy: ModbusRetryPolicy, failures: number, error: () => ModbusError) => {
@@ -36,7 +47,7 @@ const runWithFailures = (policy: ModbusRetryPolicy, failures: number, error: () 
     attempts += 1;
     return attempts <= failures ? Effect.fail(error()) : Effect.succeed('ok' as const);
   });
-  return effect.pipe(retryModbus(policy), Effect.either, Effect.runPromise, (promise) =>
+  return effect.pipe(retryModbus(policy), Effect.result, Effect.runPromise, (promise) =>
     promise.then((result) => ({ attempts, result })),
   );
 };
@@ -94,14 +105,14 @@ test('retryable errors are retried up to maxRetries', async () => {
   const policy = makeRetryPolicy({ maxRetries: 3, ...fast });
   const { attempts, result } = await runWithFailures(policy, 10, timeout);
   expect(attempts).toBe(4);
-  expect(result._tag).toBe('Left');
+  expect(result._tag).toBe('Failure');
 });
 
 test('an effect that recovers mid-sequence succeeds', async () => {
   const policy = makeRetryPolicy({ maxRetries: 3, ...fast });
   const { attempts, result } = await runWithFailures(policy, 2, transportError);
   expect(attempts).toBe(3);
-  expect(result).toMatchObject({ _tag: 'Right', right: 'ok' });
+  expect(result).toMatchObject({ _tag: 'Success', success: 'ok' });
 });
 
 test('non-retryable errors fail on the first attempt', async () => {

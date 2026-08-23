@@ -46,7 +46,7 @@ export const tcpGatewayLayer = (
   options: GatewayBindOptions,
   gatewayConfig: GatewayConfig,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { AsyncTcpGateway } = yield* Effect.promise(() => import('modbus-rs'));
       const gateway = yield* Effect.tryPromise({
@@ -64,7 +64,7 @@ export const tcpGatewayLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),

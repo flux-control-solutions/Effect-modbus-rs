@@ -7,7 +7,7 @@
  * @example bun run examples/tcp-basic.ts
  */
 
-import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import { Console, Effect, Layer, Logger, References } from 'effect';
 
 import { TcpTransportService } from '../src/TcpTransportService';
 
@@ -30,10 +30,10 @@ const program = Effect.gen(function* () {
 
 program.pipe(
   Effect.provide(
-    TcpTransportService.Default({
+    TcpTransportService.make({
       host: 'localhost',
       port: 502,
-    }).pipe(Layer.provide(Logger.pretty)),
+    }).pipe(Layer.provide(Logger.layer([Logger.consolePretty(), Logger.tracerLogger]))),
   ),
   Effect.catchTags({
     ModbusTimeoutError: (err) => Console.log(`Timeout: ${err.message}`),
@@ -43,7 +43,7 @@ program.pipe(
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
     ModbusInternalError: (err) => Console.log(`Internal error: ${err.message}`),
   }),
-  Logger.withMinimumLogLevel(LogLevel.Debug),
+  Effect.provideService(References.MinimumLogLevel, 'Debug'),
   Effect.scoped,
   Effect.runPromise,
 );

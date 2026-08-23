@@ -93,18 +93,16 @@ export const RegisterDefinition = Schema.Struct({
  */
 export const SlaveDeviceDefinition = Schema.Struct({
   unitId: Schema.Number,
-  coils: Schema.optionalWith(Schema.Array(CoilDefinition), {
-    default: () => [],
-  }),
-  discreteInputs: Schema.optionalWith(Schema.Array(DiscreteInputDefinition), {
-    default: () => [],
-  }),
-  holdingRegisters: Schema.optionalWith(Schema.Array(RegisterDefinition), {
-    default: () => [],
-  }),
-  inputRegisters: Schema.optionalWith(Schema.Array(RegisterDefinition), {
-    default: () => [],
-  }),
+  coils: Schema.Array(CoilDefinition).pipe(Schema.withDecodingDefaultType(Effect.succeed([]))),
+  discreteInputs: Schema.Array(DiscreteInputDefinition).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed([])),
+  ),
+  holdingRegisters: Schema.Array(RegisterDefinition).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed([])),
+  ),
+  inputRegisters: Schema.Array(RegisterDefinition).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed([])),
+  ),
 });
 
 /**
@@ -401,7 +399,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
       const supervised = options.reconnect ? resolveReconnect(options.reconnect) : null;
       const serviceScope = yield* Effect.scope;
 
-      const reconnectOnce = Effect.zipRight(
+      const reconnectOnce = Effect.andThen(
         Effect.logDebug('Mock: reconnecting'),
         Effect.suspend(() => {
           const injected = options.reconnectFault?.();
@@ -425,7 +423,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         });
       };
 
-      const guard = Effect.zipRight(
+      const guard = Effect.andThen(
         supervised ? guardCircuit(connectionState) : Effect.void,
         Effect.suspend(() => {
           const injected = options.fault?.();
@@ -460,12 +458,12 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,
         reconnect: () =>
-          Effect.zipRight(
+          Effect.andThen(
             reconnectOnce,
             SubscriptionRef.set(connectionState, ConnectionState.Connected()),
           ),
         close: () =>
-          Effect.zipRight(
+          Effect.andThen(
             Effect.logDebug('Mock: closing transport'),
             SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
           ) as Effect.Effect<void, ModbusError, never>,

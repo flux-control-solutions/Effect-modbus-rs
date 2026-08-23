@@ -13,7 +13,7 @@
  */
 
 import { BunRuntime } from '@effect/platform-bun';
-import { Console, Effect, Layer, LogLevel, Logger } from 'effect';
+import { Console, Effect, Layer, Logger, References } from 'effect';
 import type { GatewayConfig } from 'modbus-rs';
 
 import { tcpGatewayLayer } from '../src/TcpGatewayService';
@@ -33,8 +33,8 @@ const GatewayLive = tcpGatewayLayer({ host: '0.0.0.0', port: 8502 }, gatewayConf
 
 BunRuntime.runMain(
   Layer.launch(GatewayLive).pipe(
-    Effect.catchAll((err) => Console.log(`Gateway error: ${err.message}`)),
-    Effect.provide(Logger.pretty),
-    Logger.withMinimumLogLevel(LogLevel.Debug),
+    Effect.catch((err) => Console.log(`Gateway error: ${err.message}`)),
+    Effect.provide(Logger.layer([Logger.consolePretty(), Logger.tracerLogger])),
+    Effect.provideService(References.MinimumLogLevel, 'Debug'),
   ),
 );

@@ -45,7 +45,7 @@ export const wasmSerialRtuServerLayer = (
   options: WasmSerialServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
@@ -60,7 +60,7 @@ export const wasmSerialRtuServerLayer = (
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
         }).pipe(
-          Effect.catchAll((error) => Effect.logError('WASM serial RTU server loop ended', error)),
+          Effect.catch((error) => Effect.logError('WASM serial RTU server loop ended', error)),
         ),
       );
 
@@ -72,7 +72,7 @@ export const wasmSerialRtuServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),
@@ -94,7 +94,7 @@ export const wasmSerialAsciiServerLayer = (
   options: WasmSerialServerOptions,
   handlers: ServerHandlers,
 ): Layer.Layer<never, ModbusError> =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
@@ -109,7 +109,7 @@ export const wasmSerialAsciiServerLayer = (
           try: () => server.serve(),
           catch: (error) => toModbusError(error as Error),
         }).pipe(
-          Effect.catchAll((error) => Effect.logError('WASM serial ASCII server loop ended', error)),
+          Effect.catch((error) => Effect.logError('WASM serial ASCII server loop ended', error)),
         ),
       );
 
@@ -121,7 +121,7 @@ export const wasmSerialAsciiServerLayer = (
               catch: (error) => toModbusError(error as Error),
             }),
           ),
-          Effect.catchAll(() => Effect.void),
+          Effect.catch(() => Effect.void),
         ),
       );
     }),

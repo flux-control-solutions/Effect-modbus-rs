@@ -7,7 +7,7 @@ import { toModbusError } from './errors';
 /**
  * Requests a browser serial port handle via the Web Serial API, for use with
  * {@link WasmSerialTransportService.fromRtu} / `.fromAscii` (or
- * `WasmRtuTransportService.Default` / `WasmAsciiTransportService.Default` directly).
+ * `WasmRtuTransportService.make` / `WasmAsciiTransportService.make` directly).
  *
  * **Must be called synchronously from within a user-gesture event handler**
  * (e.g. a `click` listener) — this is a hard Web Serial API / browser security
@@ -19,7 +19,7 @@ import { toModbusError } from './errors';
  * button.addEventListener("click", () => {
  *   Effect.runPromise(
  *     requestSerialPort().pipe(
- *       Effect.flatMap((port) => Effect.provide(program, WasmRtuTransportService.Default({ port, baudRate: 19200 }))),
+ *       Effect.flatMap((port) => Effect.provide(program, WasmRtuTransportService.make({ port, baudRate: 19200 }))),
  *     ),
  *   );
  * });

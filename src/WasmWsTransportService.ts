@@ -1,10 +1,10 @@
-import { Effect, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from 'modbus-rs/web';
 
 import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
 import type { MockFaultOptions } from './mocks';
 import { makeTransportScoped } from './shared-transport';
-import type { TransportResilienceOptions } from './shared-transport';
+import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
 /**
  * Scoped Effect service wrapping `modbus-rs`'s browser {@link WasmWsTransport}
@@ -21,18 +21,35 @@ import type { TransportResilienceOptions } from './shared-transport';
  * @see WasmWsTransportOptions — Configuration for the WebSocket gateway connection.
  * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
  */
-export class WasmWsTransportService extends Effect.Service<WasmWsTransportService>()(
-  'WasmWsTransportService',
-  {
-    scoped: makeTransportScoped<WasmWsTransportOptions, WasmWsModbusClient, WasmWsTransport>(
-      'WasmWsTransport',
-      (TC: unknown, options: WasmWsTransportOptions) =>
-        (TC as typeof WasmWsTransport).connect(options),
-      'WasmWsTransportService',
-      { moduleSpecifier: 'modbus-rs/web' },
-    ),
-  },
-) {
+export class WasmWsTransportService extends Context.Service<
+  WasmWsTransportService,
+  TransportServiceApi
+>()('WasmWsTransportService') {
+  /**
+   * Scoped constructor effect for the service. v4 does not auto-generate a
+   * layer from this, so {@link WasmWsTransportService.make} builds one explicitly.
+   */
+  static readonly makeScoped = makeTransportScoped<
+    WasmWsTransportOptions,
+    WasmWsModbusClient,
+    WasmWsTransport
+  >(
+    'WasmWsTransport',
+    (TC: unknown, options: WasmWsTransportOptions) =>
+      (TC as typeof WasmWsTransport).connect(options),
+    'WasmWsTransportService',
+    { moduleSpecifier: 'modbus-rs/web' },
+  );
+
+  /**
+   * Creates a {@link Layer} providing a live {@link WasmWsTransportService}.
+   *
+   * @param options - Connection and resilience options for the transport.
+   */
+  static readonly make = (
+    options: WasmWsTransportOptions & TransportResilienceOptions,
+  ): Layer.Layer<WasmWsTransportService> =>
+    Layer.effect(WasmWsTransportService, WasmWsTransportService.makeScoped(options));
   /**
    * Creates a {@link Layer} providing an in-memory mock
    * {@link WasmWsTransportService} for testing or development.
@@ -49,9 +66,9 @@ export class WasmWsTransportService extends Effect.Service<WasmWsTransportServic
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
     const factory = makeMockTransport(devices);
     return (options: WasmWsTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.scoped(
+      Layer.effect(
         WasmWsTransportService,
-        factory(options) as unknown as Effect.Effect<WasmWsTransportService>,
+        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
       );
   };
 }

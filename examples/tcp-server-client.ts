@@ -6,7 +6,7 @@
  * performs read/write operations against the server's in-memory state.
  *
  * Demonstrates:
- * - `Effect.fork` + `Layer.launch` to run a server in the background
+ * - `Effect.forkChild` + `Layer.launch` to run a server in the background
  * - Client operations (read/write coils and holding registers)
  * - Graceful server shutdown via `Fiber.interrupt`
  *
@@ -14,7 +14,7 @@
  */
 
 import { BunRuntime } from '@effect/platform-bun';
-import { Console, Effect, Fiber, Layer, LogLevel, Logger, Schedule } from 'effect';
+import { Console, Effect, Fiber, Layer, References, Schedule } from 'effect';
 import type {
   ReadCoilsRequest,
   ReadHoldingRegistersRequest,
@@ -73,8 +73,10 @@ const handlers: ServerHandlers = {
 
 const program = Effect.gen(function* () {
   yield* Effect.acquireRelease(
-    Effect.fork(Layer.launch(tcpServerLayer({ host: '0.0.0.0', port: PORT, unitId: 1 }, handlers))),
-    (fiber) => Fiber.interrupt(fiber).pipe(Effect.catchAll(() => Effect.void)),
+    Effect.forkChild(
+      Layer.launch(tcpServerLayer({ host: '0.0.0.0', port: PORT, unitId: 1 }, handlers)),
+    ),
+    (fiber) => Fiber.interrupt(fiber).pipe(Effect.catch(() => Effect.void)),
   );
 
   yield* Console.log('--- Client connecting (with retries until server is ready) ---');
@@ -82,7 +84,7 @@ const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
   const client = yield* transport
     .withClient(1)
-    .pipe(Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => '50 millis')));
+    .pipe(Effect.retry(Schedule.addDelay(Schedule.recurs(10), () => Effect.succeed('50 millis'))));
 
   yield* Console.log('--- Client connected, reading initial state ---');
 
@@ -122,7 +124,7 @@ const program = Effect.gen(function* () {
 BunRuntime.runMain(
   program.pipe(
     Effect.provide(
-      TcpTransportService.Default({
+      TcpTransportService.make({
         host: '127.0.0.1',
         port: PORT,
       }),
@@ -132,8 +134,8 @@ BunRuntime.runMain(
       ModbusTransportError: (err) => Console.log(`Transport error: ${err.message}`),
       ModbusConnectionClosedError: (err) => Console.log(`Connection lost: ${err.message}`),
     }),
-    Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
-    Logger.withMinimumLogLevel(LogLevel.Debug),
+    Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
+    Effect.provideService(References.MinimumLogLevel, 'Debug'),
     Effect.scoped,
   ),
 );

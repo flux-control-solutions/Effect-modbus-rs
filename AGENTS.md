@@ -6,7 +6,7 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 - **Runtime**: Bun only — never use Node, npm, pnpm, yarn, or vite.
 - **Language**: TypeScript 6 (ESNext, `verbatimModuleSyntax`, bundler resolution, `module: "Preserve"`).
-- **Core libs**: `effect` (^3.22.0), `modbus-rs` (^0.15.6).
+- **Core libs**: `effect` (^4.0.0-rc.109), `modbus-rs` (^0.15.6). Effect v4 is still a release candidate.
 - **LSP**: `@effect/language-service` plugin in `tsconfig.json` `compilerOptions.plugins`.
 - **License**: GPL-3.0.
 
@@ -32,13 +32,13 @@ src/
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
-  RtuTransportService.ts     — Scoped Effect.Service wrapping AsyncRtuTransport
-  TcpTransportService.ts     — Scoped Effect.Service wrapping AsyncTcpTransport
-  AsciiTransportService.ts   — Scoped Effect.Service wrapping AsyncAsciiTransport
+  RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
+  TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport
+  AsciiTransportService.ts   — Scoped Context.Service wrapping AsyncAsciiTransport
   WasmSerialPort.ts          — requestSerialPort() Effect helper (user-gesture gated, Web Serial API)
-  WasmWsTransportService.ts  — Scoped Effect.Service wrapping WasmWsTransport (browser, TCP over WebSocket gateway)
-  WasmRtuTransportService.ts — Scoped Effect.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
-  WasmAsciiTransportService.ts — Scoped Effect.Service wrapping WasmAsciiTransport (browser, Web Serial ASCII)
+  WasmWsTransportService.ts  — Scoped Context.Service wrapping WasmWsTransport (browser, TCP over WebSocket gateway)
+  WasmRtuTransportService.ts — Scoped Context.Service wrapping WasmRtuTransport (browser, Web Serial RTU)
+  WasmAsciiTransportService.ts — Scoped Context.Service wrapping WasmAsciiTransport (browser, Web Serial ASCII)
   WasmSerialTransportService.ts — Abstract browser serial transport tag (fromRtu/fromAscii), mirrors SerialTransportService.ts
   WasmTcpServerService.ts    — wasmWsServerLayer (experimental browser WS-gateway server)
   WasmSerialModbusServerService.ts — wasmSerialRtuServerLayer / wasmSerialAsciiServerLayer (experimental browser Web Serial servers)
@@ -61,7 +61,7 @@ examples/
 
 ## Architecture
 
-- **`Effect.Service` scoped** — each transport service opens its connection in a `scoped` constructor. The transport is automatically closed when the consuming `Scope` finalizes (`Effect.addFinalizer`).
+- **`Context.Service` scoped** — each transport service opens its connection in a scoped `makeScoped` constructor effect, wrapped by an explicit `make(options)` layer factory (v4 no longer auto-generates one — this replaces v3's `Default`). The transport is automatically closed when the consuming `Scope` finalizes (`Effect.addFinalizer`).
 - **Dynamic import** — `modbus-rs` is imported inside the constructor via `yield* Effect.promise(() => import("modbus-rs"))`. This keeps the native module load deferred.
 - **Client caching** — clients are created per `unitId` via `transport.createClient({ unitId })` and cached in a `Map<number, Async*ModbusClient>`. Repeated `withClient()` calls for the same unit ID reuse the cached client.
 - **`EffectModbusClient`** — wraps the raw `modbus-rs` client methods via `Effect.tryPromise`, routing errors through `toModbusError`. All methods return `Effect.Effect<T, ModbusError>`.
@@ -73,7 +73,8 @@ examples/
 
 ## Conventions
 
-- Follow `effect` idioms: `Effect`, `Layer`, `Schema`, `Scope`, `Data.TaggedError` throughout.
+- Follow `effect` v4 idioms: `Effect`, `Layer`, `Context.Service`, `Schema`, `Scope`, `Data.TaggedError` throughout.
+- `Either` is `Result` in v4 (`Effect.result`, `Result.isFailure`); `Effect.catchAll` is `Effect.catch`; `Effect.fork` is `Effect.forkChild`.
 - Use `Bun.test` / `import { test, expect } from "bun:test"` for tests.
 - Always `import type` for type-only imports (`verbatimModuleSyntax`).
 - Don't use `dotenv` — Bun loads `.env` automatically.

@@ -61,10 +61,10 @@ const program = Effect.gen(function* () {
               address: 0,
               values: new Uint16Array([0, 0, 0]),
             })
-            .pipe(Effect.catchAll((err) => Console.log(err.message)));
+            .pipe(Effect.catch((err) => Console.log(err.message)));
           yield* client
             .writeSingleCoil({ address: 0, value: CoilState.Off })
-            .pipe(Effect.catchAll((err) => Console.log(err.message)));
+            .pipe(Effect.catch((err) => Console.log(err.message)));
         }),
       );
     }),
@@ -95,7 +95,7 @@ program.pipe(
   Effect.catchTags({
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),
   Effect.scoped,
   Effect.runPromise,

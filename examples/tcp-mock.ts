@@ -94,7 +94,7 @@ program.pipe(
   Effect.catchTags({
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(mockLayer),
   Effect.scoped,
   Effect.runPromise,

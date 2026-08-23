@@ -1,4 +1,4 @@
-import { Duration, Effect, Schedule } from 'effect';
+import { Duration, Effect, Random, Schedule } from 'effect';
 
 import type { ModbusError } from './errors';
 
@@ -21,11 +21,11 @@ export type ModbusErrorTag = ModbusError['_tag'];
  */
 export interface RetryDelayOptions {
   /** Delay before the first retry. */
-  readonly baseDelay?: Duration.DurationInput;
+  readonly baseDelay?: Duration.Input;
   /** Multiplier applied to the delay after each attempt. */
   readonly factor?: number;
   /** Upper bound on the delay, whatever the attempt count. */
-  readonly maxDelay?: Duration.DurationInput;
+  readonly maxDelay?: Duration.Input;
 }
 
 /**
@@ -55,7 +55,7 @@ export interface ModbusRetryPolicyOptions {
   /** Maximum number of retries (attempts = `maxRetries + 1`). Default `3`. */
   readonly maxRetries?: number;
   /** Wall-clock budget for the whole retry sequence. Unbounded by default. */
-  readonly maxElapsed?: Duration.DurationInput;
+  readonly maxElapsed?: Duration.Input;
   /**
    * Randomness applied to each delay, as a multiplier range.
    *
@@ -63,15 +63,15 @@ export interface ModbusRetryPolicyOptions {
    * an object customises the range. Jitter keeps a fleet of pollers from
    * re-hitting a recovering device in lockstep.
    *
-   * @see Schedule.jitteredWith — The underlying combinator.
+   * @see Schedule.jittered — The underlying combinator.
    */
   readonly jitter?: boolean | { readonly min?: number; readonly max?: number };
   /** Policy-level delay before the first retry. Default `100 millis`. */
-  readonly baseDelay?: Duration.DurationInput;
+  readonly baseDelay?: Duration.Input;
   /** Policy-level backoff multiplier. Default `2`. */
   readonly factor?: number;
   /** Policy-level delay ceiling. Default `5 seconds`. */
-  readonly maxDelay?: Duration.DurationInput;
+  readonly maxDelay?: Duration.Input;
   /**
    * Which {@link ModbusError} variants are retryable, with optional
    * per-error backoff overrides.
@@ -104,9 +104,12 @@ export interface ModbusRetryPolicyOptions {
 export interface ModbusRetryPolicy {
   /**
    * Schedule driving the retries. Its input is the failing {@link ModbusError},
-   * its output the `[retryIndex, error]` pair that produced the delay.
+   * its output the zero-based retry index.
+   *
+   * v4 exposes the failing input on the schedule metadata, so the output no
+   * longer needs to carry the `[retryIndex, error]` pair v3 produced.
    */
-  readonly schedule: Schedule.Schedule<[number, ModbusError], ModbusError>;
+  readonly schedule: Schedule.Schedule<number, ModbusError>;
   /** Whether this policy retries the given error at all. */
   readonly isRetryable: (error: ModbusError) => boolean;
 }
@@ -145,8 +148,8 @@ interface ResolvedDelay {
   readonly maxMs: number;
 }
 
-const toMillis = (input: Duration.DurationInput): number =>
-  Duration.toMillis(Duration.decode(input));
+const toMillis = (input: Duration.Input): number =>
+  Duration.toMillis(Duration.fromInputUnsafe(input));
 
 /** Resolves which error tags are retryable, defaults filled in per tag. */
 const resolveRetryableTags = (
@@ -247,20 +250,40 @@ export const makeRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusR
   };
 
   const base = Schedule.recurs(options.maxRetries ?? 3).pipe(
-    // `identity` carries the failing error into the schedule output so the
-    // delay can be chosen per error category; `recurs` supplies the counter
-    // and the shared attempt budget.
-    Schedule.intersect(Schedule.identity<ModbusError>()),
-    Schedule.modifyDelay(([retryIndex, error]) => delayFor(error, retryIndex)),
-    Schedule.whileInput(isRetryable),
+    Schedule.setInputType<ModbusError>(),
+    // v4 exposes the failing input and the attempt counter on the schedule
+    // metadata, so v3's `intersect(identity)` tuple is no longer needed.
+    // `metadata.attempt` is 1-based where v3's `retryIndex` was 0-based.
+    Schedule.modifyDelay((metadata) =>
+      Effect.succeed(delayFor(metadata.input, metadata.attempt - 1)),
+    ),
+    Schedule.while((metadata) => Effect.succeed(isRetryable(metadata.input))),
   );
 
   const jitter = options.jitter ?? true;
   const jittered =
-    jitter === false ? base : Schedule.jitteredWith(base, jitter === true ? {} : jitter);
+    jitter === false
+      ? base
+      : jitter === true
+        ? // v4's `Schedule.jittered` supplies the same fixed 0.8–1.2 range that
+          // v3's `jitteredWith` defaulted to.
+          Schedule.jittered(base)
+        : // `jitteredWith` is gone; custom bounds are applied by scaling the
+          // metadata duration inside an effectful delay callback.
+          Schedule.modifyDelay(base, (metadata) =>
+            Effect.map(Random.next, (r) => {
+              const min = jitter.min ?? 0.8;
+              const max = jitter.max ?? 1.2;
+              return Duration.millis(
+                Duration.toMillis(metadata.duration) * (min + r * (max - min)),
+              );
+            }),
+          );
 
   const schedule =
-    options.maxElapsed === undefined ? jittered : Schedule.upTo(jittered, options.maxElapsed);
+    options.maxElapsed === undefined
+      ? jittered
+      : Schedule.upTo(jittered, { duration: options.maxElapsed });
 
   return { schedule, isRetryable };
 };
