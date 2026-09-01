@@ -34,6 +34,18 @@
  * - {@link wasmWsServerLayer} — Browser WS-gateway server (experimental upstream surface).
  * - {@link wasmSerialRtuServerLayer} / {@link wasmSerialAsciiServerLayer} — Browser Web Serial servers (experimental).
  *
+ * ## Transaction planning
+ *
+ * A caller that derives each register independently produces one transaction per
+ * register, which is the dominant cost on a half-duplex bus. {@link planWrites}
+ * and {@link planReads} pack neighbouring addresses into the fewest transactions
+ * that cover them, and hold no state:
+ *
+ * ```ts
+ * planWrites([{ address: 2000, value: 10 }, { address: 2001, value: 20 }]);
+ * // [{ kind: "multiple", address: 2000, values: Uint16Array [10, 20] }]
+ * ```
+ *
  * ## Errors
  *
  * All Modbus operations fail with a {@link ModbusError} discriminated union.
@@ -112,6 +124,23 @@ export type {
   WithoutUpstreamRetry,
 } from './src/shared-transport';
 export type { ModbusOperations } from './src/modbus-client';
+export {
+  MODBUS_MAX_READ_REGISTERS,
+  MODBUS_MAX_WRITE_REGISTERS,
+  planReads,
+  planWrites,
+} from './src/register-plan';
+export type {
+  MultipleWriteStep,
+  PlanReadsOptions,
+  PlanWritesOptions,
+  ReadLocation,
+  ReadPlan,
+  ReadSpan,
+  RegisterWrite,
+  SingleWriteStep,
+  WritePlanStep,
+} from './src/register-plan';
 export { AsciiTransportService } from './src/AsciiTransportService';
 export type { AsciiTransportOpenOptions } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';
