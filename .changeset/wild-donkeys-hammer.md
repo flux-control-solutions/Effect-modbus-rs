@@ -1,0 +1,25 @@
+---
+'@flux-control/effect-modbus-rs': minor
+---
+
+Add transaction batching: register planners, a write cache, debouncers, and `transport.withBatchingClient`.
+
+A caller that derives each register independently — one fiber per output, one accessor per parameter — issues one transaction per register. On a half-duplex multi-drop bus that is the dominant cost, and the registers such a caller wants are usually neighbours. Three new layers bring the count down, and each one is usable without the layer above it.
+
+**`planWrites` and `planReads`** (`src/register-plan.ts`) are pure. `planWrites` sorts writes by address, groups contiguous addresses into runs, splits each run at the FC16 limit, and emits FC06 for a run shorter than `minRunLength`. `planReads` merges addresses into spans within `maxGap` unrequested registers of each other and returns a `locate` index back into the responses. Both accept the device's own limits, because many devices stop short of what the specification allows.
+
+**`makeWriteDebouncer`, `makeReadDebouncer`, and `makeRegisterCache`** are the collection point a planner needs. A caller that never holds two values at once gives a planner nothing to pack, so these collect on time instead. A write is held for a window, each arrival restarts it, and `maxHold` caps the total hold. A later write to one address replaces the value and inherits its waiters, so only the newest value reaches the wire and everyone waiting on that address learns whether it got there. Each caller awaits its own `Deferred`, which keeps "the effect succeeded" meaning "the value reached the device". The read debouncer has no supersede rule and no ceiling: its window opens on the first arrival and does not restart. The cache drops a write whose value the device already holds, keyed by unit and address so one cache serves a whole bus.
+
+**`transport.withBatchingClient(unitId, options)`** puts the three together. It is the sibling of `withClient`, not a replacement for it: `withClient` issues the transaction a caller names, and a batching client decides the transactions for a caller that names registers instead. `transport.touchedUnits` and `transport.onShutdownPerUnit` come with it, so a caller that must leave its devices in a known state can find out which ones it spoke to.
+
+Nothing is debounced unless `debounce` asks for it, matching the rest of this package: default timing stays predictable. `writeAll` and `readAll` still plan, so a caller that holds a group of registers gets packed transactions with no window at all.
+
+Three points to know before adopting it, none of which the version number separates:
+
+1. **`BatchingModbusClient` does not extend `ModbusOperations`.** There is no `writeSingleRegister` and no `readHoldingRegisters` on it. A raw write on the same object would go around the cache and around the batch, so a value held for an address could reach the device after a newer value written past it. A caller that needs both surfaces asks the transport for both, and they share one connection. Coils are not covered: the planners pack registers.
+2. **The cache invalidates when the link is lost, not only after a failed transaction.** A device that power-cycles comes back holding something else, and losing the link is the stronger sign of that. The cache and the fiber that watches `connectionState` are both created on first use, so a transport nobody batches on carries neither.
+3. **`writeNow` flushes the pending batch and joins it.** It is an enqueue with supersede followed by an immediate flush, not a path around the batch. The newest value wins.
+
+Nothing existing changes. `withClient`, the retry policies, the reconnect supervisor, and the circuit breaker behave exactly as before, and a caller that does not call `withBatchingClient` sees no new fibers and no new state.
+
+The read window has not been measured against a live RS-485 bus. Treat any published guidance on its size as an estimate from one transaction at 19200 baud until it has.

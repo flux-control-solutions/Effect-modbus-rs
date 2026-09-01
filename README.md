@@ -254,6 +254,115 @@ See [Testing with mocks](#testing-with-mocks) for the `fault` hook and the `reco
 | `writeFileRecord({ requests })`                            | `void`                         |
 | `readDeviceIdentification({ readDeviceIdCode, objectId })` | `DeviceIdentificationResponse` |
 
+## Transaction batching
+
+`withClient` issues exactly the transaction you name, and stays the right client when you know what the bus should carry. `withBatchingClient` is its sibling for the other case — code with one accessor per register, which knows what it wants to read and write but not what that ought to cost.
+
+```ts
+const client = yield * transport.withClient(3); // exact transaction
+yield * client.writeSingleRegister({ address: 2000, value: 512 });
+
+const batched = yield * transport.withBatchingClient(3); // decides the transactions
+yield *
+  batched.writeAll([
+    { address: 2000, value: 512 },
+    { address: 2001, value: 256 },
+  ]); // one FC16
+yield * batched.readAll([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]); // two FC03
+```
+
+Three things bring the transaction count down, and each is exported on its own:
+
+| Piece                                      | What it does                                                                        |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `planWrites` / `planReads`                 | Pack neighbouring addresses into the fewest transactions. Pure, no state, no I/O.   |
+| `makeWriteDebouncer` / `makeReadDebouncer` | Collect operations that arrive near each other, so a planner has something to pack. |
+| `makeRegisterCache`                        | Drop a write whose value the device already holds.                                  |
+
+### Batching client API
+
+| Method                              | Function code | Notes                                                      |
+| ----------------------------------- | ------------- | ---------------------------------------------------------- |
+| `write({ address, value })`         | FC06 / FC16   | Held for the write window, if one is configured.           |
+| `writeNow({ address, value })`      | FC06 / FC16   | Enqueue with supersede, then flush and join. Newest wins.  |
+| `writeAll(writes)`                  | FC06 / FC16   | One caller, one group, planned together.                   |
+| `writeAllNow(writes)`               | FC06 / FC16   | The same, issued immediately.                              |
+| `read(address)`                     | FC03          | Collected for the read window, if one is configured.       |
+| `readNow(address)`                  | FC03          | Immediate, and answers every reader already collected.     |
+| `readAll(addresses)`                | FC03          | One caller, planned into spans, values in the order asked. |
+| `readAllNow(addresses)`             | FC03          | The same, issued immediately.                              |
+| `inputs.read` … `inputs.readAllNow` | FC04          | The same four reads over the input registers.              |
+| `flush`                             | —             | Issue everything pending, now. Never fails.                |
+| `cache`                             | —             | The cache this client filters against, or `undefined`.     |
+
+**A `BatchingModbusClient` is not an `EffectModbusClient`.** It deliberately does not extend `ModbusOperations`: there is no `writeSingleRegister` and no `readHoldingRegisters` on it. A raw write on the same object would go around the cache and around the batch, and a value held for an address could then reach the device after a newer value written past it. When you need both surfaces, ask the transport for both — they share one connection. Coils are not covered either; the planners pack registers.
+
+### Windows
+
+Nothing is debounced unless you ask for it, the same way nothing retries or reconnects unless you ask:
+
+```ts
+const batched =
+  yield *
+  transport.withBatchingClient(3, {
+    debounce: {
+      writes: { window: '250 millis', maxHold: '1 second' },
+      reads: { window: '5 millis' },
+    },
+  });
+```
+
+A write is held for `window`, and each new arrival restarts it. `maxHold` caps the total hold, so a register that updates faster than the window still reaches the wire — without the ceiling, every arrival would postpone the wait forever. It defaults to four times `window`.
+
+A read window does not restart: it opens on the first arrival and expires on time, which a stream of readers cannot push out. A useful size is on the order of one transaction; measure one on your bus before choosing.
+
+`writeAll` and `readAll` plan whatever they are given, so code that already holds a group of registers needs no window at all.
+
+### The cache
+
+The cache records what this process wrote, keyed by unit and address. It is not a read cache and never answers a read. One cache serves every device on a transport, because a cache is a belief about a physical device and two caches on one unit disagree.
+
+It is emptied for a unit after a failed write, and emptied entirely when the link is lost — a device that power-cycles comes back holding something else. Pass `cache: false` to write every value, or pass your own `RegisterCache` to share one.
+
+The cache and the fiber that watches the link are created on first use, so a transport nobody batches on carries neither.
+
+### One client per unit
+
+A batching client is cached per unit ID, because that is what makes it work: two batching clients on one unit hold two batches and coalesce neither. A second call for the same unit with different options fails with `ModbusInvalidArgumentError` rather than quietly returning a client configured some other way.
+
+### Shutdown
+
+```ts
+yield *
+  transport.onShutdownPerUnit((unitId) =>
+    Effect.gen(function* () {
+      const batched = yield* transport.withBatchingClient(unitId);
+      yield* batched.writeNow({ address: 2000, value: 0 });
+    }),
+  );
+```
+
+The action runs against every unit in `transport.touchedUnits`, while the transport is still open. Only the mechanism belongs here: what a safe state _is_ belongs to you. Zero volts is one device's answer and a stopped motor is another's.
+
+### Spans
+
+A batching client opens `modbus.write` and `modbus.read` spans, carrying:
+
+| Attribute                  | Content                     |
+| -------------------------- | --------------------------- |
+| `modbus.unit_ids`          | The units the batch reached |
+| `modbus.register_count`    | Registers written or read   |
+| `modbus.suppressed_count`  | Writes the cache removed    |
+| `modbus.transaction_count` | Transactions issued         |
+
+The write span opens _after_ the cache filter, and only when a write survives it, so it records what reached the bus rather than what was proposed. Attach your own vocabulary as a second argument:
+
+```ts
+yield * batched.write({ address: 2000, value: 512 }, { 'app.point': 'Supply fan' });
+```
+
+Your keys are opaque to this package and are applied first; the `modbus.*` keys are applied last and win a collision, so a caller cannot overwrite the record of what the library wrote. When a batch carries several callers' worth of vocabulary, values for a repeated key are joined with a comma rather than one silently winning.
+
 ## Error handling
 
 Errors from the underlying Rust layer are mapped to typed `Effect` errors via `Data.TaggedError`:
@@ -568,6 +677,12 @@ src/
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
+  register-plan.ts           — planWrites / planReads: pure transaction packing
+  register-cache.ts          — makeRegisterCache: what each device already holds
+  write-debouncer.ts         — makeWriteDebouncer: coalesces writes that arrive separately
+  read-debouncer.ts          — makeReadDebouncer: collects reads that arrive separately
+  batching-client.ts         — withBatchingClient and the per-transport registry
+  span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Context.Service wrapping AsyncAsciiTransport
@@ -591,6 +706,7 @@ examples/
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
   retry-policies.ts          — Transport-owned resilience: policies, overrides, transactions
+  batching.ts                — Transaction batching: planners, cache, windows, spans
   tcp-polling-stream.ts      — TCP polling, reconnect, and stream
   tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
   tcp-server.ts              — TCP server example
