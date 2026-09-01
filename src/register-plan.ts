@@ -177,8 +177,16 @@ const assertAddress = (address: number): void => {
  * Both step kinds carry the encoded value, so a plan writes the same bits whether
  * the planner grouped an address into an FC06 or an FC16. Leaving the FC06 path
  * unencoded would let `Uint16Array` truncate one path and not the other.
+ *
+ * Anything that compares a proposed value against a value already on the device
+ * must encode first, for the same reason: `-1` and `65535` are the same register
+ * contents, and a comparison that says otherwise rewrites the register forever.
+ *
+ * @param value - Unsigned (`0` to `65535`) or two's-complement signed (`-32768` to `-1`).
+ * @returns The value as an unsigned 16-bit number.
+ * @throws RangeError - The value is not an integer, or does not fit 16 bits.
  */
-const encodeValue = (value: number): number => {
+export const encodeRegisterValue = (value: number): number => {
   if (!Number.isInteger(value) || value < MIN_REGISTER_VALUE || value > MAX_REGISTER_VALUE) {
     throw new RangeError(
       `value must be an integer from ${MIN_REGISTER_VALUE} to ${MAX_REGISTER_VALUE}, got ${value}`,
@@ -230,7 +238,7 @@ export const planWrites = (
   const latest = new Map<number, number>();
   for (const write of writes) {
     assertAddress(write.address);
-    latest.set(write.address, encodeValue(write.value));
+    latest.set(write.address, encodeRegisterValue(write.value));
   }
   if (latest.size === 0) return [];
 

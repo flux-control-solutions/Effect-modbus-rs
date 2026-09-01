@@ -1,0 +1,83 @@
+import { expect, test } from 'bun:test';
+
+import { makeRegisterCache } from './register-cache';
+
+test('the cache suppresses nothing until it has seen a write land', () => {
+  const cache = makeRegisterCache();
+
+  const { pending, suppressed } = cache.filter(1, [{ address: 2000, value: 10 }]);
+
+  expect(pending).toEqual([{ address: 2000, value: 10 }]);
+  expect(suppressed).toEqual([]);
+});
+
+test('the cache suppresses a write that changes nothing', () => {
+  const cache = makeRegisterCache();
+  cache.observe(1, 2000, 10);
+
+  const { pending, suppressed } = cache.filter(1, [
+    { address: 2000, value: 10 },
+    { address: 2001, value: 20 },
+  ]);
+
+  expect(pending).toEqual([{ address: 2001, value: 20 }]);
+  expect(suppressed).toEqual([{ address: 2000, value: 10 }]);
+});
+
+test('the cache compares in the encoding that reaches the wire', () => {
+  const cache = makeRegisterCache();
+  cache.observe(1, 2000, -1);
+
+  // `-1` and `65535` are the same register contents. A comparison that says
+  // otherwise rewrites the register on every cycle.
+  expect(cache.filter(1, [{ address: 2000, value: 0xffff }]).pending).toEqual([]);
+  expect(cache.filter(1, [{ address: 2000, value: -1 }]).pending).toEqual([]);
+});
+
+test('the cache keeps the last write to a repeated address and counts the rest', () => {
+  const cache = makeRegisterCache();
+
+  const { pending, suppressed } = cache.filter(1, [
+    { address: 2000, value: 10 },
+    { address: 2000, value: 20 },
+  ]);
+
+  expect(pending).toEqual([{ address: 2000, value: 20 }]);
+  expect(suppressed).toEqual([{ address: 2000, value: 10 }]);
+  expect(pending.length + suppressed.length).toBe(2);
+});
+
+test('the cache keeps units apart', () => {
+  const cache = makeRegisterCache();
+  cache.observe(1, 2000, 10);
+
+  expect(cache.filter(1, [{ address: 2000, value: 10 }]).pending).toEqual([]);
+  expect(cache.filter(2, [{ address: 2000, value: 10 }]).pending).toEqual([
+    { address: 2000, value: 10 },
+  ]);
+});
+
+test('invalidate forgets one unit, or every unit', () => {
+  const cache = makeRegisterCache();
+  cache.observe(1, 2000, 10);
+  cache.observe(2, 2000, 10);
+
+  cache.invalidate(1);
+  expect(cache.filter(1, [{ address: 2000, value: 10 }]).pending).toHaveLength(1);
+  expect(cache.filter(2, [{ address: 2000, value: 10 }]).pending).toHaveLength(0);
+
+  cache.invalidate();
+  expect(cache.size).toBe(0);
+  expect(cache.filter(2, [{ address: 2000, value: 10 }]).pending).toHaveLength(1);
+});
+
+test('invalidate matches a unit by its whole id, not by a prefix of it', () => {
+  const cache = makeRegisterCache();
+  cache.observe(1, 2000, 10);
+  cache.observe(11, 2000, 10);
+
+  cache.invalidate(1);
+
+  // Unit 11 shares the leading "1" but is a different device.
+  expect(cache.filter(11, [{ address: 2000, value: 10 }]).pending).toEqual([]);
+});

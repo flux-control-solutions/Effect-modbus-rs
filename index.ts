@@ -34,17 +34,28 @@
  * - {@link wasmWsServerLayer} — Browser WS-gateway server (experimental upstream surface).
  * - {@link wasmSerialRtuServerLayer} / {@link wasmSerialAsciiServerLayer} — Browser Web Serial servers (experimental).
  *
- * ## Transaction planning
+ * ## Transaction batching
  *
  * A caller that derives each register independently produces one transaction per
- * register, which is the dominant cost on a half-duplex bus. {@link planWrites}
- * and {@link planReads} pack neighbouring addresses into the fewest transactions
- * that cover them, and hold no state:
+ * register, which is the dominant cost on a half-duplex bus. Three pieces bring
+ * that count down, and each one is usable without the others.
+ *
+ * {@link planWrites} and {@link planReads} pack neighbouring addresses into the
+ * fewest transactions that cover them. They hold no state and run no I/O:
  *
  * ```ts
  * planWrites([{ address: 2000, value: 10 }, { address: 2001, value: 20 }]);
  * // [{ kind: "multiple", address: 2000, values: Uint16Array [10, 20] }]
  * ```
+ *
+ * A planner only packs what a caller holds at one moment, and a caller with one
+ * fiber per register never holds two values at once. {@link makeWriteDebouncer}
+ * and {@link makeReadDebouncer} are the collection point that gives a planner
+ * something to pack, holding an operation for a window so the ones that arrive
+ * near it travel with it. Each caller still awaits its own operation.
+ *
+ * {@link makeRegisterCache} drops a write whose value the device already holds.
+ * It records only what this process wrote, so it never answers a read.
  *
  * ## Errors
  *
@@ -125,6 +136,7 @@ export type {
 } from './src/shared-transport';
 export type { ModbusOperations } from './src/modbus-client';
 export {
+  encodeRegisterValue,
   MODBUS_MAX_READ_REGISTERS,
   MODBUS_MAX_WRITE_REGISTERS,
   planReads,
@@ -141,6 +153,14 @@ export type {
   SingleWriteStep,
   WritePlanStep,
 } from './src/register-plan';
+export { makeRegisterCache } from './src/register-cache';
+export type { RegisterCache, RegisterCacheFilter } from './src/register-cache';
+export { makeWriteDebouncer } from './src/write-debouncer';
+export type { DebouncedWrite, WriteDebouncer, WriteDebouncerOptions } from './src/write-debouncer';
+export { makeReadDebouncer } from './src/read-debouncer';
+export type { ReadDebouncer, ReadDebouncerOptions } from './src/read-debouncer';
+export { mergeSpanAttributes } from './src/span-attributes';
+export type { ModbusSpanAttributes } from './src/span-attributes';
 export { AsciiTransportService } from './src/AsciiTransportService';
 export type { AsciiTransportOpenOptions } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';
