@@ -259,16 +259,17 @@ See [Testing with mocks](#testing-with-mocks) for the `fault` hook and the `reco
 `withClient` issues exactly the transaction you name, and stays the right client when you know what the bus should carry. `withBatchingClient` is its sibling for the other case — code with one accessor per register, which knows what it wants to read and write but not what that ought to cost.
 
 ```ts
-const client = yield * transport.withClient(3); // exact transaction
-yield * client.writeSingleRegister({ address: 2000, value: 512 });
+Effect.gen(function* () {
+  const client = yield* transport.withClient(3); // exact transaction
+  yield* client.writeSingleRegister({ address: 2000, value: 512 });
 
-const batched = yield * transport.withBatchingClient(3); // decides the transactions
-yield *
-  batched.writeAll([
+  const batched = yield* transport.withBatchingClient(3); // decides the transactions
+  yield* batched.writeAll([
     { address: 2000, value: 512 },
     { address: 2001, value: 256 },
   ]); // one FC16
-yield * batched.readAll([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]); // two FC03
+  yield* batched.readAll([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]); // two FC03
+});
 ```
 
 Three things bring the transaction count down, and each is exported on its own:
@@ -358,10 +359,101 @@ A batching client opens `modbus.write` and `modbus.read` spans, carrying:
 The write span opens _after_ the cache filter, and only when a write survives it, so it records what reached the bus rather than what was proposed. Attach your own vocabulary as a second argument:
 
 ```ts
-yield * batched.write({ address: 2000, value: 512 }, { 'app.point': 'Supply fan' });
+Effect.gen(function* () {
+  yield* batched.write({ address: 2000, value: 512 }, { 'app.point': 'Supply fan' });
+});
 ```
 
 Your keys are opaque to this package and are applied first; the `modbus.*` keys are applied last and win a collision, so a caller cannot overwrite the record of what the library wrote. When a batch carries several callers' worth of vocabulary, values for a repeated key are joined with a comma rather than one silently winning.
+
+### Using the layers directly
+
+The batching client is a composition, not a wall. Each layer is exported, and each works without the layer above it.
+
+#### The planners
+
+Pure — no Effect, no state, no I/O. Use them when you own your own scheduling and only want the packing.
+
+```ts
+import { planReads, planWrites } from '@flux-control/effect-modbus-rs';
+
+planWrites([
+  { address: 2003, value: 40 },
+  { address: 2000, value: 10 },
+  { address: 2010, value: 99 },
+  { address: 2001, value: 20 },
+  { address: 2002, value: 30 },
+]);
+// [
+//   { kind: "multiple", address: 2000, values: Uint16Array [10, 20, 30, 40] },
+//   { kind: "single",   address: 2010, value: 99 },
+// ]
+
+const plan = planReads([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]);
+plan.spans; // [{ address: 0, quantity: 3 }, { address: 32, quantity: 2 }]
+plan.locate(0x0021); // { span: 1, offset: 1 } — index back into the responses
+plan.locate(0x0010); // undefined
+```
+
+Each step maps onto exactly one client call: `single` onto `writeSingleRegister`, `multiple` onto `writeMultipleRegisters`. `locate` answers for every address a span covers, so you issue the spans, keep the responses in order, and read each value out without tracking the grouping yourself.
+
+`planWrites(writes, options?)`:
+
+| Option                 | Default                            | What it does                                                                    |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------- |
+| `maxRegistersPerWrite` | `MODBUS_MAX_WRITE_REGISTERS` (123) | Registers one FC16 may carry. A longer run splits into consecutive steps.       |
+| `minRunLength`         | `2`                                | Shortest run that becomes FC16. Anything shorter becomes one FC06 per register. |
+
+`planReads(addresses, options?)`:
+
+| Option                | Default                           | What it does                                                  |
+| --------------------- | --------------------------------- | ------------------------------------------------------------- |
+| `maxRegistersPerRead` | `MODBUS_MAX_READ_REGISTERS` (125) | Registers one read may return. A span never grows past this.  |
+| `maxGap`              | `0`                               | Unrequested registers the planner may read to join two spans. |
+
+Both constants are the specification's limits, and both are exported. Many devices stop short of them — pass the device's own number when it does.
+
+> **Raising `maxGap` can take healthy registers down with it.** A gap may cover an address the device does not implement. That span then fails with `ILLEGAL_DATA_ADDRESS`, and every address in it fails, including the ones that would have answered. Raise it only against a register map that says the gap is readable.
+
+Both planners throw `RangeError` for an address, a value, or an option that is out of range, since those are programming errors rather than bus conditions. `encodeRegisterValue` is exported for the same reason the planners use it: `-1` and `65535` are the same register contents, so anything comparing a proposed value against a device value has to encode first or it will rewrite the register forever.
+
+#### The debouncers and the cache
+
+Stateful, scoped, and driven by callbacks you supply — use these to batch over a client this package did not hand out.
+
+```ts
+Effect.gen(function* () {
+  const writes = yield* makeWriteDebouncer({
+    window: '250 millis',
+    maxHold: '1 second',
+    flush: (batch) => issueHowever(batch), // yours: cache, plan, span, write
+  });
+
+  // Two callers that never meet, one transaction:
+  yield* Effect.all(
+    [writes.write({ address: 2000, value: 10 }), writes.write({ address: 2001, value: 20 })],
+    {
+      concurrency: 'unbounded',
+    },
+  );
+});
+```
+
+`makeWriteDebouncer` takes `window`, an optional `maxHold` (four times `window` by default), and `flush`. It returns `write` / `writeNow` / `writeAll` / `writeAllNow`, a `flush` you can force, and a `pending` count for tests.
+
+`makeReadDebouncer` takes `window`, an optional `plan` (the `planReads` options), and `fetch`, which must return one response per span. Its callback owns the function code, so reading input registers rather than holding registers means a second debouncer. It returns `read` / `readNow` / `readAll` / `readAllNow`, plus `flush` and `pending`.
+
+Both take a `Scope` and flush in it rather than in the caller's, so a caller interrupted mid-wait cannot take the pending batch down with it. When that scope closes, callers still waiting are interrupted — their operations never reached the device, and reporting success would break the invariant the `Deferred` exists to hold.
+
+`makeRegisterCache` returns `filter(unitId, writes)`, `observe(unitId, address, value)`, and `invalidate(unitId?)`. Call `observe` only after the device acknowledged the write: a value recorded early suppresses the retry that would have fixed it.
+
+#### Composing them yourself
+
+`makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving a client this package did not hand out — a raw `modbus-rs` client, or a stub.
+
+`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` is made of, including the per-unit caching and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it.
+
+`mergeSpanAttributes(sources)` is the join rule described under [Spans](#spans), exported so a custom `flush` can apply the same one.
 
 ## Error handling
 
