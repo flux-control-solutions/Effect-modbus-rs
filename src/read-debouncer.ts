@@ -63,6 +63,20 @@ export interface ReadDebouncer {
   readNow(address: number): Effect.Effect<number, ModbusError>;
 
   /**
+   * Collects several addresses for the window, as one reader, and returns their
+   * values in the order asked for.
+   *
+   * A reader that already holds every address does not need a collection point,
+   * only a planner. With a window of zero the group is planned and read at once,
+   * so a caller of this method gets one transaction per span with no debouncer
+   * at all.
+   */
+  readAll(addresses: ReadonlyArray<number>): Effect.Effect<ReadonlyArray<number>, ModbusError>;
+
+  /** Adds several addresses to the batch and reads immediately. */
+  readAllNow(addresses: ReadonlyArray<number>): Effect.Effect<ReadonlyArray<number>, ModbusError>;
+
+  /**
    * Reads whatever is collected, now.
    *
    * Never fails: the outcome goes to the readers waiting on the batch, not to
@@ -135,12 +149,14 @@ export const makeReadDebouncer = (
         };
       });
 
-    /** Reads one address on its own, for a zero window and for `readNow`. */
-    const issueOne = (address: number) =>
-      Effect.flatMap(issue([address]), (valueOf) => {
-        const value = valueOf(address);
-        return value === undefined ? Effect.fail(shortResponse(address)) : Effect.succeed(value);
-      });
+    /** Reads a group on its own, for a window of zero. */
+    const issueDirectly = (addresses: ReadonlyArray<number>) =>
+      Effect.flatMap(issue(addresses), (valueOf) =>
+        Effect.forEach(addresses, (address) => {
+          const value = valueOf(address);
+          return value === undefined ? Effect.fail(shortResponse(address)) : Effect.succeed(value);
+        }),
+      );
 
     /**
      * Takes the batch under the lock, then reads without it, so arrivals during
@@ -175,16 +191,20 @@ export const makeReadDebouncer = (
       );
     });
 
-    /** Collects an address, returning the `Deferred` for this reader. */
-    const enqueue = (address: number, startTimer: boolean) =>
+    /** Collects addresses, returning one `Deferred` for each, in order. */
+    const enqueue = (addresses: ReadonlyArray<number>, startTimer: boolean) =>
       Effect.gen(function* () {
-        const waiter = yield* Deferred.make<number, ModbusError>();
+        const waiters = yield* Effect.forEach(addresses, () =>
+          Deferred.make<number, ModbusError>(),
+        );
 
         yield* lock.withPermits(1)(
           Effect.sync(() => {
-            const waiters = collected.get(address);
-            if (waiters === undefined) collected.set(address, [waiter]);
-            else waiters.push(waiter);
+            addresses.forEach((address, index) => {
+              const existing = collected.get(address);
+              if (existing === undefined) collected.set(address, [waiters[index]!]);
+              else existing.push(waiters[index]!);
+            });
           }).pipe(
             Effect.andThen(
               Effect.suspend(() => {
@@ -216,20 +236,36 @@ export const makeReadDebouncer = (
           ),
         );
 
-        return waiter;
+        return waiters;
       });
 
-    const read = (address: number) =>
-      windowMs <= 0 ? issueOne(address) : Effect.flatMap(enqueue(address, true), Deferred.await);
+    const readAll = (
+      addresses: ReadonlyArray<number>,
+    ): Effect.Effect<ReadonlyArray<number>, ModbusError> => {
+      if (addresses.length === 0) return Effect.succeed([]);
+      return windowMs <= 0
+        ? issueDirectly(addresses)
+        : Effect.flatMap(enqueue(addresses, true), (waiters) =>
+            Effect.forEach(waiters, Deferred.await),
+          );
+    };
 
-    const readNow = (address: number) =>
-      windowMs <= 0
-        ? issueOne(address)
+    const readAllNow = (
+      addresses: ReadonlyArray<number>,
+    ): Effect.Effect<ReadonlyArray<number>, ModbusError> => {
+      if (addresses.length === 0) return Effect.succeed([]);
+      return windowMs <= 0
+        ? issueDirectly(addresses)
         : Effect.gen(function* () {
-            const waiter = yield* enqueue(address, false);
+            const waiters = yield* enqueue(addresses, false);
             yield* Effect.uninterruptible(flushPending);
-            return yield* Deferred.await(waiter);
+            return yield* Effect.forEach(waiters, Deferred.await);
           });
+    };
+
+    const read = (address: number) => Effect.map(readAll([address]), (values) => values[0]!);
+
+    const readNow = (address: number) => Effect.map(readAllNow([address]), (values) => values[0]!);
 
     yield* Effect.addFinalizer(() =>
       lock
@@ -256,6 +292,8 @@ export const makeReadDebouncer = (
     return {
       read,
       readNow,
+      readAll,
+      readAllNow,
       flush: flushPending,
       get pending() {
         return collected.size;

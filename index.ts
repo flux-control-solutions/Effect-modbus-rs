@@ -57,6 +57,31 @@
  * {@link makeRegisterCache} drops a write whose value the device already holds.
  * It records only what this process wrote, so it never answers a read.
  *
+ * `transport.withBatchingClient(unitId, options)` puts the three together. It is
+ * the sibling of `withClient`, not a replacement for it: `withClient` issues the
+ * transaction a caller names, and a batching client decides the transactions for
+ * a caller that names registers instead.
+ *
+ * ```ts
+ * const client = yield* transport.withClient(3);            // exact transaction
+ * yield* client.writeSingleRegister({ address: 2000, value: 512 });
+ *
+ * const batched = yield* transport.withBatchingClient(3, {  // decides the transactions
+ *   debounce: { writes: { window: "250 millis", maxHold: "1 second" } },
+ * });
+ * yield* batched.write({ address: 2000, value: 512 });
+ * yield* batched.readAll([0x0000, 0x0001, 0x0020]);
+ * ```
+ *
+ * A {@link BatchingModbusClient} deliberately does not extend
+ * {@link ModbusOperations}: a raw write on the same object would go around the
+ * cache and around the batch. A caller that needs both surfaces asks the
+ * transport for both, and they share one connection.
+ *
+ * Nothing is debounced unless `debounce` asks for it, matching the rest of this
+ * package. `writeAll` and `readAll` still plan, so a caller that holds a group of
+ * registers gets packed transactions with no window at all.
+ *
  * ## Errors
  *
  * All Modbus operations fail with a {@link ModbusError} discriminated union.
@@ -159,6 +184,15 @@ export { makeWriteDebouncer } from './src/write-debouncer';
 export type { DebouncedWrite, WriteDebouncer, WriteDebouncerOptions } from './src/write-debouncer';
 export { makeReadDebouncer } from './src/read-debouncer';
 export type { ReadDebouncer, ReadDebouncerOptions } from './src/read-debouncer';
+export { makeBatchingClient, makeBatchingRegistry } from './src/batching-client';
+export type {
+  BatchingClientOptions,
+  BatchingDebounceOptions,
+  BatchingModbusClient,
+  BatchingRegistry,
+  BatchingRegistryDeps,
+  BatchingRegisterReader,
+} from './src/batching-client';
 export { mergeSpanAttributes } from './src/span-attributes';
 export type { ModbusSpanAttributes } from './src/span-attributes';
 export { AsciiTransportService } from './src/AsciiTransportService';

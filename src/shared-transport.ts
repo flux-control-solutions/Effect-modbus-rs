@@ -1,13 +1,18 @@
 import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
 
 import {
+  makeBatchingRegistry,
+  type BatchingClientOptions,
+  type BatchingModbusClient,
+} from './batching-client';
+import {
   claimReconnect,
   ConnectionState,
   resolveReconnect,
   guardCircuit,
   type ReconnectOptions,
 } from './connection';
-import { type ModbusError, ModbusNotConnectedError, toModbusError } from './errors';
+import { ModbusNotConnectedError, toModbusError, type ModbusError } from './errors';
 import {
   makeEffectModbusClient,
   withResilience,
@@ -188,6 +193,51 @@ export interface TransportServiceApi {
   reconnect(): Effect.Effect<void, ModbusError>;
   /** Closes the transport and its scope immediately. */
   close(): Effect.Effect<void, ModbusError, Scope.Scope>;
+  /**
+   * Obtains a {@link BatchingModbusClient} for the given unit ID.
+   *
+   * Where `withClient` issues the transaction a caller names, this client
+   * decides the transactions for the caller: it packs neighbouring registers,
+   * drops writes the device already agrees with, and — when a window is
+   * configured — collects operations that arrive near each other.
+   *
+   * The client is cached per unit ID, because that is what makes it work: two
+   * batching clients on one unit hold two batches and coalesce neither. A second
+   * call for the same unit with different options is a programming error and
+   * fails with `ModbusInvalidArgumentError` rather than quietly returning a
+   * client configured some other way.
+   *
+   * Nothing is debounced unless `debounce` asks for it, matching the rest of
+   * this package: default timing stays predictable.
+   *
+   * @param unitId - Modbus unit ID to address.
+   * @param options - The cache, the windows, and the planner limits.
+   */
+  withBatchingClient(
+    unitId: number,
+    options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
+  ): Effect.Effect<BatchingModbusClient, ModbusError>;
+  /**
+   * Units a client has been built for on this transport.
+   *
+   * A caller that must leave its devices in a known state needs to know which
+   * ones it spoke to. The transport knows, and knowing is all it can do: what a
+   * safe state *is* belongs to the caller. Zero volts is one device's answer and
+   * a stopped motor is another's.
+   */
+  readonly touchedUnits: ReadonlySet<number>;
+  /**
+   * Runs an action against every touched unit when the current scope closes.
+   *
+   * The action runs while the transport is still open, so it can write. A
+   * failure is logged rather than raised: a finalizer that fails takes the rest
+   * of the shutdown with it, and the other units still need their turn.
+   *
+   * @param action - What to do for one unit.
+   */
+  onShutdownPerUnit(
+    action: (unitId: number) => Effect.Effect<void, ModbusError>,
+  ): Effect.Effect<void, never, Scope.Scope>;
   /** Whether the transport currently has in-flight requests. */
   hasPendingRequests(): boolean;
 }
@@ -359,27 +409,36 @@ export function makeTransportScoped<
       report,
     };
 
+    const withClient = Effect.fnUntraced(function* (
+      unitId: number,
+      clientOptions?: { readonly retry?: ModbusRetryPolicy },
+    ) {
+      const t = yield* ensureOpen();
+      let client = clientSet.get(unitId);
+      if (!client) {
+        client = yield* Effect.try({
+          try: () => t.createClient({ unitId }),
+          catch: (error) => toModbusError(error as Error),
+        });
+        clientSet.set(unitId, client);
+      }
+      return withResilience(makeEffectModbusClient(client), {
+        ...resilience,
+        policy: clientOptions?.retry ?? transportRetry,
+      });
+    });
+
+    const batching = makeBatchingRegistry({
+      withClient,
+      connectionState,
+      touchedUnits: () => clientSet.keys(),
+      scope: serviceScope,
+    });
+
     return {
       connectionState,
 
-      withClient: Effect.fnUntraced(function* (
-        unitId: number,
-        clientOptions?: { readonly retry?: ModbusRetryPolicy },
-      ) {
-        const t = yield* ensureOpen();
-        let client = clientSet.get(unitId);
-        if (!client) {
-          client = yield* Effect.try({
-            try: () => t.createClient({ unitId }),
-            catch: (error) => toModbusError(error as Error),
-          });
-          clientSet.set(unitId, client);
-        }
-        return withResilience(makeEffectModbusClient(client), {
-          ...resilience,
-          policy: clientOptions?.retry ?? transportRetry,
-        });
-      }),
+      withClient,
 
       setRequestTimeout: Effect.fnUntraced(function* (timeoutMs: number) {
         const t = transport;
@@ -441,6 +500,14 @@ export function makeTransportScoped<
         const scope = yield* Effect.scope;
         yield* Scope.close(scope as Scope.Closeable, Exit.void);
       }),
+
+      withBatchingClient: batching.withBatchingClient,
+
+      get touchedUnits() {
+        return new Set(clientSet.keys());
+      },
+
+      onShutdownPerUnit: batching.onShutdownPerUnit,
 
       hasPendingRequests: () => {
         if (closed) return false;

@@ -196,3 +196,43 @@ test('closing the scope interrupts a caller still waiting', async () => {
   expect(callerExit !== undefined && Exit.hasInterrupts(callerExit)).toBe(true);
   expect(recorder.batches).toHaveLength(0);
 });
+
+test('writeAll issues a group as one caller, even with no window', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer({ window: 0, flush: recorder.flush }, (debouncer) =>
+    debouncer.writeAll([
+      { address: 2000, value: 10 },
+      { address: 2001, value: 20 },
+    ]),
+  );
+
+  // A caller that already holds every value needs a planner, not a window.
+  expect(recorder.batches).toHaveLength(1);
+  expect(recorder.batches[0]).toHaveLength(2);
+});
+
+test('writeAll does not let a held write land after a newer value', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer({ window: '200 millis', flush: recorder.flush }, (debouncer) =>
+    Effect.gen(function* () {
+      const held = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 500 }));
+      yield* Effect.sleep('10 millis');
+      yield* debouncer.writeAllNow([{ address: 2000, value: 800 }]);
+      yield* Fiber.join(held);
+    }),
+  );
+
+  expect(recorder.held.get(2000)).toBe(800);
+});
+
+test('writeAll of nothing does nothing', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer({ window: '20 millis', flush: recorder.flush }, (debouncer) =>
+    debouncer.writeAll([]),
+  );
+
+  expect(recorder.batches).toHaveLength(0);
+});

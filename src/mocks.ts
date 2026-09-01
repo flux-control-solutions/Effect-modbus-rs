@@ -19,6 +19,7 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
+import { makeBatchingRegistry } from './batching-client';
 import { claimReconnect, ConnectionState, guardCircuit, resolveReconnect } from './connection';
 import { ModbusInvalidArgumentError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
@@ -426,29 +427,51 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         }),
       );
 
+      const touchedUnits = new Set<number>();
+
+      const withClient = Effect.fnUntraced(function* (
+        unitId: number,
+        clientOptions?: { readonly retry?: ModbusRetryPolicy },
+      ) {
+        const state = deviceStates.get(unitId);
+        if (!state) {
+          return yield* new ModbusInvalidArgumentError({
+            cause: new Error(`Device with unitId ${unitId} not found in mock configuration`),
+            message: `Device with unitId ${unitId} not found in mock configuration`,
+          });
+        }
+        // Retry policies still apply, so a mock can exercise them end to end.
+        // The fault hook rides in the guard slot, which already runs once per
+        // attempt — exactly where an injected failure belongs.
+        touchedUnits.add(unitId);
+        return withResilience(makeMockModbusClient(state, unitId), {
+          guard,
+          report,
+          policy: clientOptions?.retry ?? options.retry,
+        });
+      });
+
+      // The mock carries the same batching surface as a live transport, so a
+      // test that exercises batching runs against the same code a device does.
+      const batching = makeBatchingRegistry({
+        withClient,
+        connectionState,
+        touchedUnits: () => touchedUnits,
+        scope: serviceScope,
+      });
+
       return {
         connectionState,
 
-        withClient: Effect.fnUntraced(function* (
-          unitId: number,
-          clientOptions?: { readonly retry?: ModbusRetryPolicy },
-        ) {
-          const state = deviceStates.get(unitId);
-          if (!state) {
-            return yield* new ModbusInvalidArgumentError({
-              cause: new Error(`Device with unitId ${unitId} not found in mock configuration`),
-              message: `Device with unitId ${unitId} not found in mock configuration`,
-            });
-          }
-          // Retry policies still apply, so a mock can exercise them end to end.
-          // The fault hook rides in the guard slot, which already runs once per
-          // attempt — exactly where an injected failure belongs.
-          return withResilience(makeMockModbusClient(state, unitId), {
-            guard,
-            report,
-            policy: clientOptions?.retry ?? options.retry,
-          });
-        }),
+        withClient,
+
+        withBatchingClient: batching.withBatchingClient,
+
+        get touchedUnits() {
+          return new Set(touchedUnits);
+        },
+
+        onShutdownPerUnit: batching.onShutdownPerUnit,
 
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,

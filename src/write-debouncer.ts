@@ -91,6 +91,28 @@ export interface WriteDebouncer {
   ): Effect.Effect<void, ModbusError>;
 
   /**
+   * Holds several writes for the window, as one caller.
+   *
+   * A caller that already holds every value does not need a collection point,
+   * but it still must not go around the batch: a write held for one of these
+   * addresses would otherwise reach the device after the newer value. The whole
+   * group succeeds or fails together.
+   *
+   * With a window of zero the group is issued at once, so a caller of this
+   * method gets packed transactions with no debouncer at all.
+   */
+  writeAll(
+    writes: ReadonlyArray<RegisterWrite>,
+    attributes?: ModbusSpanAttributes,
+  ): Effect.Effect<void, ModbusError>;
+
+  /** Adds several writes to the batch and flushes immediately. */
+  writeAllNow(
+    writes: ReadonlyArray<RegisterWrite>,
+    attributes?: ModbusSpanAttributes,
+  ): Effect.Effect<void, ModbusError>;
+
+  /**
    * Issues whatever is pending, now.
    *
    * Never fails: the outcome goes to the callers waiting on the batch, not to
@@ -187,9 +209,14 @@ export const makeWriteDebouncer = (
       );
     });
 
-    /** Adds a write to the batch, returning the `Deferred` for this caller. */
+    /**
+     * Adds writes to the batch, returning the one `Deferred` for this caller.
+     *
+     * The whole group is added under one hold of the lock, so a flush takes all
+     * of it or none of it. One `Deferred` therefore answers for the group.
+     */
     const enqueue = (
-      write: RegisterWrite,
+      writes: ReadonlyArray<RegisterWrite>,
       attributes: ModbusSpanAttributes | undefined,
       restartTimer: boolean,
     ) =>
@@ -198,16 +225,19 @@ export const makeWriteDebouncer = (
 
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
-            const superseded = held.get(write.address);
+            for (const write of writes) {
+              const superseded = held.get(write.address);
 
-            // A later write to the same address replaces the value but inherits
-            // its waiters: only the newest value reaches the wire, and everyone
-            // waiting on that address learns whether it got there.
-            held.set(write.address, {
-              write,
-              attributes,
-              waiters: [...(superseded?.waiters ?? []), waiter],
-            });
+              // A later write to the same address replaces the value but
+              // inherits its waiters: only the newest value reaches the wire,
+              // and everyone waiting on that address learns whether it got
+              // there.
+              held.set(write.address, {
+                write,
+                attributes,
+                waiters: [...(superseded?.waiters ?? []), waiter],
+              });
+            }
 
             const now = yield* Clock.currentTimeMillis;
             openedAtMs ??= now;
@@ -236,19 +266,44 @@ export const makeWriteDebouncer = (
         return waiter;
       });
 
-    const write = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
-      windowMs <= 0
-        ? options.flush([{ address: write.address, value: write.value, attributes }])
-        : Effect.flatMap(enqueue(write, attributes, true), Deferred.await);
+    /** Issues a group at once, for a window of zero. */
+    const issueDirectly = (
+      writes: ReadonlyArray<RegisterWrite>,
+      attributes: ModbusSpanAttributes | undefined,
+    ) =>
+      options.flush(
+        writes.map((write) => ({ address: write.address, value: write.value, attributes })),
+      );
 
-    const writeNow = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
-      windowMs <= 0
-        ? options.flush([{ address: write.address, value: write.value, attributes }])
+    const writeAll = (
+      writes: ReadonlyArray<RegisterWrite>,
+      attributes?: ModbusSpanAttributes,
+    ): Effect.Effect<void, ModbusError> => {
+      if (writes.length === 0) return Effect.void;
+      return windowMs <= 0
+        ? issueDirectly(writes, attributes)
+        : Effect.flatMap(enqueue(writes, attributes, true), Deferred.await);
+    };
+
+    const writeAllNow = (
+      writes: ReadonlyArray<RegisterWrite>,
+      attributes?: ModbusSpanAttributes,
+    ): Effect.Effect<void, ModbusError> => {
+      if (writes.length === 0) return Effect.void;
+      return windowMs <= 0
+        ? issueDirectly(writes, attributes)
         : Effect.gen(function* () {
-            const waiter = yield* enqueue(write, attributes, false);
+            const waiter = yield* enqueue(writes, attributes, false);
             yield* Effect.uninterruptible(flushPending);
             return yield* Deferred.await(waiter);
           });
+    };
+
+    const write = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
+      writeAll([write], attributes);
+
+    const writeNow = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
+      writeAllNow([write], attributes);
 
     yield* Effect.addFinalizer(() =>
       lock
@@ -282,6 +337,8 @@ export const makeWriteDebouncer = (
     return {
       write,
       writeNow,
+      writeAll,
+      writeAllNow,
       flush: flushPending,
       get pending() {
         return held.size;

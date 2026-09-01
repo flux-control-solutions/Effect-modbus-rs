@@ -152,3 +152,52 @@ test('a gap tolerance merges two spans into one transaction', async () => {
 
   expect(device.requests).toEqual([[{ address: 10, quantity: 5 }]]);
 });
+
+test('readAll plans a group into spans, even with no window', async () => {
+  const device = makeDevice();
+  const addresses = [0x0000, 0x0001, 0x0002, 0x0020, 0x0021];
+
+  const values = await withDebouncer({ window: 0, fetch: device.fetch }, (debouncer) =>
+    debouncer.readAll(addresses),
+  );
+
+  expect(values).toEqual(addresses.map((address) => address * 10));
+  // A reader that already holds every address needs a planner, not a window.
+  expect(device.requests).toEqual([
+    [
+      { address: 0x0000, quantity: 3 },
+      { address: 0x0020, quantity: 2 },
+    ],
+  ]);
+});
+
+test('readAll returns values in the order asked for, not in address order', async () => {
+  const device = makeDevice();
+
+  const values = await withDebouncer({ window: 0, fetch: device.fetch }, (debouncer) =>
+    debouncer.readAll([3, 1, 2, 1]),
+  );
+
+  expect(values).toEqual([30, 10, 20, 10]);
+});
+
+test('readAll of nothing reads nothing', async () => {
+  const device = makeDevice();
+
+  const values = await withDebouncer({ window: '20 millis', fetch: device.fetch }, (debouncer) =>
+    debouncer.readAll([]),
+  );
+
+  expect(values).toEqual([]);
+  expect(device.requests).toHaveLength(0);
+});
+
+test('readAll joins the batch when a window is open', async () => {
+  const device = makeDevice();
+
+  await withDebouncer({ window: '30 millis', fetch: device.fetch }, (debouncer) =>
+    Effect.all([debouncer.read(0), debouncer.readAll([1, 2])], { concurrency: 'unbounded' }),
+  );
+
+  expect(device.requests).toEqual([[{ address: 0, quantity: 3 }]]);
+});
