@@ -43,7 +43,7 @@ program.pipe(
     ModbusExceptionError: (err) => Console.log(`Modbus exception ${err.exception}: ${err.message}`),
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(RtuTransportService.make({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
@@ -303,14 +303,14 @@ Three things bring the transaction count down, and each is exported on its own:
 Nothing is debounced unless you ask for it, the same way nothing retries or reconnects unless you ask:
 
 ```ts
-const batched =
-  yield *
-  transport.withBatchingClient(3, {
+Effect.gen(function* () {
+  const batched = yield* transport.withBatchingClient(3, {
     debounce: {
       writes: { window: '250 millis', maxHold: '1 second' },
       reads: { window: '5 millis' },
     },
   });
+});
 ```
 
 A write is held for `window`, and each new arrival restarts it. `maxHold` caps the total hold, so a register that updates faster than the window still reaches the wire — without the ceiling, every arrival would postpone the wait forever. It defaults to four times `window`.
@@ -334,13 +334,14 @@ A batching client is cached per unit ID, because that is what makes it work: two
 ### Shutdown
 
 ```ts
-yield *
-  transport.onShutdownPerUnit((unitId) =>
+Effect.gen(function* () {
+  yield* transport.onShutdownPerUnit((unitId) =>
     Effect.gen(function* () {
       const batched = yield* transport.withBatchingClient(unitId);
       yield* batched.writeNow({ address: 2000, value: 0 });
     }),
   );
+});
 ```
 
 The action runs against every unit in `transport.touchedUnits`, while the transport is still open. Only the mechanism belongs here: what a safe state _is_ belongs to you. Zero volts is one device's answer and a stopped motor is another's.
@@ -488,8 +489,10 @@ const layer = TcpTransportService.make({
 });
 
 // call sites never mention retries
-const client = yield * transport.withClient(1);
-yield * client.readHoldingRegisters({ address: 0, quantity: 10 });
+Effect.gen(function* () {
+  const client = yield* transport.withClient(1);
+  yield* client.readHoldingRegisters({ address: 0, quantity: 10 });
+});
 ```
 
 With neither option set, a transport behaves exactly as it always has: one attempt per operation, reconnection only when you ask for it.
@@ -521,9 +524,11 @@ RetryPolicies.serial({
 One bus often hosts device types that need different logic. A per-client policy **replaces** the transport's, so overrides can never multiply attempt counts:
 
 ```ts
-const meter = yield * transport.withClient(1, { retry: RetryPolicies.serial() });
-const plc = yield * transport.withClient(2, { retry: RetryPolicies.serial({ maxRetries: 8 }) });
-const legacy = yield * transport.withClient(3, { retry: RetryPolicies.none() });
+Effect.gen(function* () {
+  const meter = yield* transport.withClient(1, { retry: RetryPolicies.serial() });
+  const plc = yield* transport.withClient(2, { retry: RetryPolicies.serial({ maxRetries: 8 }) });
+  const legacy = yield* transport.withClient(3, { retry: RetryPolicies.none() });
+});
 ```
 
 Clients built for the same unit ID under different policies share one underlying connection.
@@ -531,7 +536,9 @@ Clients built for the same unit ID under different policies share one underlying
 `client.withRetry(policy)` does the same for a single operation:
 
 ```ts
-yield * client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+Effect.gen(function* () {
+  yield* client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+});
 ```
 
 Resolution order is **per-operation → per-client → transport → none**. First match wins; the others are discarded, not combined.
@@ -617,10 +624,11 @@ State transitions are published on `transport.connectionState`:
 | `Down`         | Attempts exhausted; waiting out `resetAfter` before probing again. Operations refused. |
 
 ```ts
-yield *
-  Stream.runForEach(transport.connectionState.changes, (state) =>
+Effect.gen(function* () {
+  yield* Stream.runForEach(SubscriptionRef.changes(transport.connectionState), (state) =>
     Console.log(`link: ${state._tag}`),
   );
+});
 ```
 
 ### Retrying a transaction
@@ -628,13 +636,14 @@ yield *
 `retryModbus(policy)` remains exported for the one case the transport cannot express: driving a **compound** operation as a unit, where retrying individual frames would be wrong.
 
 ```ts
-const client = yield * transport.withClient(1, { retry: RetryPolicies.none() });
+Effect.gen(function* () {
+  const client = yield* transport.withClient(1, { retry: RetryPolicies.none() });
 
-yield *
-  Effect.gen(function* () {
+  yield* Effect.gen(function* () {
     const current = yield* client.readHoldingRegisters({ address: 0, quantity: 2 });
     yield* client.writeMultipleRegisters({ address: 0, values: bump(current) });
   }).pipe(retryModbus(RetryPolicies.tcp()));
+});
 ```
 
 Take a `RetryPolicies.none()` client first. Unlike `withClient({ retry })` and `client.withRetry()`, which replace the policy in force, `retryModbus` wraps whatever the client is already doing — so over a policied client the two nest and the attempt counts multiply. See [Replacing vs. wrapping](#replacing-vs-wrapping).

@@ -173,7 +173,7 @@ export interface TransportServiceApi {
    * a status indicator:
    *
    * ```ts
-   * yield* Stream.runForEach(transport.connectionState.changes, (state) =>
+   * yield* Stream.runForEach(SubscriptionRef.changes(transport.connectionState), (state) =>
    *   Console.log(`link: ${state._tag}`))
    * ```
    */
