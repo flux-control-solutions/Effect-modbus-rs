@@ -37,6 +37,9 @@ export const MODBUS_MAX_READ_REGISTERS = 125;
 /** Widest value a 16-bit register holds, read as unsigned. */
 const MAX_REGISTER_VALUE = 0xffff;
 
+/** Highest address encodable in a Modbus request PDU. */
+const MAX_REGISTER_ADDRESS = 0xffff;
+
 /** Narrowest value a 16-bit register holds, read as two's-complement signed. */
 const MIN_REGISTER_VALUE = -0x8000;
 
@@ -164,10 +167,19 @@ const assertPositiveInteger = (name: string, value: number): void => {
   }
 };
 
+/** Rejects a device limit outside the range the protocol can encode. */
+const assertTransactionLimit = (name: string, value: number, maximum: number): void => {
+  if (!Number.isInteger(value) || value < 1 || value > maximum) {
+    throw new RangeError(`${name} must be an integer from 1 to ${maximum}, got ${value}`);
+  }
+};
+
 /** Rejects an address that cannot name a register. */
 const assertAddress = (address: number): void => {
-  if (!Number.isInteger(address) || address < 0) {
-    throw new RangeError(`address must be a non-negative integer, got ${address}`);
+  if (!Number.isInteger(address) || address < 0 || address > MAX_REGISTER_ADDRESS) {
+    throw new RangeError(
+      `address must be an integer from 0 to ${MAX_REGISTER_ADDRESS}, got ${address}`,
+    );
   }
 };
 
@@ -232,7 +244,7 @@ export const planWrites = (
 ): ReadonlyArray<WritePlanStep> => {
   const maxRegistersPerWrite = options.maxRegistersPerWrite ?? MODBUS_MAX_WRITE_REGISTERS;
   const minRunLength = options.minRunLength ?? 2;
-  assertPositiveInteger('maxRegistersPerWrite', maxRegistersPerWrite);
+  assertTransactionLimit('maxRegistersPerWrite', maxRegistersPerWrite, MODBUS_MAX_WRITE_REGISTERS);
   assertPositiveInteger('minRunLength', minRunLength);
 
   const latest = new Map<number, number>();
@@ -305,7 +317,7 @@ export const planReads = (
 ): ReadPlan => {
   const maxRegistersPerRead = options.maxRegistersPerRead ?? MODBUS_MAX_READ_REGISTERS;
   const maxGap = options.maxGap ?? 0;
-  assertPositiveInteger('maxRegistersPerRead', maxRegistersPerRead);
+  assertTransactionLimit('maxRegistersPerRead', maxRegistersPerRead, MODBUS_MAX_READ_REGISTERS);
   if (!Number.isInteger(maxGap) || maxGap < 0) {
     throw new RangeError(`maxGap must be a non-negative integer, got ${maxGap}`);
   }

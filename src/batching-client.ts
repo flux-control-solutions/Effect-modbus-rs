@@ -11,11 +11,21 @@
  * @module
  */
 
-import { Duration, Effect, Scope, Stream, SubscriptionRef } from 'effect';
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Scope,
+  Semaphore,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
 
 import { ConnectionState } from './connection';
-import { ModbusInvalidArgumentError, type ModbusError } from './errors';
-import type { EffectModbusClient } from './modbus-client';
+import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
+import type { EffectModbusClient, ModbusOperations } from './modbus-client';
 import { makeReadDebouncer, type ReadDebouncer } from './read-debouncer';
 import { makeRegisterCache, type RegisterCache } from './register-cache';
 import {
@@ -97,6 +107,10 @@ export interface BatchingRegisterReader {
  * cache and around the batch, so a value held for an address could reach the
  * device after a newer value written past it. A caller that needs the raw
  * surface as well gets it from `withClient`, which shares the same connection.
+ * Once a batching client exists for a unit, that raw client remains available
+ * for reads, coils, and the other non-register-write operations, but FC06,
+ * FC16, and FC23 fail with `ModbusInvalidArgumentError`. Mixing the two register
+ * write paths would bypass the pending batch and its cache.
  *
  * Coils are not covered. The planners pack registers, so `readCoils`,
  * `writeSingleCoil`, and their relatives stay on the raw client.
@@ -155,6 +169,12 @@ export const makeBatchingClient = (options: {
 }): Effect.Effect<BatchingModbusClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { unitId, client, cache } = options;
+    const scope = yield* Effect.scope;
+
+    const invalidArgument = (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      return new ModbusInvalidArgumentError({ cause: error, message: error.message });
+    };
 
     /** Attributes every span carries, whatever the caller supplied. */
     const own = (registerCount: number, transactionCount: number, suppressedCount: number) => ({
@@ -174,16 +194,22 @@ export const makeBatchingClient = (options: {
      * so it records what reached the bus rather than what a caller proposed.
      */
     const issueWrites = (batch: ReadonlyArray<DebouncedWrite>) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         const proposed = batch.map((entry) => ({ address: entry.address, value: entry.value }));
-        const filtered = cache?.filter(unitId, proposed);
+        const filtered = yield* Effect.try({
+          try: () => cache?.filter(unitId, proposed),
+          catch: invalidArgument,
+        });
         const pending = filtered?.pending ?? proposed;
         const suppressed = filtered?.suppressed.length ?? 0;
-        if (pending.length === 0) return Effect.void;
+        if (pending.length === 0) return;
 
-        const steps = planWrites(pending, options.plan?.writes);
+        const steps = yield* Effect.try({
+          try: () => planWrites(pending, options.plan?.writes),
+          catch: invalidArgument,
+        });
 
-        return Effect.forEach(
+        yield* Effect.forEach(
           steps,
           (step) =>
             step.kind === 'single'
@@ -260,6 +286,16 @@ export const makeBatchingClient = (options: {
       readAllNow: debouncer.readAllNow,
     });
 
+    const flush = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkIn(
+          Effect.andThen(writes.flush, Effect.andThen(holding.flush, inputs.flush)),
+          scope,
+        );
+        yield* restore(Fiber.await(fiber));
+      }),
+    );
+
     return {
       unitId,
       cache,
@@ -269,7 +305,7 @@ export const makeBatchingClient = (options: {
       writeAllNow: writes.writeAllNow,
       ...readerOf(holding),
       inputs: readerOf(inputs),
-      flush: Effect.andThen(writes.flush, Effect.andThen(holding.flush, inputs.flush)),
+      flush,
     };
   });
 
@@ -297,6 +333,8 @@ export interface BatchingRegistry {
   onShutdownPerUnit(
     action: (unitId: number) => Effect.Effect<void, ModbusError>,
   ): Effect.Effect<void, never, Scope.Scope>;
+  /** Disables raw holding-register writes once a batching client exists for the unit. */
+  guardRawWrites(unitId: number, operations: ModbusOperations): ModbusOperations;
 }
 
 /**
@@ -305,21 +343,60 @@ export interface BatchingRegistry {
  *
  * A client is cached per unit, because that is what makes it work: two batching
  * clients on one unit hold two batches and coalesce neither, and two caches on
- * one unit hold two beliefs about one device.
+ * one unit hold two beliefs about one device. Concurrent first calls share one
+ * in-flight construction, which continues in the transport scope if an
+ * individual caller is interrupted.
  *
  * @param deps - The transport's raw client factory, link state, and scope.
  * @returns The batching methods, ready to spread onto a transport API.
  */
 export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegistry => {
+  const clientScope = Scope.forkUnsafe(deps.scope);
   const clients = new Map<
     number,
     {
       readonly key: string;
+      readonly retry: ModbusRetryPolicy | undefined;
       readonly cache: RegisterCache | undefined;
       readonly client: BatchingModbusClient;
     }
   >();
+  const creating = new Map<
+    number,
+    {
+      readonly key: string;
+      readonly retry: ModbusRetryPolicy | undefined;
+      readonly injected: RegisterCache | undefined;
+      readonly deferred: Deferred.Deferred<BatchingModbusClient, ModbusError>;
+    }
+  >();
+  const writeLocks = new Map<number, Semaphore.Semaphore>();
   let shared: RegisterCache | undefined;
+  let closed = false;
+  let watchingScope = false;
+
+  const scopeClosedError = () => {
+    const message = 'The batching registry scope has been closed';
+    return new ModbusNotConnectedError({ cause: new Error(message), message });
+  };
+
+  const watchScope = Effect.suspend(() => {
+    if (watchingScope) return Effect.void;
+    watchingScope = true;
+    return Scope.addFinalizer(
+      clientScope,
+      Effect.gen(function* () {
+        closed = true;
+        const pending = Array.from(creating.values());
+        creating.clear();
+        yield* Effect.forEach(
+          pending,
+          ({ deferred }) => Deferred.fail(deferred, scopeClosedError()),
+          { discard: true },
+        );
+      }),
+    );
+  });
 
   /**
    * The cache every batching client on this transport shares, created on first
@@ -342,7 +419,7 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
           if (!ConnectionState.$is('Connected')(state)) cache.invalidate();
         }),
       ),
-      deps.scope,
+      clientScope,
     );
     return cache;
   });
@@ -356,47 +433,141 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
       cache: typeof options?.cache === 'object' ? 'injected' : (options?.cache ?? true),
       debounce: options?.debounce ?? null,
       plan: options?.plan ?? null,
-      retry: options?.retry ? 'client' : 'transport',
     });
+
+  const writeLockFor = (unitId: number) => {
+    const existing = writeLocks.get(unitId);
+    if (existing) return existing;
+    const created = Semaphore.makeUnsafe(1);
+    writeLocks.set(unitId, created);
+    return created;
+  };
+
+  const guardRawWrites = (unitId: number, operations: ModbusOperations): ModbusOperations => {
+    const write = <A>(operation: () => Effect.Effect<A, ModbusError>) =>
+      writeLockFor(unitId).withPermits(1)(
+        Effect.suspend(() => {
+          if (!clients.has(unitId) && !creating.has(unitId)) return operation();
+          const message =
+            `Raw register writes are disabled for unit ${unitId} because a batching client exists. ` +
+            `Use the batching client for every holding-register write on that unit.`;
+          return Effect.fail(
+            new ModbusInvalidArgumentError({ cause: new Error(message), message }),
+          );
+        }),
+      );
+
+    return {
+      ...operations,
+      writeSingleRegister: (options) => write(() => operations.writeSingleRegister(options)),
+      writeMultipleRegisters: (options) => write(() => operations.writeMultipleRegisters(options)),
+      readWriteMultipleRegisters: (options) =>
+        write(() => operations.readWriteMultipleRegisters(options)),
+    };
+  };
+
+  const configurationError = (unitId: number) => {
+    const message =
+      `A batching client for unit ${unitId} already exists with a different configuration. ` +
+      `One unit has one batch, so the first call fixes the options.`;
+    return new ModbusInvalidArgumentError({ cause: new Error(message), message });
+  };
 
   return {
     withBatchingClient: (
       unitId: number,
       options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
     ): Effect.Effect<BatchingModbusClient, ModbusError> =>
-      Effect.gen(function* () {
-        const key = keyOf(options);
-        const injected = typeof options?.cache === 'object' ? options.cache : undefined;
-        const existing = clients.get(unitId);
-        if (existing) {
-          if (existing.key !== key || (injected !== undefined && existing.cache !== injected)) {
-            const message =
-              `A batching client for unit ${unitId} already exists with a different configuration. ` +
-              `One unit has one batch, so the first call fixes the options.`;
-            return yield* new ModbusInvalidArgumentError({ cause: new Error(message), message });
-          }
-          return existing.client;
-        }
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          yield* watchScope;
+          if (closed) return yield* scopeClosedError();
 
-        const raw = yield* deps.withClient(unitId, { retry: options?.retry });
-        let cache: RegisterCache | undefined;
-        if (options?.cache !== false) cache = injected ?? (yield* sharedCache());
+          const key = keyOf(options);
+          const injected = typeof options?.cache === 'object' ? options.cache : undefined;
+          const fresh = yield* Deferred.make<BatchingModbusClient, ModbusError>();
+          const election = yield* Effect.sync(() => {
+            if (closed) return { _tag: 'Closed' as const } as const;
 
-        // Bound to the transport's scope, not the caller's: the client is shared
-        // by every caller on this unit, so no one of them may end it.
-        const client = yield* Scope.provide(
-          makeBatchingClient({
-            unitId,
-            client: raw,
-            cache,
-            debounce: options?.debounce,
-            plan: options?.plan,
-          }),
-          deps.scope,
-        );
-        clients.set(unitId, { key, cache, client });
-        return client;
-      }),
+            const existing = clients.get(unitId);
+            if (existing) {
+              return existing.key === key &&
+                existing.retry === options?.retry &&
+                (injected === undefined || existing.cache === injected)
+                ? ({ _tag: 'Existing' as const, client: existing.client } as const)
+                : ({ _tag: 'Conflict' as const } as const);
+            }
+
+            const pending = creating.get(unitId);
+            if (pending) {
+              return pending.key === key &&
+                pending.retry === options?.retry &&
+                (injected === undefined || pending.injected === injected)
+                ? ({ _tag: 'Follower' as const, deferred: pending.deferred } as const)
+                : ({ _tag: 'Conflict' as const } as const);
+            }
+
+            creating.set(unitId, { key, retry: options?.retry, injected, deferred: fresh });
+            return { _tag: 'Leader' as const } as const;
+          });
+
+          if (election._tag === 'Existing') return election.client;
+          if (election._tag === 'Closed') return yield* scopeClosedError();
+          if (election._tag === 'Conflict') return yield* configurationError(unitId);
+          if (election._tag === 'Follower')
+            return yield* restore(Deferred.await(election.deferred));
+
+          const build = writeLockFor(unitId).withPermits(1)(
+            Effect.gen(function* () {
+              const raw = yield* deps.withClient(unitId, { retry: options?.retry });
+              let cache: RegisterCache | undefined;
+              if (options?.cache !== false) cache = injected ?? (yield* sharedCache());
+
+              // Bound to the transport's scope, not the caller's: the client is
+              // shared by every caller on this unit, so no one may end it.
+              const client = yield* Scope.provide(
+                makeBatchingClient({
+                  unitId,
+                  client: raw,
+                  cache,
+                  debounce: options?.debounce,
+                  plan: options?.plan,
+                }),
+                clientScope,
+              );
+              return { cache, client };
+            }),
+          );
+
+          yield* Effect.forkIn(
+            Effect.uninterruptible(
+              Effect.flatMap(Effect.exit(Effect.interruptible(build)), (exit) =>
+                Effect.andThen(
+                  Effect.sync(() => {
+                    creating.delete(unitId);
+                    if (Exit.isSuccess(exit)) {
+                      clients.set(unitId, {
+                        key,
+                        retry: options?.retry,
+                        cache: exit.value.cache,
+                        client: exit.value.client,
+                      });
+                    }
+                  }),
+                  Deferred.done(
+                    fresh,
+                    Exit.hasInterrupts(exit)
+                      ? Exit.fail(scopeClosedError())
+                      : Exit.map(exit, ({ client }) => client),
+                  ),
+                ),
+              ),
+            ),
+            clientScope,
+          );
+          return yield* restore(Deferred.await(fresh));
+        }),
+      ),
 
     onShutdownPerUnit: (action) =>
       Effect.addFinalizer(() =>
@@ -411,5 +582,7 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
           { discard: true },
         ),
       ),
+
+    guardRawWrites,
   };
 };

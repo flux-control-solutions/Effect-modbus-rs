@@ -157,6 +157,7 @@ test('planWrites encodes a signed value to its unsigned form on both paths', () 
 test('planWrites rejects an address or value that cannot describe a register', () => {
   expect(() => planWrites([{ address: -1, value: 0 }])).toThrow(RangeError);
   expect(() => planWrites([{ address: 1.5, value: 0 }])).toThrow(RangeError);
+  expect(() => planWrites([{ address: 0x10000, value: 0 }])).toThrow(RangeError);
   expect(() => planWrites([{ address: 0, value: 0x10000 }])).toThrow(RangeError);
   expect(() => planWrites([{ address: 0, value: -32769 }])).toThrow(RangeError);
   expect(() => planWrites([{ address: 0, value: 1.5 }])).toThrow(RangeError);
@@ -164,7 +165,17 @@ test('planWrites rejects an address or value that cannot describe a register', (
 
 test('planWrites rejects an option that cannot describe a transaction', () => {
   expect(() => planWrites([], { maxRegistersPerWrite: 0 })).toThrow(RangeError);
+  expect(() => planWrites([], { maxRegistersPerWrite: MODBUS_MAX_WRITE_REGISTERS + 1 })).toThrow(
+    RangeError,
+  );
   expect(() => planWrites([], { minRunLength: 0 })).toThrow(RangeError);
+});
+
+test('planWrites accepts the protocol address and transaction boundaries', () => {
+  expect(planWrites([{ address: 0xffff, value: 1 }])).toEqual([
+    { kind: 'single', address: 0xffff, value: 1 },
+  ]);
+  expect(planWrites([], { maxRegistersPerWrite: MODBUS_MAX_WRITE_REGISTERS })).toEqual([]);
 });
 
 test('planWrites holds its invariants over generated cases', () => {
@@ -274,8 +285,17 @@ test('planReads splits a span at the read limit even with no gap', () => {
 test('planReads rejects an address or an option that is out of range', () => {
   expect(() => planReads([-1])).toThrow(RangeError);
   expect(() => planReads([1.5])).toThrow(RangeError);
+  expect(() => planReads([0x10000])).toThrow(RangeError);
   expect(() => planReads([], { maxRegistersPerRead: 0 })).toThrow(RangeError);
+  expect(() => planReads([], { maxRegistersPerRead: MODBUS_MAX_READ_REGISTERS + 1 })).toThrow(
+    RangeError,
+  );
   expect(() => planReads([], { maxGap: -1 })).toThrow(RangeError);
+});
+
+test('planReads accepts the protocol address and transaction boundaries', () => {
+  expect(planReads([0xffff]).spans).toEqual([{ address: 0xffff, quantity: 1 }]);
+  expect(planReads([], { maxRegistersPerRead: MODBUS_MAX_READ_REGISTERS }).spans).toEqual([]);
 });
 
 test('planReads holds its invariants over generated cases', () => {

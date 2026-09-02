@@ -16,7 +16,7 @@ Nothing is debounced unless `debounce` asks for it, matching the rest of this pa
 
 Three points to know before adopting it, none of which the version number separates:
 
-1. **`BatchingModbusClient` does not extend `ModbusOperations`.** There is no `writeSingleRegister` and no `readHoldingRegisters` on it. A raw write on the same object would go around the cache and around the batch, so a value held for an address could reach the device after a newer value written past it. A caller that needs both surfaces asks the transport for both, and they share one connection. Coils are not covered: the planners pack registers.
+1. **`BatchingModbusClient` does not extend `ModbusOperations`.** There is no `writeSingleRegister` and no `readHoldingRegisters` on it. For one unit, choose one holding-register write path for the transport's lifetime. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`; the raw client remains available for exact reads, coils, and other non-register-write operations. Coils are not covered by batching because the planners pack registers.
 2. **The cache invalidates when the link is lost, not only after a failed transaction.** A device that power-cycles comes back holding something else, and losing the link is the stronger sign of that. The cache and the fiber that watches `connectionState` are both created on first use, so a transport nobody batches on carries neither.
 3. **`writeNow` flushes the pending batch and joins it.** It is an enqueue with supersede followed by an immediate flush, not a path around the batch. The newest value wins.
 

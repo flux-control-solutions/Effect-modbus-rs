@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
 
-import { Effect, Exit, Fiber, Layer, SubscriptionRef, Tracer } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef, Tracer } from 'effect';
 
+import { makeBatchingClient, makeBatchingRegistry } from './batching-client';
 import { ConnectionState } from './connection';
-import { ModbusConnectionClosedError } from './errors';
+import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
 import type { SlaveDeviceDefinitions } from './mocks';
 import { makeRegisterCache } from './register-cache';
 import { RetryPolicies } from './retry';
@@ -85,6 +86,277 @@ test('a batching client packs a group of writes into one transaction', async () 
   expect(writes[0]!.get('modbus.suppressed_count')).toBe(0);
   expect(writes[0]!.get('modbus.unit_ids')).toBe('3');
   expect(writes[0]!.get('app.group')).toBe('outputs');
+});
+
+test('a batching client guards raw register writes for its unit', async () => {
+  const { failureTags, read, otherUnit } = await run(
+    Effect.gen(function* () {
+      // Acquire both raw variants first to prove the guard is checked when an
+      // operation runs, not only when the client is created.
+      const transport = yield* RtuTransportService;
+      const raw = yield* transport.withClient(3);
+      const retried = raw.withRetry(RetryPolicies.none());
+      yield* transport.withBatchingClient(3);
+
+      const failures = yield* Effect.all([
+        Effect.result(raw.writeSingleRegister({ address: 0, value: 10 })),
+        Effect.result(
+          raw.writeMultipleRegisters({ address: 0, values: Uint16Array.from([10, 11]) }),
+        ),
+        Effect.result(
+          retried.readWriteMultipleRegisters({
+            readAddress: 0,
+            readQuantity: 1,
+            writeAddress: 0,
+            writeValues: Uint16Array.from([10]),
+          }),
+        ),
+      ]);
+      const read = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+
+      const other = yield* transport.withClient(4);
+      yield* other.writeSingleRegister({ address: 0, value: 12 });
+      const otherUnit = yield* other.readHoldingRegisters({ address: 0, quantity: 1 });
+      const failureTags = failures.map((result) =>
+        result._tag === 'Failure' ? result.failure._tag : result._tag,
+      );
+      return { failureTags, read, otherUnit };
+    }),
+  );
+
+  expect(failureTags).toEqual([
+    'ModbusInvalidArgumentError',
+    'ModbusInvalidArgumentError',
+    'ModbusInvalidArgumentError',
+  ]);
+  expect(Array.from(read)).toEqual([0]);
+  expect(Array.from(otherUnit)).toEqual([12]);
+});
+
+test('a raw write retry rechecks the batching guard', async () => {
+  let attempts = 0;
+  const layer = RtuTransportService.makeMockTransport(devices)({
+    portPath: '/dev/null',
+    baudRate: 19200,
+    fault: () => {
+      attempts += 1;
+      if (attempts !== 1) return undefined;
+      const message = 'retry this write';
+      return new ModbusTimeoutError({ cause: new Error(message), message });
+    },
+  });
+
+  const result = await Effect.gen(function* () {
+    const transport = yield* RtuTransportService;
+    const raw = yield* transport.withClient(3, {
+      retry: RetryPolicies.serial({
+        maxRetries: 1,
+        baseDelay: '50 millis',
+        jitter: false,
+      }),
+    });
+    const writer = yield* Effect.forkChild(raw.writeSingleRegister({ address: 0, value: 99 }));
+    while (attempts === 0) yield* Effect.sleep('1 millis');
+
+    yield* transport.withBatchingClient(3);
+    const write = yield* Effect.result(Fiber.join(writer));
+    const value = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+    return { value, write };
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+
+  expect(result.write._tag).toBe('Failure');
+  if (result.write._tag === 'Failure') {
+    expect(result.write.failure._tag).toBe('ModbusInvalidArgumentError');
+  }
+  expect(Array.from(result.value)).toEqual([0]);
+});
+
+test('batching waits for an accepted raw register write to finish', async () => {
+  const result = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const scope = yield* Effect.scope;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const delayed = {
+          ...raw,
+          writeSingleRegister: (options: { readonly address: number; readonly value: number }) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return yield* raw.writeSingleRegister(options);
+            }),
+        };
+        const registry = makeBatchingRegistry({
+          withClient: () => Effect.succeed(raw),
+          connectionState: transport.connectionState,
+          touchedUnits: () => [3],
+          scope,
+        });
+        const guarded = registry.guardRawWrites(3, delayed);
+
+        const rawWriter = yield* Effect.forkChild(
+          guarded.writeSingleRegister({ address: 0, value: 10 }),
+        );
+        yield* Deferred.await(started);
+        const builder = yield* Effect.forkChild(registry.withBatchingClient(3));
+        const beforeRelease = yield* Effect.race(
+          Effect.as(Fiber.join(builder), 'Built' as const),
+          Effect.as(Effect.sleep('10 millis'), 'Waiting' as const),
+        );
+
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(rawWriter);
+        const batched = yield* Fiber.join(builder);
+        yield* batched.write({ address: 0, value: 20 });
+        const value = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+        return { beforeRelease, value };
+      }),
+    ),
+  );
+
+  expect(result.beforeRelease).toBe('Waiting');
+  expect(Array.from(result.value)).toEqual([20]);
+});
+
+test('concurrent calls share one in-flight batching client construction', async () => {
+  const result = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const scope = yield* Effect.scope;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let builds = 0;
+        const registry = makeBatchingRegistry({
+          withClient: () =>
+            Effect.gen(function* () {
+              builds += 1;
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return raw;
+            }),
+          connectionState: transport.connectionState,
+          touchedUnits: () => [3],
+          scope,
+        });
+
+        const first = yield* Effect.forkChild(registry.withBatchingClient(3));
+        yield* Deferred.await(started);
+        const second = yield* Effect.forkChild(registry.withBatchingClient(3));
+        yield* Effect.sleep('1 millis');
+        yield* Deferred.succeed(release, undefined);
+        const [left, right] = yield* Effect.all([Fiber.join(first), Fiber.join(second)], {
+          concurrency: 'unbounded',
+        });
+        return { builds, same: left === right };
+      }),
+    ),
+  );
+
+  expect(result).toEqual({ builds: 1, same: true });
+});
+
+test('client construction fails promptly after the registry scope closes', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const raw = yield* transport.withClient(3);
+      const scope = yield* Scope.make();
+      let builds = 0;
+      const registry = makeBatchingRegistry({
+        withClient: () =>
+          Effect.sync(() => {
+            builds += 1;
+            return raw;
+          }),
+        connectionState: transport.connectionState,
+        touchedUnits: () => [3],
+        scope,
+      });
+      yield* Scope.close(scope, Exit.void);
+
+      const outcome = yield* Effect.race(
+        Effect.map(Effect.result(registry.withBatchingClient(3)), (result) =>
+          result._tag === 'Failure' ? result.failure._tag : result._tag,
+        ),
+        Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+      );
+      return { builds, outcome };
+    }),
+  );
+
+  expect(result).toEqual({ builds: 0, outcome: 'ModbusNotConnectedError' });
+});
+
+test('closing the registry scope settles every in-flight construction caller', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const raw = yield* transport.withClient(3);
+      const scope = yield* Scope.make();
+      const started = yield* Deferred.make<void>();
+      const registry = makeBatchingRegistry({
+        withClient: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            yield* Effect.never;
+            return raw;
+          }),
+        connectionState: transport.connectionState,
+        touchedUnits: () => [3],
+        scope,
+      });
+
+      const leader = yield* Effect.forkChild(registry.withBatchingClient(3));
+      yield* Deferred.await(started);
+      const follower = yield* Effect.forkChild(registry.withBatchingClient(3));
+      yield* Effect.sleep('1 millis');
+      const close = yield* Effect.race(
+        Effect.as(Scope.close(scope, Exit.void), 'Closed' as const),
+        Effect.as(Effect.sleep('100 millis'), 'CloseTimeout' as const),
+      );
+      if (close === 'CloseTimeout') return close;
+
+      if (leader.pollUnsafe() === undefined || follower.pollUnsafe() === undefined)
+        return 'CallerStillRunning' as const;
+
+      return yield* Effect.race(
+        Effect.all([Fiber.await(leader), Fiber.await(follower)], {
+          concurrency: 'unbounded',
+        }),
+        Effect.as(Effect.sleep('100 millis'), 'CallerTimeout' as const),
+      );
+    }),
+  );
+
+  expect(result).toBeArray();
+  if (!Array.isArray(result)) throw new Error(`Unexpected timeout: ${result}`);
+  expect(result.every(Exit.isFailure)).toBe(true);
+});
+
+test('retry policy identity is part of a batching client configuration', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const retry = RetryPolicies.none();
+      const first = yield* transport.withBatchingClient(3, { retry });
+      const same = yield* transport.withBatchingClient(3, { retry });
+      const conflict = yield* Effect.result(
+        transport.withBatchingClient(3, { retry: RetryPolicies.serial() }),
+      );
+      return { conflict, same: first === same };
+    }),
+  );
+
+  expect(result.same).toBe(true);
+  expect(result.conflict._tag).toBe('Failure');
+  if (result.conflict._tag === 'Failure') {
+    expect(result.conflict.failure._tag).toBe('ModbusInvalidArgumentError');
+  }
 });
 
 test('the cache suppresses a write the device already agrees with', async () => {
@@ -182,6 +454,84 @@ test('readAll plans a group of parameters into spans', async () => {
   expect(reads[0]!.get('modbus.transaction_count')).toBe(3);
 });
 
+test('invalid register addresses fail batching operations as typed errors', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, { cache: false });
+      return yield* Effect.all({
+        read: Effect.result(batched.read(0x10000)),
+        write: Effect.result(batched.write({ address: 0x10000, value: 1 })),
+      });
+    }),
+  );
+
+  expect(result.read).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+  expect(result.write).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+});
+
+test('invalid planner limits fail batching operations as typed errors', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        cache: false,
+        plan: {
+          reads: { maxRegistersPerRead: 126 },
+          writes: { maxRegistersPerWrite: 124 },
+        },
+      });
+      return yield* Effect.all({
+        read: Effect.result(batched.read(0)),
+        write: Effect.result(batched.write({ address: 0, value: 1 })),
+      });
+    }),
+  );
+
+  expect(result.read).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+  expect(result.write).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+});
+
+test('a later valid write cannot hide an invalid debounced write', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '10 millis' } },
+      });
+      const writes = yield* Effect.all(
+        [
+          Effect.result(batched.write({ address: 0, value: 0x10000 })),
+          Effect.result(batched.write({ address: 0, value: 10 })),
+        ],
+        { concurrency: 'unbounded' },
+      );
+      const raw = yield* transport.withClient(3);
+      const value = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+      return { value, writes };
+    }),
+  );
+
+  expect(result.writes[0]).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+  expect(result.writes[1]._tag).toBe('Success');
+  expect(Array.from(result.value)).toEqual([10]);
+});
+
 test('the input registers are a separate space with their own reads', async () => {
   const values = await run(
     Effect.gen(function* () {
@@ -256,6 +606,52 @@ test('writeNow flushes a held write rather than passing it', async () => {
   expect(Array.from(values)).toEqual([800]);
 });
 
+test('interrupting a composite flush does not skip later register spaces', async () => {
+  const result = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const writeStarted = yield* Deferred.make<void>();
+        const releaseWrite = yield* Deferred.make<void>();
+        const client = {
+          ...raw,
+          writeSingleRegister: (options: { readonly address: number; readonly value: number }) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(writeStarted, undefined);
+              yield* Deferred.await(releaseWrite);
+              return yield* raw.writeSingleRegister(options);
+            }),
+        };
+        const batched = yield* makeBatchingClient({
+          unitId: 3,
+          client,
+          cache: undefined,
+          debounce: {
+            writes: { window: '10 seconds' },
+            reads: { window: '10 seconds' },
+          },
+        });
+
+        const writer = yield* Effect.forkChild(batched.write({ address: 0, value: 55 }));
+        const reader = yield* Effect.forkChild(batched.read(0));
+        yield* Effect.sleep('1 millis');
+        const flusher = yield* Effect.forkChild(batched.flush);
+        yield* Deferred.await(writeStarted);
+        yield* Fiber.interrupt(flusher);
+        yield* Deferred.succeed(releaseWrite, undefined);
+        const settled = yield* Effect.race(
+          Effect.all({ read: Fiber.join(reader), write: Fiber.join(writer) }),
+          Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+        );
+        return settled;
+      }),
+    ),
+  );
+
+  expect(result).toEqual({ read: 55, write: undefined });
+});
+
 test('touchedUnits names the units a client was built for', async () => {
   const units = await run(
     Effect.gen(function* () {
@@ -299,6 +695,36 @@ test('onShutdownPerUnit runs against every touched unit while the bus is open', 
   expect(seen.sort()).toEqual([3, 4]);
   // The safe state was written, so the action ran before the transport closed.
   expect(Array.from(values)).toEqual([0]);
+});
+
+test('a shutdown action registered before batching runs before client teardown', async () => {
+  const value = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const raw = yield* transport.withClient(3);
+      const scope = yield* Scope.make();
+      const registry = makeBatchingRegistry({
+        withClient: () => Effect.succeed(raw),
+        connectionState: transport.connectionState,
+        touchedUnits: () => [3],
+        scope,
+      });
+
+      yield* Scope.provide(
+        registry.onShutdownPerUnit(() =>
+          Effect.flatMap(registry.withBatchingClient(3), (batched) =>
+            batched.writeNow({ address: 0, value: 88 }),
+          ),
+        ),
+        scope,
+      );
+      yield* Scope.close(scope, Exit.void);
+
+      return yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+    }),
+  );
+
+  expect(Array.from(value)).toEqual([88]);
 });
 
 test('losing the link forgets what the devices held', async () => {

@@ -47,6 +47,36 @@ test('the cache keeps the last write to a repeated address and counts the rest',
   expect(pending.length + suppressed.length).toBe(2);
 });
 
+test('filter rejects every invalid address and value', () => {
+  const cache = makeRegisterCache();
+
+  for (const address of [-1, 1.5, 0x10000]) {
+    expect(() => cache.filter(1, [{ address, value: 0 }])).toThrow(RangeError);
+  }
+  for (const value of [-0x8001, 1.5, 0x10000]) {
+    expect(() => cache.filter(1, [{ address: 0, value }])).toThrow(RangeError);
+  }
+});
+
+test('filter rejects an invalid write even when a later write supersedes it', () => {
+  const cache = makeRegisterCache();
+
+  expect(() =>
+    cache.filter(1, [
+      { address: 2000, value: 0x10000 },
+      { address: 2000, value: 10 },
+    ]),
+  ).toThrow(RangeError);
+});
+
+test('observe validates before mutating the cache', () => {
+  const cache = makeRegisterCache();
+
+  expect(() => cache.observe(1, -1, 10)).toThrow(RangeError);
+  expect(() => cache.observe(1, 0, 0x10000)).toThrow(RangeError);
+  expect(cache.size).toBe(0);
+});
+
 test('the cache keeps units apart', () => {
   const cache = makeRegisterCache();
   cache.observe(1, 2000, 10);

@@ -21,10 +21,10 @@
  * @module
  */
 
-import { Clock, Deferred, Duration, Effect, type Fiber, type Scope, Semaphore } from 'effect';
+import { Clock, Deferred, Duration, Effect, Fiber, type Scope, Semaphore } from 'effect';
 
-import type { ModbusError } from './errors';
-import type { RegisterWrite } from './register-plan';
+import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
+import { encodeRegisterValue, type RegisterWrite } from './register-plan';
 import type { ModbusSpanAttributes } from './span-attributes';
 
 /** One write in a flushed batch, with the attributes of the caller that issued it. */
@@ -131,6 +131,12 @@ interface HeldWrite {
   readonly waiters: ReadonlyArray<Deferred.Deferred<void, ModbusError>>;
 }
 
+/** Identity of one scheduled window, used to reject a stale timer callback. */
+interface TimerState {
+  readonly id: number;
+  fiber?: Fiber.Fiber<void, never>;
+}
+
 /**
  * Creates a write debouncer bound to the current scope.
  *
@@ -170,9 +176,39 @@ export const makeWriteDebouncer = (
 
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
+    const flushLock = yield* Semaphore.make(1);
     const held = new Map<number, HeldWrite>();
-    let timer: Fiber.Fiber<void, never> | undefined;
+    let timer: TimerState | undefined;
+    let nextTimerId = 0;
     let openedAtMs: number | undefined;
+    let closed = false;
+
+    const scopeClosedError = () => {
+      const message = 'The write debouncer scope has been closed';
+      return new ModbusNotConnectedError({ cause: new Error(message), message });
+    };
+
+    const ensureOpen = Effect.suspend(() =>
+      closed ? Effect.fail(scopeClosedError()) : Effect.void,
+    );
+
+    const validateWrites = (writes: ReadonlyArray<RegisterWrite>) =>
+      Effect.try({
+        try: () => {
+          for (const write of writes) {
+            if (!Number.isInteger(write.address) || write.address < 0 || write.address > 0xffff) {
+              throw new RangeError(
+                `address must be an integer from 0 to 65535, got ${write.address}`,
+              );
+            }
+            encodeRegisterValue(write.value);
+          }
+        },
+        catch: (cause) => {
+          const error = cause instanceof Error ? cause : new Error(String(cause));
+          return new ModbusInvalidArgumentError({ cause: error, message: error.message });
+        },
+      });
 
     /**
      * Takes the batch under the lock, then issues it without the lock.
@@ -180,34 +216,47 @@ export const makeWriteDebouncer = (
      * A flush holds the bus for the length of a transaction. Blocking arrivals
      * for that long would defeat the coalescing the debouncer exists to do.
      */
-    const flushPending: Effect.Effect<void> = Effect.gen(function* () {
-      const batch = yield* lock.withPermits(1)(
-        Effect.sync(() => {
-          const taken = Array.from(held.values());
-          held.clear();
-          openedAtMs = undefined;
-          return taken;
-        }),
-      );
+    const flushPending = (expectedTimer?: TimerState): Effect.Effect<void> =>
+      flushLock.withPermits(1)(
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const taken = yield* lock.withPermits(1)(
+              Effect.sync(() => {
+                if (expectedTimer !== undefined && timer?.id !== expectedTimer.id) return undefined;
 
-      if (batch.length === 0) return;
+                const activeTimer = timer;
+                timer = undefined;
+                const batch = Array.from(held.values());
+                held.clear();
+                openedAtMs = undefined;
+                return { activeTimer, batch };
+              }),
+            );
 
-      const exit = yield* Effect.exit(
-        options.flush(
-          batch.map((entry) => ({
-            address: entry.write.address,
-            value: entry.write.value,
-            attributes: entry.attributes,
-          })),
+            if (taken === undefined) return;
+            if (expectedTimer === undefined) taken.activeTimer?.fiber?.interruptUnsafe();
+            if (taken.batch.length === 0) return;
+
+            const exit = yield* Effect.exit(
+              restore(
+                options.flush(
+                  taken.batch.map((entry) => ({
+                    address: entry.write.address,
+                    value: entry.write.value,
+                    attributes: entry.attributes,
+                  })),
+                ),
+              ),
+            );
+
+            yield* Effect.forEach(
+              taken.batch.flatMap((entry) => entry.waiters),
+              (waiter) => Deferred.done(waiter, exit),
+              { discard: true },
+            );
+          }),
         ),
       );
-
-      yield* Effect.forEach(
-        batch.flatMap((entry) => entry.waiters),
-        (waiter) => Deferred.done(waiter, exit),
-        { discard: true },
-      );
-    });
 
     /**
      * Adds writes to the batch, returning the one `Deferred` for this caller.
@@ -225,6 +274,7 @@ export const makeWriteDebouncer = (
 
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
+            if (closed) return yield* scopeClosedError();
             for (const write of writes) {
               const superseded = held.get(write.address);
 
@@ -246,20 +296,17 @@ export const makeWriteDebouncer = (
             const delayMs = Math.max(0, Math.min(windowMs, openedAtMs + maxHoldMs - now));
 
             const previous = timer;
-            timer = yield* Effect.forkIn(
-              Effect.sleep(Duration.millis(delayMs)).pipe(
-                // Only the wait is cancellable. Once the flush has taken the
-                // batch it owns those waiters, and interrupting it midway would
-                // strand every caller in it.
-                Effect.andThen(Effect.uninterruptible(flushPending)),
-              ),
+            const state: TimerState = { id: nextTimerId++ };
+            timer = state;
+            const forked = yield* Effect.forkIn(
+              Effect.sleep(Duration.millis(delayMs)).pipe(Effect.andThen(flushPending(state))),
               scope,
             );
-            // `interruptUnsafe`, not an awaited interrupt: the fiber being
-            // replaced may already be inside the flush waiting on this very
-            // lock, and awaiting it here would deadlock. A stale timer that does
-            // fire finds an empty batch and returns.
-            previous?.interruptUnsafe();
+            state.fiber = forked;
+            if (timer?.id !== state.id) forked.interruptUnsafe();
+            // Do not await interruption while holding `lock`: an expired timer
+            // may be waiting to inspect the same state before it can return.
+            previous?.fiber?.interruptUnsafe();
           }),
         );
 
@@ -280,9 +327,15 @@ export const makeWriteDebouncer = (
       attributes?: ModbusSpanAttributes,
     ): Effect.Effect<void, ModbusError> => {
       if (writes.length === 0) return Effect.void;
-      return windowMs <= 0
-        ? issueDirectly(writes, attributes)
-        : Effect.flatMap(enqueue(writes, attributes, true), Deferred.await);
+      return Effect.andThen(
+        ensureOpen,
+        Effect.andThen(
+          validateWrites(writes),
+          windowMs <= 0
+            ? issueDirectly(writes, attributes)
+            : Effect.flatMap(enqueue(writes, attributes, true), Deferred.await),
+        ),
+      );
     };
 
     const writeAllNow = (
@@ -290,13 +343,21 @@ export const makeWriteDebouncer = (
       attributes?: ModbusSpanAttributes,
     ): Effect.Effect<void, ModbusError> => {
       if (writes.length === 0) return Effect.void;
-      return windowMs <= 0
-        ? issueDirectly(writes, attributes)
-        : Effect.gen(function* () {
-            const waiter = yield* enqueue(writes, attributes, false);
-            yield* Effect.uninterruptible(flushPending);
-            return yield* Deferred.await(waiter);
-          });
+      return Effect.andThen(
+        ensureOpen,
+        Effect.andThen(
+          validateWrites(writes),
+          windowMs <= 0
+            ? issueDirectly(writes, attributes)
+            : Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const waiter = yield* enqueue(writes, attributes, false);
+                  yield* Effect.forkIn(flushPending(), scope);
+                  return yield* restore(Deferred.await(waiter));
+                }),
+              ),
+        ),
+      );
     };
 
     const write = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
@@ -305,33 +366,45 @@ export const makeWriteDebouncer = (
     const writeNow = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
       writeAllNow([write], attributes);
 
+    const flush = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkIn(flushPending(), scope);
+        yield* restore(Fiber.await(fiber));
+      }),
+    );
+
     yield* Effect.addFinalizer(() =>
-      lock
-        .withPermits(1)(
-          Effect.sync(() => {
-            const abandoned = Array.from(held.values());
-            held.clear();
-            openedAtMs = undefined;
-            return abandoned;
-          }),
-        )
-        .pipe(
-          Effect.flatMap((abandoned) =>
-            abandoned.length === 0
-              ? Effect.void
-              : Effect.logWarning(
-                  `Discarding ${abandoned.length} pending register write(s) at shutdown`,
-                ).pipe(
-                  Effect.andThen(
-                    Effect.forEach(
-                      abandoned.flatMap((entry) => entry.waiters),
-                      Deferred.interrupt,
-                      { discard: true },
+      Effect.andThen(
+        Effect.sync(() => {
+          closed = true;
+        }),
+        lock
+          .withPermits(1)(
+            Effect.sync(() => {
+              const abandoned = Array.from(held.values());
+              held.clear();
+              openedAtMs = undefined;
+              return abandoned;
+            }),
+          )
+          .pipe(
+            Effect.flatMap((abandoned) =>
+              abandoned.length === 0
+                ? Effect.void
+                : Effect.logWarning(
+                    `Discarding ${abandoned.length} pending register write(s) at shutdown`,
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.forEach(
+                        abandoned.flatMap((entry) => entry.waiters),
+                        Deferred.interrupt,
+                        { discard: true },
+                      ),
                     ),
                   ),
-                ),
+            ),
           ),
-        ),
+      ),
     );
 
     return {
@@ -339,7 +412,7 @@ export const makeWriteDebouncer = (
       writeNow,
       writeAll,
       writeAllNow,
-      flush: flushPending,
+      flush,
       get pending() {
         return held.size;
       },

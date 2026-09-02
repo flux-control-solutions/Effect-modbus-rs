@@ -159,6 +159,11 @@ export interface TransportServiceApi {
    * logic. The underlying `modbus-rs` client is cached per unit ID, so clients
    * built with different policies still share one connection.
    *
+   * Once `withBatchingClient` has created a client for this unit, raw FC06,
+   * FC16, and FC23 operations fail. Reads, coils, and other operations remain
+   * available. One unit must use one holding-register write path so raw writes
+   * cannot bypass a pending batch or its cache.
+   *
    * @param unitId - Modbus unit ID to address.
    * @param options - Per-client policy replacing the transport default.
    */
@@ -205,7 +210,9 @@ export interface TransportServiceApi {
    * batching clients on one unit hold two batches and coalesce neither. A second
    * call for the same unit with different options is a programming error and
    * fails with `ModbusInvalidArgumentError` rather than quietly returning a
-   * client configured some other way.
+   * client configured some other way. Retry policies match by object identity,
+   * because their schedules and predicate functions cannot be compared
+   * structurally.
    *
    * Nothing is debounced unless `debounce` asks for it, matching the rest of
    * this package: default timing stays predictable.
@@ -409,10 +416,7 @@ export function makeTransportScoped<
       report,
     };
 
-    const withClient = Effect.fnUntraced(function* (
-      unitId: number,
-      clientOptions?: { readonly retry?: ModbusRetryPolicy },
-    ) {
+    const makeOperations = Effect.fnUntraced(function* (unitId: number) {
       const t = yield* ensureOpen();
       let client = clientSet.get(unitId);
       if (!client) {
@@ -422,17 +426,36 @@ export function makeTransportScoped<
         });
         clientSet.set(unitId, client);
       }
-      return withResilience(makeEffectModbusClient(client), {
+      return makeEffectModbusClient(client);
+    });
+
+    const makeClient = Effect.fnUntraced(function* (
+      unitId: number,
+      clientOptions?: { readonly retry?: ModbusRetryPolicy },
+    ) {
+      const operations = yield* makeOperations(unitId);
+      return withResilience(operations, {
         ...resilience,
         policy: clientOptions?.retry ?? transportRetry,
       });
     });
 
     const batching = makeBatchingRegistry({
-      withClient,
+      withClient: makeClient,
       connectionState,
       touchedUnits: () => clientSet.keys(),
       scope: serviceScope,
+    });
+
+    const withClient = Effect.fnUntraced(function* (
+      unitId: number,
+      clientOptions?: { readonly retry?: ModbusRetryPolicy },
+    ) {
+      const operations = yield* makeOperations(unitId);
+      return withResilience(batching.guardRawWrites(unitId, operations), {
+        ...resilience,
+        policy: clientOptions?.retry ?? transportRetry,
+      });
     });
 
     return {

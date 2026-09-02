@@ -163,6 +163,181 @@ test('writeNow carries along whatever else is already held', async () => {
   expect(recorder.batches[0]).toHaveLength(2);
 });
 
+test('overlapping flushes cannot apply an older value after a newer one', async () => {
+  const applied: number[] = [];
+
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        let flushCount = 0;
+        const flush = (batch: ReadonlyArray<DebouncedWrite>) =>
+          Effect.gen(function* () {
+            flushCount += 1;
+            if (flushCount === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            for (const write of batch) applied.push(write.value);
+          });
+
+        const debouncer = yield* makeWriteDebouncer({ window: '10 millis', flush });
+        const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+        yield* Deferred.await(firstStarted);
+
+        const newer = yield* Effect.forkChild(debouncer.writeNow({ address: 2000, value: 200 }));
+        yield* Effect.sleep('10 millis');
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Effect.all([Fiber.join(older), Fiber.join(newer)], { concurrency: 'unbounded' });
+
+        return flushCount;
+      }),
+    ),
+  );
+
+  expect(result).toBe(2);
+  expect(applied).toEqual([100, 200]);
+});
+
+test('a new write does not interrupt a flush already in progress', async () => {
+  const applied: number[] = [];
+
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        let flushCount = 0;
+        const flush = (batch: ReadonlyArray<DebouncedWrite>) =>
+          Effect.gen(function* () {
+            flushCount += 1;
+            if (flushCount === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            for (const write of batch) applied.push(write.value);
+          });
+
+        const debouncer = yield* makeWriteDebouncer({ window: '10 millis', flush });
+        const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+        yield* Deferred.await(firstStarted);
+
+        const newer = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 200 }));
+        yield* Effect.sleep('20 millis');
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Effect.all([Fiber.join(older), Fiber.join(newer)], { concurrency: 'unbounded' });
+      }),
+    ),
+  );
+
+  expect(applied).toEqual([100, 200]);
+});
+
+test('an expired stale timer cannot flush a replacement batch early', async () => {
+  const applied: number[] = [];
+
+  const earlyFlushCount = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        let flushCount = 0;
+        const flush = (batch: ReadonlyArray<DebouncedWrite>) =>
+          Effect.gen(function* () {
+            flushCount += 1;
+            if (flushCount === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            for (const write of batch) applied.push(write.value);
+          });
+
+        const debouncer = yield* makeWriteDebouncer({
+          window: '30 millis',
+          maxHold: '500 millis',
+          flush,
+        });
+        const first = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+        yield* Deferred.await(firstStarted);
+
+        const stale = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 200 }));
+        yield* Effect.sleep('45 millis');
+        const replacement = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 300 }));
+        yield* Effect.sleep('1 millis');
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Effect.sleep('5 millis');
+        const beforeReplacementWindow = flushCount;
+
+        yield* Effect.all([Fiber.join(first), Fiber.join(stale), Fiber.join(replacement)], {
+          concurrency: 'unbounded',
+        });
+        return beforeReplacementWindow;
+      }),
+    ),
+  );
+
+  expect(earlyFlushCount).toBe(1);
+  expect(applied).toEqual([100, 300]);
+});
+
+test('interrupting a public flush does not cancel its write or strand its waiter', async () => {
+  const applied = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const values: number[] = [];
+        const debouncer = yield* makeWriteDebouncer({
+          window: '10 seconds',
+          flush: (batch) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              values.push(...batch.map((write) => write.value));
+            }),
+        });
+
+        const writer = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+        while (debouncer.pending === 0) yield* Effect.yieldNow;
+        const flusher = yield* Effect.forkChild(debouncer.flush);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(flusher);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(writer);
+        return values;
+      }),
+    ),
+  );
+
+  expect(applied).toEqual([100]);
+});
+
+test('writeNow fails promptly after its scope closes', async () => {
+  const recorder = makeRecorder();
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const debouncer = yield* Effect.provideService(
+        makeWriteDebouncer({ window: '10 seconds', flush: recorder.flush }),
+        Scope.Scope,
+        scope,
+      );
+      yield* Scope.close(scope, Exit.void);
+
+      return yield* Effect.race(
+        Effect.map(Effect.result(debouncer.writeNow({ address: 2000, value: 100 })), (result) =>
+          result._tag === 'Failure' ? result.failure._tag : result._tag,
+        ),
+        Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+      );
+    }),
+  );
+
+  expect(result).toBe('ModbusNotConnectedError');
+  expect(recorder.batches).toHaveLength(0);
+});
+
 test('closing the scope interrupts a caller still waiting', async () => {
   const recorder = makeRecorder();
 
@@ -195,6 +370,40 @@ test('closing the scope interrupts a caller still waiting', async () => {
   const callerExit = Exit.isSuccess(exit) ? exit.value : undefined;
   expect(callerExit !== undefined && Exit.hasInterrupts(callerExit)).toBe(true);
   expect(recorder.batches).toHaveLength(0);
+});
+
+test('closing the scope interrupts an active flush', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const started = yield* Deferred.make<void>();
+      const debouncer = yield* Effect.provideService(
+        makeWriteDebouncer({
+          window: '10 millis',
+          flush: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              return yield* Effect.never;
+            }),
+        }),
+        Scope.Scope,
+        scope,
+      );
+
+      const caller = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+      yield* Deferred.await(started);
+
+      const closed = yield* Effect.race(
+        Effect.as(Scope.close(scope, Exit.void), 'Closed' as const),
+        Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+      );
+      const callerExit = closed === 'Closed' ? yield* Fiber.await(caller) : undefined;
+      return { closed, callerExit };
+    }),
+  );
+
+  expect(result.closed).toBe('Closed');
+  expect(result.callerExit !== undefined && Exit.hasInterrupts(result.callerExit)).toBe(true);
 });
 
 test('writeAll issues a group as one caller, even with no window', async () => {

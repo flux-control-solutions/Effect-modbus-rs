@@ -18,9 +18,14 @@
  * @module
  */
 
-import { Deferred, Duration, Effect, Exit, type Fiber, type Scope, Semaphore } from 'effect';
+import { Deferred, Duration, Effect, Exit, Fiber, type Scope, Semaphore } from 'effect';
 
-import { ModbusTransportError, type ModbusError } from './errors';
+import {
+  ModbusInvalidArgumentError,
+  ModbusNotConnectedError,
+  ModbusTransportError,
+  type ModbusError,
+} from './errors';
 import { planReads, type PlanReadsOptions, type ReadSpan } from './register-plan';
 
 /** Options for {@link makeReadDebouncer}. */
@@ -108,6 +113,12 @@ const settleWith =
       ? Deferred.fail(waiter, shortResponse(address))
       : Deferred.succeed(waiter, value);
 
+/** Identity of one scheduled window, used to reject a stale timer callback. */
+interface TimerState {
+  readonly id: number;
+  fiber?: Fiber.Fiber<void, never>;
+}
+
 /**
  * Creates a read debouncer bound to the current scope.
  *
@@ -136,12 +147,44 @@ export const makeReadDebouncer = (
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
     const collected = new Map<number, Array<Deferred.Deferred<number, ModbusError>>>();
-    let timer: Fiber.Fiber<void, never> | undefined;
+    let timer: TimerState | undefined;
+    let nextTimerId = 0;
+    let closed = false;
+
+    const scopeClosedError = () => {
+      const message = 'The read debouncer scope has been closed';
+      return new ModbusNotConnectedError({ cause: new Error(message), message });
+    };
+
+    const ensureOpen = Effect.suspend(() =>
+      closed ? Effect.fail(scopeClosedError()) : Effect.void,
+    );
+
+    const validateAddresses = (addresses: ReadonlyArray<number>) =>
+      Effect.try({
+        try: () => {
+          for (const address of addresses) {
+            if (!Number.isInteger(address) || address < 0 || address > 0xffff) {
+              throw new RangeError(`address must be an integer from 0 to 65535, got ${address}`);
+            }
+          }
+        },
+        catch: (cause) => {
+          const error = cause instanceof Error ? cause : new Error(String(cause));
+          return new ModbusInvalidArgumentError({ cause: error, message: error.message });
+        },
+      });
 
     /** Reads the spans and hands each reader the register it asked for. */
     const issue = (addresses: ReadonlyArray<number>) =>
       Effect.gen(function* () {
-        const plan = planReads(addresses, options.plan);
+        const plan = yield* Effect.try({
+          try: () => planReads(addresses, options.plan),
+          catch: (cause) => {
+            const error = cause instanceof Error ? cause : new Error(String(cause));
+            return new ModbusInvalidArgumentError({ cause: error, message: error.message });
+          },
+        });
         const responses = yield* options.fetch(plan.spans);
         return (address: number): number | undefined => {
           const location = plan.locate(address);
@@ -162,34 +205,43 @@ export const makeReadDebouncer = (
      * Takes the batch under the lock, then reads without it, so arrivals during
      * a transaction start the next batch rather than blocking.
      */
-    const flushPending: Effect.Effect<void> = Effect.gen(function* () {
-      const batch = yield* lock.withPermits(1)(
-        Effect.sync(() => {
-          const taken = Array.from(collected.entries());
-          collected.clear();
-          return taken;
+    const flushPending = (expectedTimer?: TimerState): Effect.Effect<void> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const taken = yield* lock.withPermits(1)(
+            Effect.sync(() => {
+              if (expectedTimer !== undefined && timer?.id !== expectedTimer.id) return undefined;
+
+              const activeTimer = timer;
+              timer = undefined;
+              const batch = Array.from(collected.entries());
+              collected.clear();
+              return { activeTimer, batch };
+            }),
+          );
+
+          if (taken === undefined) return;
+          if (expectedTimer === undefined) taken.activeTimer?.fiber?.interruptUnsafe();
+          if (taken.batch.length === 0) return;
+
+          const exit = yield* Effect.exit(restore(issue(taken.batch.map(([address]) => address))));
+
+          // A failed read fails every reader in the batch. There is no partial
+          // answer to give: each span went to the bus as one request, so a reader
+          // cannot be told that its own register survived.
+          yield* Effect.forEach(
+            taken.batch,
+            ([address, waiters]) => {
+              const settle = Exit.isSuccess(exit)
+                ? settleWith(exit.value(address), address)
+                : (waiter: Deferred.Deferred<number, ModbusError>) =>
+                    Deferred.failCause(waiter, exit.cause);
+              return Effect.forEach(waiters, settle, { discard: true });
+            },
+            { discard: true },
+          );
         }),
       );
-
-      if (batch.length === 0) return;
-
-      const exit = yield* Effect.exit(issue(batch.map(([address]) => address)));
-
-      // A failed read fails every reader in the batch. There is no partial
-      // answer to give: each span went to the bus as one request, so a reader
-      // cannot be told that its own register survived.
-      yield* Effect.forEach(
-        batch,
-        ([address, waiters]) => {
-          const settle = Exit.isSuccess(exit)
-            ? settleWith(exit.value(address), address)
-            : (waiter: Deferred.Deferred<number, ModbusError>) =>
-                Deferred.failCause(waiter, exit.cause);
-          return Effect.forEach(waiters, settle, { discard: true });
-        },
-        { discard: true },
-      );
-    });
 
     /** Collects addresses, returning one `Deferred` for each, in order. */
     const enqueue = (addresses: ReadonlyArray<number>, startTimer: boolean) =>
@@ -199,7 +251,8 @@ export const makeReadDebouncer = (
         );
 
         yield* lock.withPermits(1)(
-          Effect.sync(() => {
+          Effect.gen(function* () {
+            if (closed) return yield* scopeClosedError();
             addresses.forEach((address, index) => {
               const existing = collected.get(address);
               if (existing === undefined) collected.set(address, [waiters[index]!]);
@@ -211,24 +264,18 @@ export const makeReadDebouncer = (
                 // The window opens on the arrival that starts a batch and is not
                 // restarted, so a steady stream of readers cannot push it out.
                 if (!startTimer || timer !== undefined) return Effect.void;
+                const state: TimerState = { id: nextTimerId++ };
+                timer = state;
                 return Effect.map(
                   Effect.forkIn(
                     Effect.sleep(Duration.millis(windowMs)).pipe(
-                      Effect.andThen(
-                        Effect.uninterruptible(
-                          Effect.ensuring(
-                            flushPending,
-                            Effect.sync(() => {
-                              timer = undefined;
-                            }),
-                          ),
-                        ),
-                      ),
+                      Effect.andThen(flushPending(state)),
                     ),
                     scope,
                   ),
                   (forked) => {
-                    timer = forked;
+                    state.fiber = forked;
+                    if (timer?.id !== state.id) forked.interruptUnsafe();
                   },
                 );
               }),
@@ -243,50 +290,78 @@ export const makeReadDebouncer = (
       addresses: ReadonlyArray<number>,
     ): Effect.Effect<ReadonlyArray<number>, ModbusError> => {
       if (addresses.length === 0) return Effect.succeed([]);
-      return windowMs <= 0
-        ? issueDirectly(addresses)
-        : Effect.flatMap(enqueue(addresses, true), (waiters) =>
-            Effect.forEach(waiters, Deferred.await),
-          );
+      return Effect.andThen(
+        ensureOpen,
+        Effect.andThen(
+          validateAddresses(addresses),
+          windowMs <= 0
+            ? issueDirectly(addresses)
+            : Effect.flatMap(enqueue(addresses, true), (waiters) =>
+                Effect.forEach(waiters, Deferred.await),
+              ),
+        ),
+      );
     };
 
     const readAllNow = (
       addresses: ReadonlyArray<number>,
     ): Effect.Effect<ReadonlyArray<number>, ModbusError> => {
       if (addresses.length === 0) return Effect.succeed([]);
-      return windowMs <= 0
-        ? issueDirectly(addresses)
-        : Effect.gen(function* () {
-            const waiters = yield* enqueue(addresses, false);
-            yield* Effect.uninterruptible(flushPending);
-            return yield* Effect.forEach(waiters, Deferred.await);
-          });
+      return Effect.andThen(
+        ensureOpen,
+        Effect.andThen(
+          validateAddresses(addresses),
+          windowMs <= 0
+            ? issueDirectly(addresses)
+            : Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const waiters = yield* enqueue(addresses, false);
+                  yield* Effect.forkIn(flushPending(), scope);
+                  return yield* restore(Effect.forEach(waiters, Deferred.await));
+                }),
+              ),
+        ),
+      );
     };
 
     const read = (address: number) => Effect.map(readAll([address]), (values) => values[0]!);
 
     const readNow = (address: number) => Effect.map(readAllNow([address]), (values) => values[0]!);
 
+    const flush = Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkIn(flushPending(), scope);
+        yield* restore(Fiber.await(fiber));
+      }),
+    );
+
     yield* Effect.addFinalizer(() =>
-      lock
-        .withPermits(1)(
-          Effect.sync(() => {
-            const abandoned = Array.from(collected.values()).flat();
-            collected.clear();
-            return abandoned;
-          }),
-        )
-        .pipe(
-          Effect.flatMap((abandoned) =>
-            abandoned.length === 0
-              ? Effect.void
-              : Effect.logWarning(
-                  `Discarding ${abandoned.length} pending register read(s) at shutdown`,
-                ).pipe(
-                  Effect.andThen(Effect.forEach(abandoned, Deferred.interrupt, { discard: true })),
-                ),
+      Effect.andThen(
+        Effect.sync(() => {
+          closed = true;
+        }),
+        lock
+          .withPermits(1)(
+            Effect.sync(() => {
+              const abandoned = Array.from(collected.values()).flat();
+              collected.clear();
+              return abandoned;
+            }),
+          )
+          .pipe(
+            Effect.flatMap((abandoned) =>
+              abandoned.length === 0
+                ? Effect.void
+                : Effect.logWarning(
+                    `Discarding ${abandoned.length} pending register read(s) at shutdown`,
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.forEach(abandoned, Deferred.interrupt, { discard: true }),
+                    ),
+                  ),
+            ),
           ),
-        ),
+      ),
     );
 
     return {
@@ -294,7 +369,7 @@ export const makeReadDebouncer = (
       readNow,
       readAll,
       readAllNow,
-      flush: flushPending,
+      flush,
       get pending() {
         return collected.size;
       },

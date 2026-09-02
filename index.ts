@@ -63,8 +63,8 @@
  * a caller that names registers instead.
  *
  * ```ts
- * const client = yield* transport.withClient(3);            // exact transaction
- * yield* client.writeSingleRegister({ address: 2000, value: 512 });
+ * const client = yield* transport.withClient(3);            // exact read
+ * yield* client.readHoldingRegisters({ address: 2000, quantity: 2 });
  *
  * const batched = yield* transport.withBatchingClient(3, {  // decides the transactions
  *   debounce: { writes: { window: "250 millis", maxHold: "1 second" } },
@@ -75,8 +75,9 @@
  *
  * A {@link BatchingModbusClient} deliberately does not extend
  * {@link ModbusOperations}: a raw write on the same object would go around the
- * cache and around the batch. A caller that needs both surfaces asks the
- * transport for both, and they share one connection.
+ * cache and around the batch. Once a batching client exists for a unit, raw
+ * FC06, FC16, and FC23 operations on that unit fail. The raw client remains
+ * available for exact reads, coils, and other non-register-write operations.
  *
  * Nothing is debounced unless `debounce` asks for it, matching the rest of this
  * package. `writeAll` and `readAll` still plan, so a caller that holds a group of

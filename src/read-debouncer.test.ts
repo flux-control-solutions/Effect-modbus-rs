@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 
-import { Effect, Exit, Fiber } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 
 import { ModbusTimeoutError, type ModbusError } from './errors';
 import { makeReadDebouncer, type ReadDebouncer } from './read-debouncer';
@@ -70,6 +70,23 @@ test('a repeated address is read once and answered for every reader', async () =
   expect(device.requests).toEqual([[{ address: 5, quantity: 1 }]]);
 });
 
+test('an invalid reader does not fail valid readers in the same window', async () => {
+  const device = makeDevice();
+  const results = await withDebouncer({ window: '20 millis', fetch: device.fetch }, (debouncer) =>
+    Effect.all([Effect.result(debouncer.read(0x10000)), Effect.result(debouncer.read(5))], {
+      concurrency: 'unbounded',
+    }),
+  );
+
+  expect(results[0]).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusInvalidArgumentError' },
+  });
+  expect(results[1]._tag).toBe('Success');
+  if (results[1]._tag === 'Success') expect(results[1].success).toBe(50);
+  expect(device.requests).toEqual([[{ address: 5, quantity: 1 }]]);
+});
+
 test('the window does not restart, so a stream of readers cannot push it out', async () => {
   const device = makeDevice();
 
@@ -86,6 +103,147 @@ test('the window does not restart, so a stream of readers cannot push it out', a
   );
 
   expect(device.requests.length).toBeGreaterThan(1);
+});
+
+test('a read arriving during an active fetch starts the next window', async () => {
+  const requests: Array<ReadonlyArray<ReadSpan>> = [];
+
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        let fetchCount = 0;
+        const fetch = (spans: ReadonlyArray<ReadSpan>) =>
+          Effect.gen(function* () {
+            requests.push(spans);
+            fetchCount += 1;
+            if (fetchCount === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            return spans.map((span) =>
+              Uint16Array.from(
+                { length: span.quantity },
+                (_, index) => (span.address + index) * 10,
+              ),
+            );
+          });
+
+        const debouncer = yield* makeReadDebouncer({ window: '10 millis', fetch });
+        const first = yield* Effect.forkChild(debouncer.read(1));
+        yield* Deferred.await(firstStarted);
+
+        const second = yield* Effect.forkChild(debouncer.read(2));
+        yield* Effect.sleep('1 millis');
+        expect(debouncer.pending).toBe(1);
+        yield* Deferred.succeed(releaseFirst, undefined);
+        const firstValue = yield* Fiber.join(first);
+        const secondResult = yield* Effect.race(
+          Effect.map(Fiber.join(second), (value) => ({ _tag: 'Value' as const, value })),
+          Effect.as(Effect.sleep('100 millis'), { _tag: 'Timeout' as const }),
+        );
+
+        return { firstValue, secondResult, pending: debouncer.pending };
+      }),
+    ),
+  );
+
+  expect(result).toEqual({
+    firstValue: 10,
+    secondResult: { _tag: 'Value', value: 20 },
+    pending: 0,
+  });
+  expect(requests).toEqual([[{ address: 1, quantity: 1 }], [{ address: 2, quantity: 1 }]]);
+});
+
+test('interrupting a public flush does not cancel its read or strand its reader', async () => {
+  const value = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const debouncer = yield* makeReadDebouncer({
+          window: '10 seconds',
+          fetch: (spans) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return spans.map((span) => Uint16Array.from({ length: span.quantity }, () => 70));
+            }),
+        });
+
+        const reader = yield* Effect.forkChild(debouncer.read(7));
+        while (debouncer.pending === 0) yield* Effect.yieldNow;
+        const flusher = yield* Effect.forkChild(debouncer.flush);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(flusher);
+        yield* Deferred.succeed(release, undefined);
+        return yield* Fiber.join(reader);
+      }),
+    ),
+  );
+
+  expect(value).toBe(70);
+});
+
+test('readNow fails promptly after its scope closes', async () => {
+  const device = makeDevice();
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const debouncer = yield* Effect.provideService(
+        makeReadDebouncer({ window: '10 seconds', fetch: device.fetch }),
+        Scope.Scope,
+        scope,
+      );
+      yield* Scope.close(scope, Exit.void);
+
+      return yield* Effect.race(
+        Effect.map(Effect.result(debouncer.readNow(7)), (result) =>
+          result._tag === 'Failure' ? result.failure._tag : result._tag,
+        ),
+        Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+      );
+    }),
+  );
+
+  expect(result).toBe('ModbusNotConnectedError');
+  expect(device.requests).toHaveLength(0);
+});
+
+test('closing the scope interrupts an active fetch', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const started = yield* Deferred.make<void>();
+      const debouncer = yield* Effect.provideService(
+        makeReadDebouncer({
+          window: '10 millis',
+          fetch: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              return yield* Effect.never;
+            }),
+        }),
+        Scope.Scope,
+        scope,
+      );
+
+      const caller = yield* Effect.forkChild(debouncer.read(1));
+      yield* Deferred.await(started);
+
+      const closed = yield* Effect.race(
+        Effect.as(Scope.close(scope, Exit.void), 'Closed' as const),
+        Effect.as(Effect.sleep('100 millis'), 'Timeout' as const),
+      );
+      const callerExit = closed === 'Closed' ? yield* Fiber.await(caller) : undefined;
+      return { closed, callerExit };
+    }),
+  );
+
+  expect(result.closed).toBe('Closed');
+  expect(result.callerExit !== undefined && Exit.hasInterrupts(result.callerExit)).toBe(true);
 });
 
 test('a zero window reads straight through, one transaction each', async () => {

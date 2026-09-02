@@ -429,10 +429,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
 
       const touchedUnits = new Set<number>();
 
-      const withClient = Effect.fnUntraced(function* (
-        unitId: number,
-        clientOptions?: { readonly retry?: ModbusRetryPolicy },
-      ) {
+      const makeOperations = Effect.fnUntraced(function* (unitId: number) {
         const state = deviceStates.get(unitId);
         if (!state) {
           return yield* new ModbusInvalidArgumentError({
@@ -440,11 +437,16 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
             message: `Device with unitId ${unitId} not found in mock configuration`,
           });
         }
-        // Retry policies still apply, so a mock can exercise them end to end.
-        // The fault hook rides in the guard slot, which already runs once per
-        // attempt — exactly where an injected failure belongs.
         touchedUnits.add(unitId);
-        return withResilience(makeMockModbusClient(state, unitId), {
+        return makeMockModbusClient(state, unitId);
+      });
+
+      const makeClient = Effect.fnUntraced(function* (
+        unitId: number,
+        clientOptions?: { readonly retry?: ModbusRetryPolicy },
+      ) {
+        const operations = yield* makeOperations(unitId);
+        return withResilience(operations, {
           guard,
           report,
           policy: clientOptions?.retry ?? options.retry,
@@ -454,10 +456,22 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
       // The mock carries the same batching surface as a live transport, so a
       // test that exercises batching runs against the same code a device does.
       const batching = makeBatchingRegistry({
-        withClient,
+        withClient: makeClient,
         connectionState,
         touchedUnits: () => touchedUnits,
         scope: serviceScope,
+      });
+
+      const withClient = Effect.fnUntraced(function* (
+        unitId: number,
+        clientOptions?: { readonly retry?: ModbusRetryPolicy },
+      ) {
+        const operations = yield* makeOperations(unitId);
+        return withResilience(batching.guardRawWrites(unitId, operations), {
+          guard,
+          report,
+          policy: clientOptions?.retry ?? options.retry,
+        });
       });
 
       return {

@@ -12,6 +12,13 @@
 
 import { encodeRegisterValue, type RegisterWrite } from './register-plan';
 
+/** Rejects an address that cannot be encoded in a Modbus request PDU. */
+const assertRegisterAddress = (address: number): void => {
+  if (!Number.isInteger(address) || address < 0 || address > 0xffff) {
+    throw new RangeError(`address must be an integer from 0 to 65535, got ${address}`);
+  }
+};
+
 /** The result of {@link RegisterCache.filter}. */
 export interface RegisterCacheFilter {
   /** Writes that change a register, in the order they were proposed. */
@@ -85,17 +92,19 @@ export const makeRegisterCache = (): RegisterCache => {
 
   return {
     filter: (unitId, writes) => {
-      const latest = new Map<number, RegisterWrite>();
+      const latest = new Map<number, { readonly write: RegisterWrite; readonly encoded: number }>();
       const suppressed: RegisterWrite[] = [];
       for (const write of writes) {
+        assertRegisterAddress(write.address);
+        const encoded = encodeRegisterValue(write.value);
         const superseded = latest.get(write.address);
-        if (superseded !== undefined) suppressed.push(superseded);
-        latest.set(write.address, write);
+        if (superseded !== undefined) suppressed.push(superseded.write);
+        latest.set(write.address, { write, encoded });
       }
 
       const pending: RegisterWrite[] = [];
-      for (const write of latest.values()) {
-        if (held.get(keyOf(unitId, write.address)) === encodeRegisterValue(write.value)) {
+      for (const { encoded, write } of latest.values()) {
+        if (held.get(keyOf(unitId, write.address)) === encoded) {
           suppressed.push(write);
         } else {
           pending.push(write);
@@ -105,6 +114,7 @@ export const makeRegisterCache = (): RegisterCache => {
     },
 
     observe: (unitId, address, value) => {
+      assertRegisterAddress(address);
       held.set(keyOf(unitId, address), encodeRegisterValue(value));
     },
 

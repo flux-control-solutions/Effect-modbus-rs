@@ -260,8 +260,8 @@ See [Testing with mocks](#testing-with-mocks) for the `fault` hook and the `reco
 
 ```ts
 Effect.gen(function* () {
-  const client = yield* transport.withClient(3); // exact transaction
-  yield* client.writeSingleRegister({ address: 2000, value: 512 });
+  const client = yield* transport.withClient(3); // exact read
+  yield* client.readHoldingRegisters({ address: 2000, quantity: 2 });
 
   const batched = yield* transport.withBatchingClient(3); // decides the transactions
   yield* batched.writeAll([
@@ -296,7 +296,7 @@ Three things bring the transaction count down, and each is exported on its own:
 | `flush`                             | —             | Issue everything pending, now. Never fails.                |
 | `cache`                             | —             | The cache this client filters against, or `undefined`.     |
 
-**A `BatchingModbusClient` is not an `EffectModbusClient`.** It deliberately does not extend `ModbusOperations`: there is no `writeSingleRegister` and no `readHoldingRegisters` on it. A raw write on the same object would go around the cache and around the batch, and a value held for an address could then reach the device after a newer value written past it. When you need both surfaces, ask the transport for both — they share one connection. Coils are not covered either; the planners pack registers.
+**A `BatchingModbusClient` is not an `EffectModbusClient`.** It deliberately does not extend `ModbusOperations`: there is no `writeSingleRegister` and no `readHoldingRegisters` on it. For a given unit, choose one holding-register write path for the transport's lifetime. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`; otherwise they could bypass the pending batch and its cache. A raw client for the same unit remains available for exact reads, coils, file records, diagnostics, and the other non-register-write operations. Coils are not covered by batching because the planners pack registers.
 
 ### Windows
 
@@ -329,7 +329,7 @@ The cache and the fiber that watches the link are created on first use, so a tra
 
 ### One client per unit
 
-A batching client is cached per unit ID, because that is what makes it work: two batching clients on one unit hold two batches and coalesce neither. A second call for the same unit with different options fails with `ModbusInvalidArgumentError` rather than quietly returning a client configured some other way.
+A batching client is cached per unit ID, because that is what makes it work: two batching clients on one unit hold two batches and coalesce neither. Concurrent first calls with the same options share one construction and receive the same client. A concurrent or later call with different options fails with `ModbusInvalidArgumentError` rather than quietly returning a client configured some other way. Retry policies contain schedules and functions, so matching requires the same policy object, not a separately constructed equivalent policy.
 
 ### Shutdown
 
@@ -452,7 +452,7 @@ Both take a `Scope` and flush in it rather than in the caller's, so a caller int
 
 `makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving a client this package did not hand out — a raw `modbus-rs` client, or a stub.
 
-`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` is made of, including the per-unit caching and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it.
+`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` is made of, including the per-unit caching and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
 
 `mergeSpanAttributes(sources)` is the join rule described under [Spans](#spans), exported so a custom `flush` can apply the same one.
 
