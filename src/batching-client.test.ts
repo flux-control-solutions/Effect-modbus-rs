@@ -192,7 +192,6 @@ test('batching waits for an accepted raw register write to finish', async () => 
         const registry = makeBatchingRegistry({
           withClient: () => Effect.succeed(raw),
           connectionState: transport.connectionState,
-          touchedUnits: () => [3],
           scope,
         });
         const guarded = registry.guardRawWrites(3, delayed);
@@ -240,7 +239,6 @@ test('concurrent calls share one in-flight batching client construction', async 
               return raw;
             }),
           connectionState: transport.connectionState,
-          touchedUnits: () => [3],
           scope,
         });
 
@@ -274,7 +272,6 @@ test('client construction fails promptly after the registry scope closes', async
             return raw;
           }),
         connectionState: transport.connectionState,
-        touchedUnits: () => [3],
         scope,
       });
       yield* Scope.close(scope, Exit.void);
@@ -307,7 +304,6 @@ test('closing the registry scope settles every in-flight construction caller', a
             return raw;
           }),
         connectionState: transport.connectionState,
-        touchedUnits: () => [3],
         scope,
       });
 
@@ -665,8 +661,9 @@ test('touchedUnits names the units a client was built for', async () => {
   expect(units).toEqual([3, 4]);
 });
 
-test('onShutdownPerUnit runs against every touched unit while the bus is open', async () => {
+test('onShutdownForUnits runs against caller-owned units while the bus is open', async () => {
   const seen: number[] = [];
+  const ownedUnits = new Set<number>();
 
   const values = await run(
     Effect.gen(function* () {
@@ -674,15 +671,19 @@ test('onShutdownPerUnit runs against every touched unit while the bus is open', 
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const three = yield* transport.withBatchingClient(3);
-          yield* transport.withBatchingClient(4);
-          yield* transport.onShutdownPerUnit((unitId) =>
-            Effect.gen(function* () {
-              seen.push(unitId);
-              const batched = yield* transport.withBatchingClient(unitId);
-              yield* batched.writeNow({ address: 0, value: 0 });
-            }),
+          yield* transport.onShutdownForUnits(
+            () => ownedUnits,
+            (unitId) =>
+              Effect.gen(function* () {
+                seen.push(unitId);
+                const batched = yield* transport.withBatchingClient(unitId);
+                yield* batched.writeNow({ address: 0, value: 0 });
+              }),
           );
+          const three = yield* transport.withBatchingClient(3);
+          ownedUnits.add(3);
+          // This unit shares the transport but belongs to a different policy.
+          yield* transport.withBatchingClient(4);
           yield* three.write({ address: 0, value: 999 });
         }),
       );
@@ -692,7 +693,7 @@ test('onShutdownPerUnit runs against every touched unit while the bus is open', 
     }),
   );
 
-  expect(seen.sort()).toEqual([3, 4]);
+  expect(seen).toEqual([3]);
   // The safe state was written, so the action ran before the transport closed.
   expect(Array.from(values)).toEqual([0]);
 });
@@ -706,15 +707,16 @@ test('a shutdown action registered before batching runs before client teardown',
       const registry = makeBatchingRegistry({
         withClient: () => Effect.succeed(raw),
         connectionState: transport.connectionState,
-        touchedUnits: () => [3],
         scope,
       });
 
       yield* Scope.provide(
-        registry.onShutdownPerUnit(() =>
-          Effect.flatMap(registry.withBatchingClient(3), (batched) =>
-            batched.writeNow({ address: 0, value: 88 }),
-          ),
+        registry.onShutdownForUnits(
+          () => [3],
+          () =>
+            Effect.flatMap(registry.withBatchingClient(3), (batched) =>
+              batched.writeNow({ address: 0, value: 88 }),
+            ),
         ),
         scope,
       );

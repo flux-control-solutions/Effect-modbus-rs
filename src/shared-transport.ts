@@ -227,22 +227,28 @@ export interface TransportServiceApi {
   /**
    * Units a client has been built for on this transport.
    *
-   * A caller that must leave its devices in a known state needs to know which
-   * ones it spoke to. The transport knows, and knowing is all it can do: what a
-   * safe state *is* belongs to the caller. Zero volts is one device's answer and
-   * a stopped motor is another's.
+   * This is transport-wide diagnostic state, not device ownership. A bus may
+   * carry several kinds of device, so use a caller-owned unit set with
+   * `onShutdownForUnits` for device-specific shutdown actions.
    */
   readonly touchedUnits: ReadonlySet<number>;
   /**
-   * Runs an action against every touched unit when the current scope closes.
+   * Runs an action against caller-owned units when the current scope closes.
+   *
+   * The unit source is evaluated at shutdown, so callers can provide a set that
+   * grows as they build clients. The transport cannot infer ownership from
+   * `touchedUnits`: one bus may carry several kinds of device with different
+   * safe states.
    *
    * The action runs while the transport is still open, so it can write. A
    * failure is logged rather than raised: a finalizer that fails takes the rest
    * of the shutdown with it, and the other units still need their turn.
    *
+   * @param units - Supplies the units owned by this shutdown policy.
    * @param action - What to do for one unit.
    */
-  onShutdownPerUnit(
+  onShutdownForUnits(
+    units: () => Iterable<number>,
     action: (unitId: number) => Effect.Effect<void, ModbusError>,
   ): Effect.Effect<void, never, Scope.Scope>;
   /** Whether the transport currently has in-flight requests. */
@@ -443,7 +449,6 @@ export function makeTransportScoped<
     const batching = makeBatchingRegistry({
       withClient: makeClient,
       connectionState,
-      touchedUnits: () => clientSet.keys(),
       scope: serviceScope,
     });
 
@@ -530,7 +535,7 @@ export function makeTransportScoped<
         return new Set(clientSet.keys());
       },
 
-      onShutdownPerUnit: batching.onShutdownPerUnit,
+      onShutdownForUnits: batching.onShutdownForUnits,
 
       hasPendingRequests: () => {
         if (closed) return false;

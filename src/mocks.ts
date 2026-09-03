@@ -458,7 +458,6 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
       const batching = makeBatchingRegistry({
         withClient: makeClient,
         connectionState,
-        touchedUnits: () => touchedUnits,
         scope: serviceScope,
       });
 
@@ -485,7 +484,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
           return new Set(touchedUnits);
         },
 
-        onShutdownPerUnit: batching.onShutdownPerUnit,
+        onShutdownForUnits: batching.onShutdownForUnits,
 
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,

@@ -318,8 +318,6 @@ export interface BatchingRegistryDeps {
   ): Effect.Effect<EffectModbusClient, ModbusError>;
   /** The link state the shared cache watches. */
   readonly connectionState: SubscriptionRef.SubscriptionRef<ConnectionState>;
-  /** Units a client has been built for. */
-  touchedUnits(): Iterable<number>;
   /** The transport's own scope, which the clients and the watcher live in. */
   readonly scope: Scope.Scope;
 }
@@ -330,7 +328,9 @@ export interface BatchingRegistry {
     unitId: number,
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
   ): Effect.Effect<BatchingModbusClient, ModbusError>;
-  onShutdownPerUnit(
+  /** Runs a finalizer for caller-owned units while the transport is still open. */
+  onShutdownForUnits(
+    units: () => Iterable<number>,
     action: (unitId: number) => Effect.Effect<void, ModbusError>,
   ): Effect.Effect<void, never, Scope.Scope>;
   /** Disables raw holding-register writes once a batching client exists for the unit. */
@@ -569,10 +569,10 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
         }),
       ),
 
-    onShutdownPerUnit: (action) =>
+    onShutdownForUnits: (units, action) =>
       Effect.addFinalizer(() =>
         Effect.forEach(
-          Array.from(deps.touchedUnits()),
+          Array.from(new Set(units())),
           (unitId) =>
             action(unitId).pipe(
               Effect.catch((error) =>

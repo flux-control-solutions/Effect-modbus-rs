@@ -335,16 +335,28 @@ A batching client is cached per unit ID, because that is what makes it work: two
 
 ```ts
 Effect.gen(function* () {
-  yield* transport.onShutdownPerUnit((unitId) =>
-    Effect.gen(function* () {
-      const batched = yield* transport.withBatchingClient(unitId);
-      yield* batched.writeNow({ address: 2000, value: 0 });
-    }),
+  const ownedUnits = new Set<number>();
+  const clientFor = (unitId: number) =>
+    Effect.tap(transport.withBatchingClient(unitId), () =>
+      Effect.sync(() => ownedUnits.add(unitId)),
+    );
+  yield* transport.onShutdownForUnits(
+    () => ownedUnits,
+    (unitId) =>
+      Effect.gen(function* () {
+        const batched = yield* transport.withBatchingClient(unitId);
+        yield* batched.writeNow({ address: 2000, value: 0 });
+      }),
   );
+  yield* clientFor(3);
 });
 ```
 
-The action runs against every unit in `transport.touchedUnits`, while the transport is still open. Only the mechanism belongs here: what a safe state _is_ belongs to you. Zero volts is one device's answer and a stopped motor is another's.
+The unit source is evaluated at shutdown, while the transport is still open. Keep
+that set next to the device-specific client factory and add a unit when the client
+is built. Do not derive device ownership from `transport.touchedUnits`: a bus can
+carry several kinds of device, and zero volts is one device's safe state while a
+stopped motor is another's.
 
 ### Spans
 
