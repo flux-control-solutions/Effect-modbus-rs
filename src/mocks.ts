@@ -479,12 +479,11 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         withClient,
 
         withBatchingClient: batching.withBatchingClient,
+        batchingClient: batching.batchingClient,
 
         get touchedUnits() {
           return new Set(touchedUnits);
         },
-
-        onShutdownForUnits: batching.onShutdownForUnits,
 
         setRequestTimeout: (_timeoutMs: number) => Effect.void,
         clearRequestTimeout: () => Effect.void,

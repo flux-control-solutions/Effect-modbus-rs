@@ -323,40 +323,48 @@ A read window does not restart: it opens on the first arrival and expires on tim
 
 The cache records what this process wrote, keyed by unit and address. It is not a read cache and never answers a read. One cache serves every device on a transport, because a cache is a belief about a physical device and two caches on one unit disagree.
 
-It is emptied for a unit after a failed write, and emptied entirely when the link is lost — a device that power-cycles comes back holding something else. Pass `cache: false` to write every value, or pass your own `RegisterCache` to share one.
+It is emptied for a unit after a failed write, and emptied entirely when the link is lost — a device that power-cycles comes back holding something else. An invalidation that lands while a write is still on the wire wins over the observation that follows it, so losing the link cannot be undone by a write that was already in flight. Pass `cache: false` to write every value, or pass your own `RegisterCache` to share one.
+
+Suppressing a write is not always cheaper. Dropping one address out of the middle of a contiguous run splits that run into one FC06 per register, so a cache meant to save turnarounds can spend them instead. Each batch is therefore planned both ways — filtered, and whole — and the plan with fewer transactions wins, with a tie going to the filtered one because its frames are shorter. Keeping a run whole rewrites a register with the value the cache believes it already holds, and never sends more than `cache: false` would have. If you need a register left alone rather than rewritten, use `withClient`: it issues exactly the transaction you name.
 
 The cache and the fiber that watches the link are created on first use, so a transport nobody batches on carries neither.
 
-### One client per unit
+### Declaring a unit, and reaching for it
 
-A batching client is cached per unit ID, because that is what makes it work: two batching clients on one unit hold two batches and coalesce neither. Concurrent first calls with the same options share one construction and receive the same client. A concurrent or later call with different options fails with `ModbusInvalidArgumentError` rather than quietly returning a client configured some other way. Retry policies contain schedules and functions, so matching requires the same policy object, not a separately constructed equivalent policy.
+Every option a batching client takes is a fact about the unit, not about a caller. One unit holds one batch, one belief about what the device contains, and one window — so two callers can only ever configure a unit correctly by passing identical options. Rather than compare them, the two operations are separate:
+
+```ts
+const damper =
+  yield * transport.withBatchingClient(3, { debounce: { writes: { window: '50 millis' } } });
+const same = yield * transport.batchingClient(3); // elsewhere, no options to restate
+```
+
+`withBatchingClient` declares. Declaring a unit twice fails with `ModbusInvalidArgumentError`, whatever the second call asks for. `batchingClient` looks up, and fails the same way when nothing has declared that unit. A lookup that arrives while a declaration is still in flight waits for it, so neither call has to know which one ran first.
 
 ### Shutdown
 
 ```ts
 Effect.gen(function* () {
-  const ownedUnits = new Set<number>();
-  const clientFor = (unitId: number) =>
-    Effect.tap(transport.withBatchingClient(unitId), () =>
-      Effect.sync(() => ownedUnits.add(unitId)),
-    );
-  yield* transport.onShutdownForUnits(
-    () => ownedUnits,
-    (unitId) =>
-      Effect.gen(function* () {
-        const batched = yield* transport.withBatchingClient(unitId);
-        yield* batched.writeNow({ address: 2000, value: 0 });
-      }),
-  );
-  yield* clientFor(3);
+  const damper = yield* transport.withBatchingClient(3);
+  yield* damper.onShutdown(damper.writeAllNow([{ address: 2000, value: 0 }]));
+
+  const motor = yield* transport.withBatchingClient(7);
+  yield* motor.onShutdown(motor.writeNow({ address: 40, value: MOTOR_STOP }));
 });
 ```
 
-The unit source is evaluated at shutdown, while the transport is still open. Keep
-that set next to the device-specific client factory and add a unit when the client
-is built. Do not derive device ownership from `transport.touchedUnits`: a bus can
-carry several kinds of device, and zero volts is one device's safe state while a
-stopped motor is another's.
+A safe state is the device's own answer — zero volts for one, a stopped motor for
+another — so it is stated on the client that addresses the device. A unit whose
+client registers nothing is left alone. The action runs when the calling scope
+closes, while the transport is still open, and before the client is torn down.
+
+A failure is logged and raised as a defect. The other actions in the scope still
+run, so a device that cannot be reached does not cost the rest of the bus its
+turn. Wrap the action in `Effect.ignoreLogged` to accept the failure instead.
+
+`transport.touchedUnits` reports which units a client was built for. That is
+transport-wide diagnostic state, not device ownership, and it is not the input to
+a shutdown policy.
 
 ### Spans
 
@@ -369,7 +377,7 @@ A batching client opens `modbus.write` and `modbus.read` spans, carrying:
 | `modbus.suppressed_count`  | Writes the cache removed    |
 | `modbus.transaction_count` | Transactions issued         |
 
-The write span opens _after_ the cache filter, and only when a write survives it, so it records what reached the bus rather than what was proposed. Attach your own vocabulary as a second argument:
+The write span opens _after_ the cache filter, and only when a write survives it, so it records what reached the bus rather than what was proposed. Only the callers whose values are in the transaction contribute their vocabulary to it — a suppressed caller does not name itself on a frame that did not carry its value. Attach your own vocabulary as a second argument:
 
 ```ts
 Effect.gen(function* () {
@@ -464,7 +472,7 @@ Both take a `Scope` and flush in it rather than in the caller's, so a caller int
 
 `makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving a client this package did not hand out — a raw `modbus-rs` client, or a stub.
 
-`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` is made of, including the per-unit caching and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
+`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` and `batchingClient` are made of, including the per-unit declarations and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
 
 `mergeSpanAttributes(sources)` is the join rule described under [Spans](#spans), exported so a custom `flush` can apply the same one.
 
@@ -794,7 +802,7 @@ src/
   register-cache.ts          — makeRegisterCache: what each device already holds
   write-debouncer.ts         — makeWriteDebouncer: coalesces writes that arrive separately
   read-debouncer.ts          — makeReadDebouncer: collects reads that arrive separately
-  batching-client.ts         — withBatchingClient and the per-transport registry
+  batching-client.ts         — the batching client and the per-transport registry
   span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport

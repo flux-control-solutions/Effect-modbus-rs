@@ -55,12 +55,28 @@ export interface RegisterCache {
   filter(unitId: number, writes: ReadonlyArray<RegisterWrite>): RegisterCacheFilter;
 
   /**
+   * How many times what this cache believes about a unit has been discarded.
+   *
+   * Read it before issuing a write and hand it back to {@link observe}. The
+   * number changes when the unit is invalidated, so an observation that was
+   * already in flight can tell that it is describing a device nobody knows
+   * anything about any more.
+   */
+  generationOf(unitId: number): number;
+
+  /**
    * Records that a register now holds a value.
    *
    * Call this only after the device acknowledged the write. A value recorded
    * before the acknowledgement suppresses the retry that would have fixed it.
+   *
+   * Pass the `generation` read before the write was issued. An invalidation that
+   * lands while a write is on the wire has to win: the write may be the last one
+   * the device took before it power-cycled, and re-recording it afterwards would
+   * suppress exactly the write that restores the register. Omitting `generation`
+   * records unconditionally.
    */
-  observe(unitId: number, address: number, value: number): void;
+  observe(unitId: number, address: number, value: number, generation?: number): void;
 
   /**
    * Forgets what a unit holds, or what every unit holds when `unitId` is omitted.
@@ -90,6 +106,13 @@ export const makeRegisterCache = (): RegisterCache => {
   const held = new Map<string, number>();
   const keyOf = (unitId: number, address: number) => `${unitId}:${address}`;
 
+  // Counted per unit and once for the whole bus, so invalidating one device does
+  // not discard an observation in flight for another. Both only ever rise, so a
+  // unit's sum only ever rises, and an unchanged sum means neither moved.
+  const unitGenerations = new Map<number, number>();
+  let busGeneration = 0;
+  const generationOf = (unitId: number) => (unitGenerations.get(unitId) ?? 0) + busGeneration;
+
   return {
     filter: (unitId, writes) => {
       const latest = new Map<number, { readonly write: RegisterWrite; readonly encoded: number }>();
@@ -113,16 +136,21 @@ export const makeRegisterCache = (): RegisterCache => {
       return { pending, suppressed };
     },
 
-    observe: (unitId, address, value) => {
+    generationOf,
+
+    observe: (unitId, address, value, generation) => {
       assertRegisterAddress(address);
+      if (generation !== undefined && generation !== generationOf(unitId)) return;
       held.set(keyOf(unitId, address), encodeRegisterValue(value));
     },
 
     invalidate: (unitId) => {
       if (unitId === undefined) {
         held.clear();
+        busGeneration += 1;
         return;
       }
+      unitGenerations.set(unitId, (unitGenerations.get(unitId) ?? 0) + 1);
       const prefix = `${unitId}:`;
       for (const key of held.keys()) {
         if (key.startsWith(prefix)) held.delete(key);

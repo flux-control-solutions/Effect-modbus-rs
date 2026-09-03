@@ -220,7 +220,7 @@ test('batching waits for an accepted raw register write to finish', async () => 
   expect(Array.from(result.value)).toEqual([20]);
 });
 
-test('concurrent calls share one in-flight batching client construction', async () => {
+test('a lookup waits for a declaration already under way', async () => {
   const result = await run(
     Effect.scoped(
       Effect.gen(function* () {
@@ -244,7 +244,9 @@ test('concurrent calls share one in-flight batching client construction', async 
 
         const first = yield* Effect.forkChild(registry.withBatchingClient(3));
         yield* Deferred.await(started);
-        const second = yield* Effect.forkChild(registry.withBatchingClient(3));
+        // The declaration has not settled yet, so the lookup cannot find a
+        // client. It waits rather than depending on which fiber ran first.
+        const second = yield* Effect.forkChild(registry.batchingClient(3));
         yield* Effect.sleep('1 millis');
         yield* Deferred.succeed(release, undefined);
         const [left, right] = yield* Effect.all([Fiber.join(first), Fiber.join(second)], {
@@ -334,25 +336,42 @@ test('closing the registry scope settles every in-flight construction caller', a
   expect(result.every(Exit.isFailure)).toBe(true);
 });
 
-test('retry policy identity is part of a batching client configuration', async () => {
+test('a unit is declared once, and the lookup returns that client', async () => {
   const result = await run(
     Effect.gen(function* () {
       const transport = yield* RtuTransportService;
-      const retry = RetryPolicies.none();
-      const first = yield* transport.withBatchingClient(3, { retry });
-      const same = yield* transport.withBatchingClient(3, { retry });
-      const conflict = yield* Effect.result(
-        transport.withBatchingClient(3, { retry: RetryPolicies.serial() }),
+      const declared = yield* transport.withBatchingClient(3, { retry: RetryPolicies.none() });
+      const looked = yield* transport.batchingClient(3);
+
+      // Nothing compares configurations, so a second declaration fails whether or
+      // not it asks for the same thing. Two separately constructed retry policies
+      // were a conflict while options were compared; the question no longer arises.
+      const identical = yield* Effect.result(
+        transport.withBatchingClient(3, { retry: RetryPolicies.none() }),
       );
-      return { conflict, same: first === same };
+      const different = yield* Effect.result(
+        transport.withBatchingClient(3, { debounce: { writes: { window: '1 second' } } }),
+      );
+      const undeclared = yield* Effect.result(transport.batchingClient(9));
+
+      const tagOf = (result: typeof identical) =>
+        result._tag === 'Failure' ? result.failure._tag : 'Success';
+
+      return {
+        same: declared === looked,
+        identical: tagOf(identical),
+        different: tagOf(different),
+        undeclared: tagOf(undeclared),
+      };
     }),
   );
 
-  expect(result.same).toBe(true);
-  expect(result.conflict._tag).toBe('Failure');
-  if (result.conflict._tag === 'Failure') {
-    expect(result.conflict.failure._tag).toBe('ModbusInvalidArgumentError');
-  }
+  expect(result).toEqual({
+    same: true,
+    identical: 'ModbusInvalidArgumentError',
+    different: 'ModbusInvalidArgumentError',
+    undeclared: 'ModbusInvalidArgumentError',
+  });
 });
 
 test('the cache suppresses a write the device already agrees with', async () => {
@@ -388,24 +407,6 @@ test('cache false writes every value', async () => {
   );
 
   expect(attributesOf(capture.spans, 'modbus.write')).toHaveLength(2);
-});
-
-test('one unit gets one batching client, and a conflicting second call fails', async () => {
-  const exit = await Effect.runPromiseExit(
-    Effect.provide(
-      Effect.gen(function* () {
-        const transport = yield* RtuTransportService;
-        const first = yield* transport.withBatchingClient(3, { cache: true });
-        const same = yield* transport.withBatchingClient(3, { cache: true });
-        expect(same).toBe(first);
-        // Two batches on one unit coalesce neither, so this is a mistake.
-        yield* transport.withBatchingClient(3, { debounce: { writes: { window: '1 second' } } });
-      }),
-      transportLayer(),
-    ),
-  );
-
-  expect(Exit.isFailure(exit)).toBe(true);
 });
 
 test('an injected cache is used instead of the transport cache', async () => {
@@ -581,6 +582,72 @@ test('a write window collects writers that never meet', async () => {
   expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
 });
 
+test('the cache does not spend the transactions it exists to save', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3);
+      const addresses = Array.from({ length: 11 }, (_, index) => index);
+
+      // A first cycle establishes what the device holds.
+      yield* batched.writeAll(addresses.map((address) => ({ address, value: 100 })));
+      capture.spans.length = 0;
+
+      // The odd addresses change and the even ones repeat. Filtering the repeats
+      // out of the middle of the run would leave five separate FC06 steps.
+      yield* batched.writeAll(
+        addresses.map((address) => ({ address, value: address % 2 === 0 ? 100 : 200 })),
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  // One FC16 over the whole block, which is what no cache at all would send.
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(11);
+  // Nothing was held back, so nothing is reported as held back.
+  expect(writes[0]!.get('modbus.suppressed_count')).toBe(0);
+});
+
+test('a suppressed caller does not stamp its vocabulary on the write span', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '30 millis' } },
+      });
+
+      yield* batched.writeAll([
+        { address: 0, value: 10 },
+        { address: 32, value: 20 },
+      ]);
+      capture.spans.length = 0;
+
+      // Far apart, so keeping the run whole would cost a transaction rather than
+      // save one and the filtered plan wins. Supply repeats, Exhaust changes.
+      yield* Effect.all(
+        [
+          batched.write({ address: 0, value: 10 }, { 'app.point': 'Supply' }),
+          batched.write({ address: 32, value: 99 }, { 'app.point': 'Exhaust' }),
+        ],
+        { concurrency: 'unbounded' },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(1);
+  expect(writes[0]!.get('modbus.suppressed_count')).toBe(1);
+  // Only the value that reached the bus names its caller.
+  expect(writes[0]!.get('app.point')).toBe('Exhaust');
+});
+
 test('writeNow flushes a held write rather than passing it', async () => {
   const values = await run(
     Effect.gen(function* () {
@@ -661,44 +728,41 @@ test('touchedUnits names the units a client was built for', async () => {
   expect(units).toEqual([3, 4]);
 });
 
-test('onShutdownForUnits runs against caller-owned units while the bus is open', async () => {
-  const seen: number[] = [];
-  const ownedUnits = new Set<number>();
-
+test('onShutdown writes a safe state while the bus is open', async () => {
   const values = await run(
     Effect.gen(function* () {
       const transport = yield* RtuTransportService;
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* transport.onShutdownForUnits(
-            () => ownedUnits,
-            (unitId) =>
-              Effect.gen(function* () {
-                seen.push(unitId);
-                const batched = yield* transport.withBatchingClient(unitId);
-                yield* batched.writeNow({ address: 0, value: 0 });
-              }),
-          );
-          const three = yield* transport.withBatchingClient(3);
-          ownedUnits.add(3);
-          // This unit shares the transport but belongs to a different policy.
-          yield* transport.withBatchingClient(4);
-          yield* three.write({ address: 0, value: 999 });
+          const three = yield* transport.withBatchingClient(3, {
+            debounce: { writes: { window: '50 millis' } },
+          });
+          yield* three.onShutdown(three.writeNow({ address: 0, value: 0 }));
+
+          // This unit shares the transport and states no safe state of its own,
+          // so nothing on the bus decides one for it.
+          const four = yield* transport.withBatchingClient(4);
+
+          yield* three.writeNow({ address: 0, value: 999 });
+          yield* four.writeNow({ address: 0, value: 999 });
         }),
       );
 
-      const raw = yield* transport.withClient(3);
-      return yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+      const three = yield* transport.withClient(3);
+      const four = yield* transport.withClient(4);
+      return {
+        three: Array.from(yield* three.readHoldingRegisters({ address: 0, quantity: 1 })),
+        four: Array.from(yield* four.readHoldingRegisters({ address: 0, quantity: 1 })),
+      };
     }),
   );
 
-  expect(seen).toEqual([3]);
-  // The safe state was written, so the action ran before the transport closed.
-  expect(Array.from(values)).toEqual([0]);
+  // The safe state reached unit 3, so the action ran before the transport closed.
+  expect(values).toEqual({ three: [0], four: [999] });
 });
 
-test('a shutdown action registered before batching runs before client teardown', async () => {
+test('a shutdown action runs before the client it was registered on is torn down', async () => {
   const value = await run(
     Effect.gen(function* () {
       const transport = yield* RtuTransportService;
@@ -710,16 +774,11 @@ test('a shutdown action registered before batching runs before client teardown',
         scope,
       });
 
-      yield* Scope.provide(
-        registry.onShutdownForUnits(
-          () => [3],
-          () =>
-            Effect.flatMap(registry.withBatchingClient(3), (batched) =>
-              batched.writeNow({ address: 0, value: 88 }),
-            ),
-        ),
-        scope,
-      );
+      // Registered into the same scope the client lives in, which is the worst
+      // case for ordering. A client has to exist before an action can be hung on
+      // it, so the action is always the later finalizer and always runs first.
+      const batched = yield* registry.withBatchingClient(3);
+      yield* Scope.provide(batched.onShutdown(batched.writeNow({ address: 0, value: 88 })), scope);
       yield* Scope.close(scope, Exit.void);
 
       return yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
@@ -727,6 +786,35 @@ test('a shutdown action registered before batching runs before client teardown',
   );
 
   expect(Array.from(value)).toEqual([88]);
+});
+
+test('a failing shutdown action is raised and does not cost another unit its turn', async () => {
+  const outcome = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+
+      const exit = yield* Effect.exit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const three = yield* transport.withBatchingClient(3);
+            const four = yield* transport.withBatchingClient(4);
+            // Unit 4 implements address 0 only, so its safe state cannot land.
+            yield* four.onShutdown(four.writeNow({ address: 50, value: 0 }));
+            yield* three.onShutdown(three.writeNow({ address: 0, value: 0 }));
+            yield* three.writeNow({ address: 0, value: 999 });
+          }),
+        ),
+      );
+
+      const raw = yield* transport.withClient(3);
+      return {
+        failed: Exit.isFailure(exit),
+        three: Array.from(yield* raw.readHoldingRegisters({ address: 0, quantity: 1 })),
+      };
+    }),
+  );
+
+  expect(outcome).toEqual({ failed: true, three: [0] });
 });
 
 test('losing the link forgets what the devices held', async () => {
@@ -768,4 +856,54 @@ test('losing the link forgets what the devices held', async () => {
     // The device may have power-cycled, so the same value has to go out again.
     expect(cache.filter(3, [{ address: 0, value: 77 }]).pending).toHaveLength(1);
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
+});
+
+test('a link lost during a write is not re-believed by the observe that follows', async () => {
+  const cache = makeRegisterCache();
+
+  const result = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+
+        // The link drops while this write is on the wire, which is what the
+        // watcher on the link state sees. The window is not one turnaround: the
+        // retry policy lives inside the client call, so an attempt, a backoff,
+        // and a successful retry all sit between the write and its `observe`.
+        let dropped = false;
+        const client = {
+          ...raw,
+          writeSingleRegister: (options: { readonly address: number; readonly value: number }) =>
+            Effect.gen(function* () {
+              const acknowledged = yield* raw.writeSingleRegister(options);
+              if (!dropped) {
+                dropped = true;
+                cache.invalidate(3);
+              }
+              return acknowledged;
+            }),
+        };
+
+        const batched = yield* makeBatchingClient({ unitId: 3, client, cache });
+
+        yield* batched.writeNow({ address: 0, value: 512 });
+        const afterDrop = cache.size;
+
+        // The device power-cycles and comes back holding something else.
+        yield* raw.writeSingleRegister({ address: 0, value: 0 });
+
+        // The same value goes out again to restore the output. A belief that
+        // survived the invalidate suppresses exactly this write.
+        yield* batched.writeNow({ address: 0, value: 512 });
+        const held = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
+
+        return { afterDrop, afterRestore: cache.size, held: Array.from(held) };
+      }),
+    ),
+  );
+
+  // The invalidate wins, so nothing is believed about the unit while the link is
+  // in doubt. The restoring write then lands and the cache learns 512 again.
+  expect(result).toEqual({ afterDrop: 0, afterRestore: 1, held: [512] });
 });

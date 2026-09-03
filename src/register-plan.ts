@@ -246,6 +246,16 @@ export const planWrites = (
   const minRunLength = options.minRunLength ?? 2;
   assertTransactionLimit('maxRegistersPerWrite', maxRegistersPerWrite, MODBUS_MAX_WRITE_REGISTERS);
   assertPositiveInteger('minRunLength', minRunLength);
+  // A run is cut at `maxRegistersPerWrite`, and a run shorter than
+  // `minRunLength` is emitted as one FC06 per register. Each limit is legal on
+  // its own, and together they can put the FC16 branch out of reach: every write
+  // still lands, one transaction at a time, on the bus this exists to spare.
+  if (minRunLength > maxRegistersPerWrite) {
+    throw new RangeError(
+      `minRunLength (${minRunLength}) must not exceed maxRegistersPerWrite ` +
+        `(${maxRegistersPerWrite}), because no run can then reach one FC16 step`,
+    );
+  }
 
   const latest = new Map<number, number>();
   for (const write of writes) {

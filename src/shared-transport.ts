@@ -199,20 +199,18 @@ export interface TransportServiceApi {
   /** Closes the transport and its scope immediately. */
   close(): Effect.Effect<void, ModbusError, Scope.Scope>;
   /**
-   * Obtains a {@link BatchingModbusClient} for the given unit ID.
+   * Declares the {@link BatchingModbusClient} for a unit.
    *
    * Where `withClient` issues the transaction a caller names, this client
    * decides the transactions for the caller: it packs neighbouring registers,
    * drops writes the device already agrees with, and — when a window is
    * configured — collects operations that arrive near each other.
    *
-   * The client is cached per unit ID, because that is what makes it work: two
-   * batching clients on one unit hold two batches and coalesce neither. A second
-   * call for the same unit with different options is a programming error and
-   * fails with `ModbusInvalidArgumentError` rather than quietly returning a
-   * client configured some other way. Retry policies match by object identity,
-   * because their schedules and predicate functions cannot be compared
-   * structurally.
+   * A unit is declared once, because every option here is a fact about the unit
+   * rather than about a caller: one unit holds one batch, one belief about the
+   * device, and one window. Declaring a unit twice fails with
+   * `ModbusInvalidArgumentError`. Use {@link batchingClient} to reach a client
+   * another part of the program declared.
    *
    * Nothing is debounced unless `debounce` asks for it, matching the rest of
    * this package: default timing stays predictable.
@@ -225,32 +223,23 @@ export interface TransportServiceApi {
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
   ): Effect.Effect<BatchingModbusClient, ModbusError>;
   /**
+   * The {@link BatchingModbusClient} declared for a unit.
+   *
+   * Fails with `ModbusInvalidArgumentError` when nothing has declared one. A
+   * declaration already under way is awaited, so a lookup does not depend on
+   * which fiber ran first.
+   *
+   * @param unitId - Modbus unit ID to address.
+   */
+  batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
+  /**
    * Units a client has been built for on this transport.
    *
-   * This is transport-wide diagnostic state, not device ownership. A bus may
-   * carry several kinds of device, so use a caller-owned unit set with
-   * `onShutdownForUnits` for device-specific shutdown actions.
+   * Transport-wide diagnostic state, not device ownership. For a device-specific
+   * shutdown action, use `BatchingModbusClient.onShutdown` on the client that
+   * addresses the device.
    */
   readonly touchedUnits: ReadonlySet<number>;
-  /**
-   * Runs an action against caller-owned units when the current scope closes.
-   *
-   * The unit source is evaluated at shutdown, so callers can provide a set that
-   * grows as they build clients. The transport cannot infer ownership from
-   * `touchedUnits`: one bus may carry several kinds of device with different
-   * safe states.
-   *
-   * The action runs while the transport is still open, so it can write. A
-   * failure is logged rather than raised: a finalizer that fails takes the rest
-   * of the shutdown with it, and the other units still need their turn.
-   *
-   * @param units - Supplies the units owned by this shutdown policy.
-   * @param action - What to do for one unit.
-   */
-  onShutdownForUnits(
-    units: () => Iterable<number>,
-    action: (unitId: number) => Effect.Effect<void, ModbusError>,
-  ): Effect.Effect<void, never, Scope.Scope>;
   /** Whether the transport currently has in-flight requests. */
   hasPendingRequests(): boolean;
 }
@@ -530,12 +519,11 @@ export function makeTransportScoped<
       }),
 
       withBatchingClient: batching.withBatchingClient,
+      batchingClient: batching.batchingClient,
 
       get touchedUnits() {
         return new Set(clientSet.keys());
       },
-
-      onShutdownForUnits: batching.onShutdownForUnits,
 
       hasPendingRequests: () => {
         if (closed) return false;

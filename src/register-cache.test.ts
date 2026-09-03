@@ -111,3 +111,40 @@ test('invalidate matches a unit by its whole id, not by a prefix of it', () => {
   // Unit 11 shares the leading "1" but is a different device.
   expect(cache.filter(11, [{ address: 2000, value: 10 }]).pending).toEqual([]);
 });
+
+test('an observation from before an invalidation does not restore the belief', () => {
+  const cache = makeRegisterCache();
+
+  // What a caller does around a write: read the generation, issue, then record.
+  const generation = cache.generationOf(1);
+  cache.invalidate(1);
+  cache.observe(1, 2000, 10, generation);
+
+  expect(cache.size).toBe(0);
+  expect(cache.filter(1, [{ address: 2000, value: 10 }]).pending).toHaveLength(1);
+
+  // An observation that spans no invalidation still records.
+  cache.observe(1, 2000, 10, cache.generationOf(1));
+  expect(cache.filter(1, [{ address: 2000, value: 10 }]).pending).toHaveLength(0);
+});
+
+test('invalidating one unit does not discard an observation in flight for another', () => {
+  const cache = makeRegisterCache();
+
+  const generation = cache.generationOf(2);
+  // A different device on the same bus fails its write.
+  cache.invalidate(1);
+  cache.observe(2, 2000, 10, generation);
+
+  expect(cache.filter(2, [{ address: 2000, value: 10 }]).pending).toHaveLength(0);
+});
+
+test('losing the bus discards an observation in flight for every unit', () => {
+  const cache = makeRegisterCache();
+
+  const generation = cache.generationOf(2);
+  cache.invalidate();
+  cache.observe(2, 2000, 10, generation);
+
+  expect(cache.filter(2, [{ address: 2000, value: 10 }]).pending).toHaveLength(1);
+});
