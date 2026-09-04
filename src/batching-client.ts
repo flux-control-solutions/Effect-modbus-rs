@@ -396,7 +396,15 @@ export interface BatchingRegistryDeps {
 
 /** The batching half of a transport's API. */
 export interface BatchingRegistry {
-  /** Declares the batching client for a unit. Fails if the unit already has one. */
+  /**
+   * Declares the batching client for a unit. Fails if the unit already has one.
+   *
+   * The declaration belongs to the registry's transport scope, not to the
+   * calling fiber. Construction therefore continues if the caller is
+   * interrupted. A shorter-lived owner that abandons this effect must recover
+   * the pending or completed declaration with `batchingClient` rather than
+   * trying to declare the unit again.
+   */
   withBatchingClient(
     unitId: number,
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
