@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["CHANGELOG.md", ".claude/"],
+  "ignorePatterns": ["CHANGELOG.md", ".claude/", "tools/oxlint/anti-slop/"],
   "semi": true,
   "singleQuote": true,
   "trailingComma": "all",
