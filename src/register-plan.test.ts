@@ -49,12 +49,14 @@ const addressesOf = (step: WritePlanStep): number[] =>
 const pairsOf = (steps: ReadonlyArray<WritePlanStep>): Array<[number, number]> =>
   steps.flatMap((step) =>
     step.kind === 'single'
-      ? [[step.address, step.value] as [number, number]]
-      : Array.from(
-          step.values,
-          (value, index) => [step.address + index, value] as [number, number],
-        ),
+      ? [[step.address, step.value]]
+      : Array.from(step.values, (value, index): [number, number] => [step.address + index, value]),
   );
+
+const requireDefined = <T>(value: T | undefined, message: string): T => {
+  if (value === undefined) throw new Error(message);
+  return value;
+};
 
 // ---------------------------------------------------------------- planWrites
 
@@ -96,8 +98,10 @@ test('planWrites splits a run that is one register past the limit', () => {
   const steps = planWrites(writes);
 
   expect(steps).toHaveLength(2);
-  expect(steps[0]).toMatchObject({ kind: 'multiple', address: 0 });
-  expect((steps[0] as { values: Uint16Array }).values).toHaveLength(MODBUS_MAX_WRITE_REGISTERS);
+  const first = steps[0];
+  expect(first).toMatchObject({ kind: 'multiple', address: 0 });
+  if (first?.kind !== 'multiple') throw new Error('expected the first step to use FC16');
+  expect(first.values).toHaveLength(MODBUS_MAX_WRITE_REGISTERS);
   // The remainder is a run of one, so `minRunLength` sends it as FC06.
   expect(steps[1]).toEqual({
     kind: 'single',
@@ -214,10 +218,10 @@ test('planWrites holds its invariants over generated cases', () => {
   for (let seed = 0; seed < 300; seed += 1) {
     const random = makeRandom(seed);
     const maxRegistersPerWrite = drawInt(random, 1, 8);
-    const options: PlanWritesOptions = {
+    const options = {
       maxRegistersPerWrite,
       minRunLength: drawInt(random, 1, 4),
-    };
+    } satisfies Required<PlanWritesOptions>;
     const writes: RegisterWrite[] = drawAddresses(random, drawInt(random, 0, 30)).map(
       (address) => ({ address, value: drawInt(random, 0, 0xffff) }),
     );
@@ -234,19 +238,23 @@ test('planWrites holds its invariants over generated cases', () => {
     for (const step of steps) {
       const addresses = addressesOf(step);
       // A step never exceeds the device limit.
-      expect(addresses.length, label).toBeLessThanOrEqual(options.maxRegistersPerWrite!);
+      expect(addresses.length, label).toBeLessThanOrEqual(options.maxRegistersPerWrite);
       // A step's addresses are contiguous.
-      expect(addresses[addresses.length - 1]! - addresses[0]!, label).toBe(addresses.length - 1);
+      const firstAddress = requireDefined(addresses[0], 'plan step must contain an address');
+      const lastAddress = requireDefined(addresses.at(-1), 'plan step must contain an address');
+      expect(lastAddress - firstAddress, label).toBe(addresses.length - 1);
       // FC16 is used only for a run that earns it.
       if (step.kind === 'multiple') {
-        expect(addresses.length, label).toBeGreaterThanOrEqual(options.minRunLength!);
+        expect(addresses.length, label).toBeGreaterThanOrEqual(options.minRunLength);
       }
     }
 
     // Steps ascend and never overlap.
     const flat = steps.flatMap(addressesOf);
     for (let index = 1; index < flat.length; index += 1) {
-      expect(flat[index]! > flat[index - 1]!, label).toBe(true);
+      const previous = requireDefined(flat[index - 1], 'invalid previous flat index');
+      const current = requireDefined(flat[index], 'invalid current flat index');
+      expect(current > previous, label).toBe(true);
     }
   }
 });
@@ -343,10 +351,10 @@ test('planReads accepts the protocol address and transaction boundaries', () => 
 test('planReads holds its invariants over generated cases', () => {
   for (let seed = 0; seed < 300; seed += 1) {
     const random = makeRandom(seed + 10000);
-    const options: PlanReadsOptions = {
+    const options = {
       maxRegistersPerRead: drawInt(random, 1, 16),
       maxGap: drawInt(random, 0, 5),
-    };
+    } satisfies Required<PlanReadsOptions>;
     const addresses = drawAddresses(random, drawInt(random, 0, 30));
 
     const plan = planReads(addresses, options);
@@ -354,7 +362,7 @@ test('planReads holds its invariants over generated cases', () => {
 
     for (const span of plan.spans) {
       // A span never exceeds the device limit.
-      expect(span.quantity, label).toBeLessThanOrEqual(options.maxRegistersPerRead!);
+      expect(span.quantity, label).toBeLessThanOrEqual(options.maxRegistersPerRead);
       expect(span.quantity, label).toBeGreaterThanOrEqual(1);
     }
 
@@ -362,24 +370,28 @@ test('planReads holds its invariants over generated cases', () => {
     for (const address of addresses) {
       const location = plan.locate(address);
       expect(location, label).toBeDefined();
-      const span = plan.spans[location!.span]!;
-      expect(span.address + location!.offset, label).toBe(address);
+      if (location === undefined) throw new Error(`address ${address} was not located`);
+      const span = requireDefined(
+        plan.spans[location.span],
+        `location references missing span ${location.span}`,
+      );
+      expect(span.address + location.offset, label).toBe(address);
     }
 
     // Spans ascend and never overlap.
     for (let index = 1; index < plan.spans.length; index += 1) {
-      const previous = plan.spans[index - 1]!;
-      const current = plan.spans[index]!;
+      const previous = requireDefined(plan.spans[index - 1], 'invalid previous span index');
+      const current = requireDefined(plan.spans[index], 'invalid current span index');
       expect(current.address > previous.address + previous.quantity - 1, label).toBe(true);
     }
 
     // A split happened only because the gap or the limit forced it.
     for (let index = 1; index < plan.spans.length; index += 1) {
-      const previous = plan.spans[index - 1]!;
-      const current = plan.spans[index]!;
+      const previous = requireDefined(plan.spans[index - 1], 'invalid previous span index');
+      const current = requireDefined(plan.spans[index], 'invalid current span index');
       const gap = current.address - (previous.address + previous.quantity);
       const merged = current.address + current.quantity - previous.address;
-      expect(gap > options.maxGap! || merged > options.maxRegistersPerRead!, label).toBe(true);
+      expect(gap > options.maxGap || merged > options.maxRegistersPerRead, label).toBe(true);
     }
   }
 });

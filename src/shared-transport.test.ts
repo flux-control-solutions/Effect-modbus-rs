@@ -3,13 +3,39 @@ import { test, expect } from 'bun:test';
 import { Effect, Result, Exit, Fiber, Scope } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
-import { makeTransportScoped } from './shared-transport';
+import { createTransportScoped } from './shared-transport';
 
 interface FakeOptions {
   readonly label: string;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const unusedClientMethod = async (): Promise<never> => {
+  throw new Error('unexpected fake client method');
+};
+
+const makeClient = (
+  writeSingleRegister: AsyncSerialModbusClient['writeSingleRegister'] = unusedClientMethod,
+): AsyncSerialModbusClient => ({
+  pendingRequests: false,
+  isConnected: () => true,
+  readHoldingRegisters: unusedClientMethod,
+  readInputRegisters: unusedClientMethod,
+  writeSingleRegister,
+  writeMultipleRegisters: unusedClientMethod,
+  readWriteMultipleRegisters: unusedClientMethod,
+  readCoils: unusedClientMethod,
+  writeSingleCoil: unusedClientMethod,
+  writeMultipleCoils: unusedClientMethod,
+  readDiscreteInputs: unusedClientMethod,
+  readFifoQueue: unusedClientMethod,
+  readFileRecord: unusedClientMethod,
+  writeFileRecord: unusedClientMethod,
+  readExceptionStatus: unusedClientMethod,
+  diagnostics: unusedClientMethod,
+  readDeviceIdentification: unusedClientMethod,
+});
 
 /**
  * A transport handle that records call counts and can be made slow or failing,
@@ -21,12 +47,13 @@ const makeFake = (config?: {
   reconnectFails?: () => boolean;
 }) => {
   const calls = { open: 0, reconnect: 0, close: 0 };
+  const client = makeClient();
 
   const transport = {
     close: async () => {
       calls.close += 1;
     },
-    createClient: (_opts: { unitId: number }) => ({}) as AsyncSerialModbusClient,
+    createClient: (_opts: { unitId: number }) => client,
     setRequestTimeout: (_ms: number) => {},
     clearRequestTimeout: () => {},
     reconnect: async () => {
@@ -43,7 +70,7 @@ const makeFake = (config?: {
     return transport;
   };
 
-  const make = makeTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
+  const make = createTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
     'AsyncRtuTransport',
     () => open(),
     'FakeTransport',
@@ -215,13 +242,11 @@ test('explicit close runs batching shutdown actions before closing the handle', 
   const events: string[] = [];
   let closed = false;
   let held = 999;
-  const client = {
-    writeSingleRegister: async (options: { readonly value: number }) => {
-      if (closed) throw new Error('[MODBUS_CONNECTION_CLOSED] transport closed');
-      events.push('write');
-      held = options.value;
-    },
-  } as unknown as AsyncSerialModbusClient;
+  const client = makeClient(async (options) => {
+    if (closed) throw new Error('[MODBUS_CONNECTION_CLOSED] transport closed');
+    events.push('write');
+    held = options.value;
+  });
   const transport = {
     close: async () => {
       events.push('close');
@@ -233,7 +258,7 @@ test('explicit close runs batching shutdown actions before closing the handle', 
     reconnect: async () => {},
     pendingRequests: false,
   };
-  const make = makeTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
+  const make = createTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
     'AsyncRtuTransport',
     () => Promise.resolve(transport),
     'CloseAwareTransport',

@@ -10,7 +10,7 @@ import {
   ModbusTransportError,
   type ModbusError,
 } from './errors';
-import { makeRetryPolicy, retryModbus, RetryPolicies, type ModbusRetryPolicy } from './retry';
+import { createRetryPolicy, retryModbus, RetryPolicies, type ModbusRetryPolicy } from './retry';
 
 const timeout = () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'timeout' });
 const transportError = () => new ModbusTransportError({ cause: new Error('crc'), message: 'crc' });
@@ -55,7 +55,7 @@ const runWithFailures = (policy: ModbusRetryPolicy, failures: number, error: () 
 const fast = { baseDelay: '1 millis', maxDelay: '4 millis', jitter: false } as const;
 
 test('backoff grows exponentially and is capped by maxDelay', async () => {
-  const policy = makeRetryPolicy({
+  const policy = createRetryPolicy({
     maxRetries: 5,
     baseDelay: '100 millis',
     factor: 2,
@@ -67,7 +67,7 @@ test('backoff grows exponentially and is capped by maxDelay', async () => {
 });
 
 test('jitter keeps delays within the configured multiplier range', async () => {
-  const policy = makeRetryPolicy({
+  const policy = createRetryPolicy({
     maxRetries: 3,
     baseDelay: '100 millis',
     factor: 1,
@@ -84,7 +84,7 @@ test('jitter keeps delays within the configured multiplier range', async () => {
 });
 
 test('per-error overrides give each error category its own curve', async () => {
-  const policy = makeRetryPolicy({
+  const policy = createRetryPolicy({
     maxRetries: 4,
     baseDelay: '10 millis',
     factor: 1,
@@ -102,27 +102,27 @@ test('per-error overrides give each error category its own curve', async () => {
 });
 
 test('retryable errors are retried up to maxRetries', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 3, ...fast });
+  const policy = createRetryPolicy({ maxRetries: 3, ...fast });
   const { attempts, result } = await runWithFailures(policy, 10, timeout);
   expect(attempts).toBe(4);
   expect(result._tag).toBe('Failure');
 });
 
 test('an effect that recovers mid-sequence succeeds', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 3, ...fast });
+  const policy = createRetryPolicy({ maxRetries: 3, ...fast });
   const { attempts, result } = await runWithFailures(policy, 2, transportError);
   expect(attempts).toBe(3);
   expect(result).toMatchObject({ _tag: 'Success', success: 'ok' });
 });
 
 test('non-retryable errors fail on the first attempt', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 5, ...fast });
+  const policy = createRetryPolicy({ maxRetries: 5, ...fast });
   const { attempts } = await runWithFailures(policy, 10, invalidArgument);
   expect(attempts).toBe(1);
 });
 
 test('exception responses are retried only for transient codes', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 3, ...fast });
+  const policy = createRetryPolicy({ maxRetries: 3, ...fast });
 
   // 6 = SERVER_DEVICE_BUSY — the device is asking us to come back later.
   const busy = await runWithFailures(policy, 10, () => exception(6));
@@ -134,7 +134,7 @@ test('exception responses are retried only for transient codes', async () => {
 });
 
 test('retryableExceptions is configurable', async () => {
-  const policy = makeRetryPolicy({ maxRetries: 2, retryableExceptions: [2], ...fast });
+  const policy = createRetryPolicy({ maxRetries: 2, retryableExceptions: [2], ...fast });
   const illegal = await runWithFailures(policy, 10, () => exception(2));
   expect(illegal.attempts).toBe(3);
   const busy = await runWithFailures(policy, 10, () => exception(6));
@@ -142,7 +142,7 @@ test('retryableExceptions is configurable', async () => {
 });
 
 test('an error category can be disabled outright', async () => {
-  const policy = makeRetryPolicy({
+  const policy = createRetryPolicy({
     maxRetries: 3,
     errors: { ModbusTimeoutError: false },
     ...fast,
@@ -164,7 +164,7 @@ test('preset overrides merge without discarding preset error tuning', async () =
 });
 
 test('maxElapsed bounds the retry sequence', async () => {
-  const policy = makeRetryPolicy({
+  const policy = createRetryPolicy({
     maxRetries: 100,
     baseDelay: '50 millis',
     factor: 1,

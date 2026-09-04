@@ -28,7 +28,7 @@ import {
 } from './errors';
 import { planReads, type PlanReadsOptions, type ReadSpan } from './register-plan';
 
-/** Options for {@link makeReadDebouncer}. */
+/** Options for {@link createReadDebouncer}. */
 export interface ReadDebouncerOptions {
   /**
    * How long addresses are collected before the spans are read.
@@ -132,14 +132,14 @@ interface TimerState {
  * @returns The debouncer.
  *
  * @example
- * const debouncer = yield* makeReadDebouncer({
+ * const debouncer = yield* createReadDebouncer({
  *   window: '5 millis',
  *   fetch: (spans) => Effect.forEach(spans, (span) => client.readHoldingRegisters(span)),
  * });
  * // 49 accessors, three transactions:
  * yield* Effect.forEach(addresses, debouncer.read, { concurrency: 'unbounded' });
  */
-export const makeReadDebouncer = (
+export const createReadDebouncer = (
   options: ReadDebouncerOptions,
 ): Effect.Effect<ReadDebouncer, never, Scope.Scope> =>
   Effect.gen(function* () {

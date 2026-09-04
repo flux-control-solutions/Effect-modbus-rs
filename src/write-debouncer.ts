@@ -37,7 +37,7 @@ export interface DebouncedWrite {
   readonly attributes: ModbusSpanAttributes | undefined;
 }
 
-/** Options for {@link makeWriteDebouncer}. */
+/** Options for {@link createWriteDebouncer}. */
 export interface WriteDebouncerOptions {
   /**
    * How long a write is held before it reaches the wire. Each new arrival
@@ -153,7 +153,7 @@ interface TimerState {
  * @returns The debouncer.
  *
  * @example
- * const debouncer = yield* makeWriteDebouncer({
+ * const debouncer = yield* createWriteDebouncer({
  *   window: '250 millis',
  *   maxHold: '1 second',
  *   flush: (batch) => issue(batch),
@@ -164,7 +164,7 @@ interface TimerState {
  *   debouncer.write({ address: 2001, value: 20 }),
  * ], { concurrency: 'unbounded' });
  */
-export const makeWriteDebouncer = (
+export const createWriteDebouncer = (
   options: WriteDebouncerOptions,
 ): Effect.Effect<WriteDebouncer, never, Scope.Scope> =>
   Effect.gen(function* () {

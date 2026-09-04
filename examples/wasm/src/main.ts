@@ -16,24 +16,30 @@ import {
  */
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
 
-/** Returns the required DOM element with its expected concrete type. */
-const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+/** Returns the required DOM element after checking its concrete runtime type. */
+const $ = <T extends HTMLElement>(id: string, constructor: { new (): T }): T => {
+  const element = document.getElementById(id);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected #${id} to be a ${constructor.name}`);
+  }
+  return element;
+};
 
-const modeEl = $<HTMLSelectElement>('mode');
-const wsFieldsEl = $<HTMLDivElement>('ws-fields');
-const serialFieldsEl = $<HTMLDivElement>('serial-fields');
-const serialBaudRowEl = $<HTMLDivElement>('serial-baud-row');
-const wsUrlEl = $<HTMLInputElement>('wsUrl');
-const protocolEl = $<HTMLSelectElement>('protocol');
-const baudRateEl = $<HTMLSelectElement>('baudRate');
-const unitIdEl = $<HTMLInputElement>('unitId');
-const connectBtn = $<HTMLButtonElement>('connect');
-const disconnectBtn = $<HTMLButtonElement>('disconnect');
-const readBtn = $<HTMLButtonElement>('read');
-const addressEl = $<HTMLInputElement>('address');
-const quantityEl = $<HTMLInputElement>('quantity');
-const statusEl = $<HTMLSpanElement>('status');
-const logEl = $<HTMLDivElement>('log');
+const modeEl = $('mode', HTMLSelectElement);
+const wsFieldsEl = $('ws-fields', HTMLDivElement);
+const serialFieldsEl = $('serial-fields', HTMLDivElement);
+const serialBaudRowEl = $('serial-baud-row', HTMLDivElement);
+const wsUrlEl = $('wsUrl', HTMLInputElement);
+const protocolEl = $('protocol', HTMLSelectElement);
+const baudRateEl = $('baudRate', HTMLSelectElement);
+const unitIdEl = $('unitId', HTMLInputElement);
+const connectBtn = $('connect', HTMLButtonElement);
+const disconnectBtn = $('disconnect', HTMLButtonElement);
+const readBtn = $('read', HTMLButtonElement);
+const addressEl = $('address', HTMLInputElement);
+const quantityEl = $('quantity', HTMLInputElement);
+const statusEl = $('status', HTMLSpanElement);
+const logEl = $('log', HTMLDivElement);
 
 /** Prepends a timestamped status message to the on-page connection log. */
 const log = (msg: string) => {

@@ -1,9 +1,8 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from 'modbus-rs';
 
-import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import type { MockFaultOptions } from './mocks';
-import { makeTransportScoped } from './shared-transport';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
   TransportServiceApi,
@@ -31,7 +30,7 @@ export type TcpTransportOpenOptions = WithoutUpstreamRetry<TcpTransportOptions>;
  *
  * @see AsyncTcpTransport — Upstream `modbus-rs` TCP transport.
  * @see TcpTransportOpenOptions — Configuration for the TCP connection.
- * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
+ * @see createTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class TcpTransportService extends Context.Service<
   TcpTransportService,
@@ -41,14 +40,16 @@ export class TcpTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link TcpTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = makeTransportScoped<
+  static readonly makeScoped = createTransportScoped<
     TcpTransportOpenOptions,
     AsyncTcpModbusClient,
     AsyncTcpTransport
   >(
     'AsyncTcpTransport',
-    (TC: unknown, options: TcpTransportOpenOptions) =>
-      (TC as typeof AsyncTcpTransport).connect(options),
+    (transportConstructor, options: TcpTransportOpenOptions) => {
+      // SAFETY: The constructor is read from the AsyncTcpTransport export named above.
+      return (transportConstructor as typeof AsyncTcpTransport).connect(options);
+    },
     'TcpTransportService',
   );
 
@@ -76,11 +77,8 @@ export class TcpTransportService extends Context.Service<
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (options: TcpTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.effect(
-        TcpTransportService,
-        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.effect(TcpTransportService, factory(options));
   };
 }

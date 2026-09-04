@@ -33,5 +33,5 @@ export const requestSerialPort = (): Effect.Effect<WasmSerialPortHandle, ModbusE
       const mod = await import('modbus-rs/web');
       return mod.requestSerialPort();
     },
-    catch: (error) => toModbusError(error as Error),
+    catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
   });

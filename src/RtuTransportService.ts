@@ -1,10 +1,8 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
 
-import { makeMockTransport } from './mocks';
-import type { MockFaultOptions } from './mocks';
-import type { SlaveDeviceDefinitions } from './mocks';
-import { makeTransportScoped } from './shared-transport';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
   WithoutUpstreamRetry,
@@ -32,7 +30,7 @@ export type RtuTransportOpenOptions = WithoutUpstreamRetry<RtuTransportOptions>;
  *
  * @see AsyncRtuTransport — Upstream `modbus-rs` RTU transport.
  * @see RtuTransportOpenOptions — Configuration for the RTU serial port.
- * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
+ * @see createTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class RtuTransportService extends Context.Service<
   RtuTransportService,
@@ -42,14 +40,16 @@ export class RtuTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link RtuTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = makeTransportScoped<
+  static readonly makeScoped = createTransportScoped<
     RtuTransportOpenOptions,
     AsyncSerialModbusClient,
     AsyncRtuTransport
   >(
     'AsyncRtuTransport',
-    (TC: unknown, options: RtuTransportOpenOptions) =>
-      (TC as typeof AsyncRtuTransport).open(options),
+    (transportConstructor, options: RtuTransportOpenOptions) => {
+      // SAFETY: The constructor is read from the AsyncRtuTransport export named above.
+      return (transportConstructor as typeof AsyncRtuTransport).open(options);
+    },
     'RtuTransportService',
   );
 
@@ -76,11 +76,8 @@ export class RtuTransportService extends Context.Service<
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (options: RtuTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.effect(
-        RtuTransportService,
-        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.effect(RtuTransportService, factory(options));
   };
 }

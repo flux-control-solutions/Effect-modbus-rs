@@ -36,7 +36,7 @@ export type AnyModbusClient = NativeModbusClient | WasmModbusClient;
 const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
   Effect.tryPromise({
     try: try_,
-    catch: (error) => toModbusError(error as Error),
+    catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
   });
 
 /**
@@ -237,7 +237,7 @@ export interface ModbusOperations {
  * @see AsyncSerialModbusClient — Upstream native serial client API.
  * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const makeEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
+export const createEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),

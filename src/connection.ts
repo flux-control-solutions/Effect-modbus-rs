@@ -1,7 +1,12 @@
 import { Data, Duration, Effect, Result, type Scope, SubscriptionRef } from 'effect';
 
 import { ModbusCircuitOpenError, type ModbusError } from './errors';
-import { makeRetryPolicy, retryModbus, type ModbusErrorTag, type ModbusRetryPolicy } from './retry';
+import {
+  createRetryPolicy,
+  retryModbus,
+  type ModbusErrorTag,
+  type ModbusRetryPolicy,
+} from './retry';
 
 /**
  * Live connection state of a transport.
@@ -64,7 +69,7 @@ export interface ResolvedReconnect {
 }
 
 /** Default spacing for reconnect attempts — slower and longer than an operation retry. */
-const defaultReconnectPolicy = makeRetryPolicy({
+const defaultReconnectPolicy = createRetryPolicy({
   maxRetries: 5,
   baseDelay: '250 millis',
   factor: 2,

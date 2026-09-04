@@ -7,6 +7,7 @@
       "dependencies": {
         "@flux-control/effect-modbus-rs": "file:../..",
         "effect": "^4.0.0-rc.109",
+        "modbus-rs": "0.16.1",
       },
       "devDependencies": {
         "typescript": "^5.4.5",

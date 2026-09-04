@@ -1,7 +1,9 @@
 import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
+import type { AsyncAsciiTransport, AsyncRtuTransport, AsyncTcpTransport } from 'modbus-rs';
+import type { WasmAsciiTransport, WasmRtuTransport, WasmWsTransport } from 'modbus-rs/web';
 
 import {
-  makeBatchingRegistry,
+  createBatchingRegistry,
   type BatchingClientOptions,
   type BatchingModbusClient,
 } from './batching-client';
@@ -14,7 +16,7 @@ import {
 } from './connection';
 import { ModbusNotConnectedError, toModbusError, type ModbusError } from './errors';
 import {
-  makeEffectModbusClient,
+  createEffectModbusClient,
   withResilience,
   type AnyModbusClient,
   type EffectModbusClient,
@@ -148,7 +150,7 @@ const singleFlight = <A>(
  * Provides lazy connection, per-unit-ID client caching, timeout management,
  * reconnection, and graceful shutdown — all within the Effect scope.
  *
- * @see makeTransportScoped — Factory that produces this API from a raw transport.
+ * @see createTransportScoped — Factory that produces this API from a raw transport.
  */
 export interface TransportServiceApi {
   /**
@@ -253,6 +255,54 @@ interface TransportHandle<TClient> {
   pendingRequests: boolean;
 }
 
+type TransportConstructor =
+  | typeof AsyncAsciiTransport
+  | typeof AsyncRtuTransport
+  | typeof AsyncTcpTransport
+  | typeof WasmAsciiTransport
+  | typeof WasmRtuTransport
+  | typeof WasmWsTransport;
+
+type TransportConstructorName =
+  | 'AsyncAsciiTransport'
+  | 'AsyncRtuTransport'
+  | 'AsyncTcpTransport'
+  | 'WasmAsciiTransport'
+  | 'WasmRtuTransport'
+  | 'WasmWsTransport';
+
+const loadTransportConstructor = async (
+  transportKey: TransportConstructorName,
+  moduleSpecifier: 'modbus-rs' | 'modbus-rs/web',
+): Promise<TransportConstructor> => {
+  // Keep both imports literal so bundlers apply the package's conditional exports.
+  if (moduleSpecifier === 'modbus-rs/web') {
+    const mod = await import('modbus-rs/web');
+    switch (transportKey) {
+      case 'WasmAsciiTransport':
+        return mod.WasmAsciiTransport;
+      case 'WasmRtuTransport':
+        return mod.WasmRtuTransport;
+      case 'WasmWsTransport':
+        return mod.WasmWsTransport;
+      default:
+        throw new Error(`${transportKey} is not exported by modbus-rs/web`);
+    }
+  }
+
+  const mod = await import('modbus-rs');
+  switch (transportKey) {
+    case 'AsyncAsciiTransport':
+      return mod.AsyncAsciiTransport;
+    case 'AsyncRtuTransport':
+      return mod.AsyncRtuTransport;
+    case 'AsyncTcpTransport':
+      return mod.AsyncTcpTransport;
+    default:
+      throw new Error(`${transportKey} is not exported by modbus-rs`);
+  }
+};
+
 /**
  * Generic factory for the scoped constructor body of an `Effect.Service`.
  *
@@ -274,13 +324,13 @@ interface TransportHandle<TClient> {
  * @param config - Optional module specifier override for browser WASM transports.
  * @returns An `Effect` that produces a {@link TransportServiceApi}.
  */
-export function makeTransportScoped<
+export function createTransportScoped<
   TOptions,
   TClient extends AnyModbusClient,
   TTransport extends TransportHandle<TClient>,
 >(
-  transportKey: string,
-  openMethod: (TC: unknown, options: TOptions) => Promise<TTransport>,
+  transportKey: TransportConstructorName,
+  openMethod: (TC: TransportConstructor, options: TOptions) => Promise<TTransport>,
   serviceName: string,
   config?: {
     /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
@@ -289,15 +339,13 @@ export function makeTransportScoped<
 ) {
   return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
     // Resilience is this package's concern; only the rest reaches modbus-rs.
-    const { retry: transportRetry, reconnect: reconnectOptions, ...rest } = options;
-    const openOptions = rest as unknown as TOptions;
-    // Branched as a literal specifier (not a variable) so bundlers reliably apply
-    // modbus-rs's conditional exports when resolving the dynamic import.
-    const mod: Record<string, unknown> =
-      config?.moduleSpecifier === 'modbus-rs/web'
-        ? yield* Effect.promise(() => import('modbus-rs/web'))
-        : yield* Effect.promise(() => import('modbus-rs'));
-    const TC = mod[transportKey];
+    const { retry: transportRetry, reconnect: reconnectOptions } = options;
+    const openOptions = { ...options };
+    Reflect.deleteProperty(openOptions, 'retry');
+    Reflect.deleteProperty(openOptions, 'reconnect');
+    const TC = yield* Effect.promise(() =>
+      loadTransportConstructor(transportKey, config?.moduleSpecifier ?? 'modbus-rs'),
+    );
 
     let transport: TTransport | null = null;
 
@@ -335,7 +383,7 @@ export function makeTransportScoped<
     // caller is interrupted before the connection completes.
     const openTransport = Effect.tryPromise({
       try: () => openMethod(TC, openOptions),
-      catch: (error) => toModbusError(error as Error),
+      catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
     }).pipe(
       Effect.tap((t) =>
         closed
@@ -367,7 +415,8 @@ export function makeTransportScoped<
         Effect.andThen(
           Effect.tryPromise({
             try: () => t.close(),
-            catch: (error) => toModbusError(error as Error),
+            catch: (cause) =>
+              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
           }),
           SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
         ),
@@ -386,7 +435,8 @@ export function makeTransportScoped<
         reconnecting,
         Effect.tryPromise({
           try: () => t.reconnect(),
-          catch: (error) => toModbusError(error as Error),
+          catch: (cause) =>
+            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
         }).pipe(Effect.tap(() => (closed ? closeOrphan(t) : Effect.void))),
       );
     });
@@ -435,11 +485,12 @@ export function makeTransportScoped<
       if (!client) {
         client = yield* Effect.try({
           try: () => t.createClient({ unitId }),
-          catch: (error) => toModbusError(error as Error),
+          catch: (cause) =>
+            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
         });
         clientSet.set(unitId, client);
       }
-      return makeEffectModbusClient(client);
+      return createEffectModbusClient(client);
     });
 
     const makeClient = Effect.fnUntraced(function* (
@@ -453,7 +504,7 @@ export function makeTransportScoped<
       });
     });
 
-    const batching = makeBatchingRegistry({
+    const batching = createBatchingRegistry({
       withClient: makeClient,
       connectionState,
       scope: serviceScope,
@@ -508,7 +559,8 @@ export function makeTransportScoped<
           reconnecting,
           Effect.tryPromise({
             try: () => t.reconnect(),
-            catch: (error) => toModbusError(error as Error),
+            catch: (cause) =>
+              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
           }).pipe(
             // A reconnect that lands after the scope finalizer has closed the
             // transport has reopened a handle nobody owns.
@@ -524,9 +576,7 @@ export function makeTransportScoped<
       close: Effect.fnUntraced(function* () {
         if (closed) return;
         const scope = yield* Effect.scope;
-        yield* Scope.close(scope as Scope.Closeable, Exit.void).pipe(
-          Effect.onExit(() => closeTransport),
-        );
+        yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
       }),
 
       withBatchingClient: batching.withBatchingClient,

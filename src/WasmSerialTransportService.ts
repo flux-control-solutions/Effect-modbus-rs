@@ -1,6 +1,6 @@
 import { Context, Layer } from 'effect';
 
-import { makeMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
 import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 import {
   WasmAsciiTransportService,
@@ -78,7 +78,7 @@ export class WasmSerialTransportService extends Context.Service<
    * @see makeMockTransport — The mock factory that this method uses.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (
       options: (WasmAsciiTransportOpenOptions | WasmRtuTransportOpenOptions) &
         TransportResilienceOptions &

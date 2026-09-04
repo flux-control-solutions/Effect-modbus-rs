@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 
 import { ModbusTimeoutError, type ModbusError } from './errors';
-import { makeWriteDebouncer, type DebouncedWrite, type WriteDebouncer } from './write-debouncer';
+import { createWriteDebouncer, type DebouncedWrite, type WriteDebouncer } from './write-debouncer';
 
 /** Records every batch handed to the flush, and what each one wrote. */
 const makeRecorder = (fail?: () => boolean) => {
@@ -26,11 +26,11 @@ const makeRecorder = (fail?: () => boolean) => {
 
 /** Runs `use` against a debouncer in a scope that closes when it returns. */
 const withDebouncer = <A, E>(
-  options: Omit<Parameters<typeof makeWriteDebouncer>[0], 'flush'> & {
+  options: Omit<Parameters<typeof createWriteDebouncer>[0], 'flush'> & {
     flush: (batch: ReadonlyArray<DebouncedWrite>) => Effect.Effect<void, ModbusError>;
   },
   use: (debouncer: WriteDebouncer) => Effect.Effect<A, E>,
-) => Effect.runPromise(Effect.scoped(Effect.flatMap(makeWriteDebouncer(options), use)));
+) => Effect.runPromise(Effect.scoped(Effect.flatMap(createWriteDebouncer(options), use)));
 
 test('two callers that never meet reach the bus in one batch', async () => {
   const recorder = makeRecorder();
@@ -129,7 +129,7 @@ test('zero-window writes cannot apply an older value after a newer one', async (
             for (const write of batch) applied.push(write.value);
           });
 
-        const debouncer = yield* makeWriteDebouncer({ window: 0, flush });
+        const debouncer = yield* createWriteDebouncer({ window: 0, flush });
         const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
         yield* Deferred.await(firstStarted);
 
@@ -149,7 +149,7 @@ test('a failed flush fails the callers whose values it carried', async () => {
 
   const exit = await Effect.runPromiseExit(
     Effect.scoped(
-      Effect.flatMap(makeWriteDebouncer({ window: '20 millis', flush: recorder.flush }), (d) =>
+      Effect.flatMap(createWriteDebouncer({ window: '20 millis', flush: recorder.flush }), (d) =>
         Effect.all(
           [d.write({ address: 2000, value: 100 }), d.write({ address: 2001, value: 200 })],
           { concurrency: 'unbounded' },
@@ -216,7 +216,7 @@ test('overlapping flushes cannot apply an older value after a newer one', async 
             for (const write of batch) applied.push(write.value);
           });
 
-        const debouncer = yield* makeWriteDebouncer({ window: '10 millis', flush });
+        const debouncer = yield* createWriteDebouncer({ window: '10 millis', flush });
         const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
         yield* Deferred.await(firstStarted);
 
@@ -253,7 +253,7 @@ test('a new write does not interrupt a flush already in progress', async () => {
             for (const write of batch) applied.push(write.value);
           });
 
-        const debouncer = yield* makeWriteDebouncer({ window: '10 millis', flush });
+        const debouncer = yield* createWriteDebouncer({ window: '10 millis', flush });
         const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
         yield* Deferred.await(firstStarted);
 
@@ -287,7 +287,7 @@ test('an expired stale timer cannot flush a replacement batch early', async () =
             for (const write of batch) applied.push(write.value);
           });
 
-        const debouncer = yield* makeWriteDebouncer({
+        const debouncer = yield* createWriteDebouncer({
           window: '30 millis',
           maxHold: '500 millis',
           flush,
@@ -322,7 +322,7 @@ test('interrupting a public flush does not cancel its write or strand its waiter
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const values: number[] = [];
-        const debouncer = yield* makeWriteDebouncer({
+        const debouncer = yield* createWriteDebouncer({
           window: '10 seconds',
           flush: (batch) =>
             Effect.gen(function* () {
@@ -353,7 +353,7 @@ test('writeNow fails promptly after its scope closes', async () => {
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const debouncer = yield* Effect.provideService(
-        makeWriteDebouncer({ window: '10 seconds', flush: recorder.flush }),
+        createWriteDebouncer({ window: '10 seconds', flush: recorder.flush }),
         Scope.Scope,
         scope,
       );
@@ -379,7 +379,7 @@ test('closing the scope interrupts a caller still waiting', async () => {
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const debouncer = yield* Effect.provideService(
-        makeWriteDebouncer({ window: '10 seconds', flush: recorder.flush }),
+        createWriteDebouncer({ window: '10 seconds', flush: recorder.flush }),
         Scope.Scope,
         scope,
       );
@@ -412,7 +412,7 @@ test('closing the scope interrupts an active flush', async () => {
       const scope = yield* Scope.make();
       const started = yield* Deferred.make<void>();
       const debouncer = yield* Effect.provideService(
-        makeWriteDebouncer({
+        createWriteDebouncer({
           window: '10 millis',
           flush: () =>
             Effect.gen(function* () {

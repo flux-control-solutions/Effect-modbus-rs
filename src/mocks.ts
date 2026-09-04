@@ -19,7 +19,7 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
-import { makeBatchingRegistry, type BatchingClientOptions } from './batching-client';
+import { createBatchingRegistry, type BatchingClientOptions } from './batching-client';
 import { claimReconnect, ConnectionState, guardCircuit, resolveReconnect } from './connection';
 import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
@@ -358,7 +358,7 @@ const makeMockModbusClient = (state: MockDeviceState, unitId: number): ModbusOpe
  * @returns A transport factory function that returns a scoped Effect
  *          providing the mock transport.
  */
-export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
+export const createMockTransport = (devices: SlaveDeviceDefinitions) => {
   const deviceDefs = Schema.decodeUnknownSync(SlaveDeviceDefinitions)(devices);
 
   const deviceStates = new Map<number, MockDeviceState>();
@@ -499,7 +499,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
 
       // The mock carries the same batching surface as a live transport, so a
       // test that exercises batching runs against the same code a device does.
-      const batching = makeBatchingRegistry({
+      const batching = createBatchingRegistry({
         withClient: makeClient,
         connectionState,
         scope: serviceScope,
@@ -545,9 +545,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
           Effect.gen(function* () {
             if (closed) return;
             const scope = yield* Effect.scope;
-            yield* Scope.close(scope as Scope.Closeable, Exit.void).pipe(
-              Effect.onExit(() => closeTransport),
-            );
+            yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
           }),
         hasPendingRequests: () => false,
       };

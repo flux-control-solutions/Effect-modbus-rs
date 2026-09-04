@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 
 import { ModbusTimeoutError, type ModbusError } from './errors';
-import { makeReadDebouncer, type ReadDebouncer } from './read-debouncer';
+import { createReadDebouncer, type ReadDebouncer } from './read-debouncer';
 import type { ReadSpan } from './register-plan';
 
 /**
@@ -37,9 +37,9 @@ const makeDevice = (config?: { fail?: () => boolean; short?: boolean }) => {
 
 /** Runs `use` against a read debouncer in a scope that closes when it returns. */
 const withDebouncer = <A, E>(
-  options: Parameters<typeof makeReadDebouncer>[0],
+  options: Parameters<typeof createReadDebouncer>[0],
   use: (debouncer: ReadDebouncer) => Effect.Effect<A, E>,
-) => Effect.runPromise(Effect.scoped(Effect.flatMap(makeReadDebouncer(options), use)));
+) => Effect.runPromise(Effect.scoped(Effect.flatMap(createReadDebouncer(options), use)));
 
 test('readers that arrive separately are answered by the planned spans', async () => {
   const device = makeDevice();
@@ -130,7 +130,7 @@ test('a read arriving during an active fetch starts the next window', async () =
             );
           });
 
-        const debouncer = yield* makeReadDebouncer({ window: '10 millis', fetch });
+        const debouncer = yield* createReadDebouncer({ window: '10 millis', fetch });
         const first = yield* Effect.forkChild(debouncer.read(1));
         yield* Deferred.await(firstStarted);
 
@@ -163,7 +163,7 @@ test('interrupting a public flush does not cancel its read or strand its reader'
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const debouncer = yield* makeReadDebouncer({
+        const debouncer = yield* createReadDebouncer({
           window: '10 seconds',
           fetch: (spans) =>
             Effect.gen(function* () {
@@ -193,7 +193,7 @@ test('readNow fails promptly after its scope closes', async () => {
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const debouncer = yield* Effect.provideService(
-        makeReadDebouncer({ window: '10 seconds', fetch: device.fetch }),
+        createReadDebouncer({ window: '10 seconds', fetch: device.fetch }),
         Scope.Scope,
         scope,
       );
@@ -218,7 +218,7 @@ test('closing the scope interrupts an active fetch', async () => {
       const scope = yield* Scope.make();
       const started = yield* Deferred.make<void>();
       const debouncer = yield* Effect.provideService(
-        makeReadDebouncer({
+        createReadDebouncer({
           window: '10 millis',
           fetch: () =>
             Effect.gen(function* () {
@@ -262,7 +262,7 @@ test('a failed read fails every reader in the batch', async () => {
 
   const exit = await Effect.runPromiseExit(
     Effect.scoped(
-      Effect.flatMap(makeReadDebouncer({ window: '20 millis', fetch: device.fetch }), (d) =>
+      Effect.flatMap(createReadDebouncer({ window: '20 millis', fetch: device.fetch }), (d) =>
         Effect.all([d.read(1), d.read(2)], { concurrency: 'unbounded' }),
       ),
     ),
@@ -276,7 +276,7 @@ test('a response that is short of the span it promised fails as a transport erro
 
   const exit = await Effect.runPromiseExit(
     Effect.scoped(
-      Effect.flatMap(makeReadDebouncer({ window: 0, fetch: device.fetch }), (d) => d.read(1)),
+      Effect.flatMap(createReadDebouncer({ window: 0, fetch: device.fetch }), (d) => d.read(1)),
     ),
   );
 

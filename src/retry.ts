@@ -38,7 +38,7 @@ export interface RetryDelayOptions {
 export type RetryErrorOptions = boolean | RetryDelayOptions;
 
 /**
- * Options accepted by {@link makeRetryPolicy} and by every preset in
+ * Options accepted by {@link createRetryPolicy} and by every preset in
  * {@link RetryPolicies}.
  *
  * Nothing here is applied automatically — a policy only takes effect once it is
@@ -96,7 +96,7 @@ export interface ModbusRetryPolicyOptions {
 /**
  * A resolved retry policy: a schedule plus the predicates that produced it.
  *
- * Produced by {@link makeRetryPolicy} or a {@link RetryPolicies} preset, and
+ * Produced by {@link createRetryPolicy} or a {@link RetryPolicies} preset, and
  * attached to a transport or client (or piped with {@link retryModbus}). The
  * `schedule` is a plain Effect `Schedule`, so it can also be handed straight
  * to `Effect.retry`, `Effect.repeat`, or `Stream.retry`.
@@ -140,7 +140,16 @@ const defaultRetryableTags: Record<ModbusErrorTag, boolean> = {
   ModbusInternalError: false,
 };
 
-const allTags = Object.keys(defaultRetryableTags) as ReadonlyArray<ModbusErrorTag>;
+const allTags: ReadonlyArray<ModbusErrorTag> = [
+  'ModbusTimeoutError',
+  'ModbusTransportError',
+  'ModbusConnectionClosedError',
+  'ModbusExceptionError',
+  'ModbusInvalidArgumentError',
+  'ModbusNotConnectedError',
+  'ModbusCircuitOpenError',
+  'ModbusInternalError',
+];
 
 interface ResolvedDelay {
   readonly baseMs: number;
@@ -155,7 +164,7 @@ const toMillis = (input: Duration.Input): number =>
 const resolveRetryableTags = (
   options: ModbusRetryPolicyOptions,
 ): Record<ModbusErrorTag, boolean> => {
-  const retryable = {} as Record<ModbusErrorTag, boolean>;
+  const retryable = { ...defaultRetryableTags };
   for (const tag of allTags) {
     const entry = options.errors?.[tag];
     retryable[tag] = entry === undefined ? defaultRetryableTags[tag] : entry !== false;
@@ -178,10 +187,20 @@ const resolveDelays = (
   options: ModbusRetryPolicyOptions,
 ): Record<ModbusErrorTag, ResolvedDelay> => {
   const policyCurve = resolveCurve(options, defaultCurve);
-  const delays = {} as Record<ModbusErrorTag, ResolvedDelay>;
+  const delays: Record<ModbusErrorTag, ResolvedDelay> = {
+    ModbusTimeoutError: policyCurve,
+    ModbusTransportError: policyCurve,
+    ModbusConnectionClosedError: policyCurve,
+    ModbusExceptionError: policyCurve,
+    ModbusInvalidArgumentError: policyCurve,
+    ModbusNotConnectedError: policyCurve,
+    ModbusCircuitOpenError: policyCurve,
+    ModbusInternalError: policyCurve,
+  };
   for (const tag of allTags) {
     const entry = options.errors?.[tag];
-    delays[tag] = resolveCurve(typeof entry === 'object' ? entry : {}, policyCurve);
+    const overrides = entry === undefined || entry === true || entry === false ? {} : entry;
+    delays[tag] = resolveCurve(overrides, policyCurve);
   }
   return delays;
 };
@@ -199,13 +218,9 @@ const mergeOptions = (
 ): ModbusRetryPolicyOptions =>
   overrides === undefined
     ? base
-    : {
-        ...base,
-        ...overrides,
-        ...(base.errors || overrides.errors
-          ? { errors: { ...base.errors, ...overrides.errors } }
-          : {}),
-      };
+    : base.errors || overrides.errors
+      ? { ...base, ...overrides, errors: { ...base.errors, ...overrides.errors } }
+      : { ...base, ...overrides };
 
 /**
  * Builds a {@link ModbusRetryPolicy} from {@link ModbusRetryPolicyOptions}.
@@ -222,7 +237,7 @@ const mergeOptions = (
  *
  * @example
  * ```ts
- * const policy = makeRetryPolicy({
+ * const policy = createRetryPolicy({
  *   maxRetries: 5,
  *   baseDelay: "50 millis",
  *   errors: { ModbusExceptionError: false },
@@ -231,7 +246,7 @@ const mergeOptions = (
  *
  * @see RetryPolicies — Ready-made templates built on top of this factory.
  */
-export const makeRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusRetryPolicy => {
+export const createRetryPolicy = (options: ModbusRetryPolicyOptions = {}): ModbusRetryPolicy => {
   const retryable = resolveRetryableTags(options);
   const delays = resolveDelays(options);
   const exceptions = options.retryableExceptions ?? retryableExceptionCodes;
@@ -310,7 +325,7 @@ export const RetryPolicies = {
    * application-wide policy.
    */
   none: (overrides?: ModbusRetryPolicyOptions): ModbusRetryPolicy =>
-    makeRetryPolicy(mergeOptions({ maxRetries: 0 }, overrides)),
+    createRetryPolicy(mergeOptions({ maxRetries: 0 }, overrides)),
 
   /**
    * Serial (RTU/ASCII) buses: short delays, tight ceiling.
@@ -321,7 +336,7 @@ export const RetryPolicies = {
    * genuinely closed port — reopening a USB serial adapter is expensive.
    */
   serial: (overrides?: ModbusRetryPolicyOptions): ModbusRetryPolicy =>
-    makeRetryPolicy(
+    createRetryPolicy(
       mergeOptions(
         {
           maxRetries: 3,
@@ -341,7 +356,7 @@ export const RetryPolicies = {
    * a corrupted frame, so it reconnects alongside an explicit connection close.
    */
   tcp: (overrides?: ModbusRetryPolicyOptions): ModbusRetryPolicy =>
-    makeRetryPolicy(
+    createRetryPolicy(
       mergeOptions(
         {
           maxRetries: 4,
@@ -364,7 +379,7 @@ export const RetryPolicies = {
    * retrying forever.
    */
   persistent: (overrides?: ModbusRetryPolicyOptions): ModbusRetryPolicy =>
-    makeRetryPolicy(
+    createRetryPolicy(
       mergeOptions(
         {
           maxRetries: 10,

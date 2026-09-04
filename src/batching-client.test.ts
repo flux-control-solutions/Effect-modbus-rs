@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test';
 
 import { Deferred, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef, Tracer } from 'effect';
 
-import { makeBatchingClient, makeBatchingRegistry } from './batching-client';
+import { createBatchingRegistry, makeBatchingClient } from './batching-client';
 import { ConnectionState } from './connection';
 import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
 import type { SlaveDeviceDefinitions } from './mocks';
-import { makeRegisterCache } from './register-cache';
+import { createRegisterCache } from './register-cache';
 import { RetryPolicies } from './retry';
 import { RtuTransportService } from './RtuTransportService';
 
@@ -189,7 +189,7 @@ test('batching waits for an accepted raw register write to finish', async () => 
               return yield* raw.writeSingleRegister(options);
             }),
         };
-        const registry = makeBatchingRegistry({
+        const registry = createBatchingRegistry({
           withClient: () => Effect.succeed(raw),
           connectionState: transport.connectionState,
           scope,
@@ -230,7 +230,7 @@ test('a lookup waits for a declaration already under way', async () => {
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let builds = 0;
-        const registry = makeBatchingRegistry({
+        const registry = createBatchingRegistry({
           withClient: () =>
             Effect.gen(function* () {
               builds += 1;
@@ -267,7 +267,7 @@ test('client construction fails promptly after the registry scope closes', async
       const raw = yield* transport.withClient(3);
       const scope = yield* Scope.make();
       let builds = 0;
-      const registry = makeBatchingRegistry({
+      const registry = createBatchingRegistry({
         withClient: () =>
           Effect.sync(() => {
             builds += 1;
@@ -298,7 +298,7 @@ test('closing the registry scope settles every in-flight construction caller', a
       const raw = yield* transport.withClient(3);
       const scope = yield* Scope.make();
       const started = yield* Deferred.make<void>();
-      const registry = makeBatchingRegistry({
+      const registry = createBatchingRegistry({
         withClient: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(started, undefined);
@@ -410,7 +410,7 @@ test('cache false writes every value', async () => {
 });
 
 test('an injected cache is used instead of the transport cache', async () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(3, 0, 42);
 
   const capture = makeSpanCapture();
@@ -799,7 +799,7 @@ test('a shutdown action runs before the client it was registered on is torn down
       const transport = yield* RtuTransportService;
       const raw = yield* transport.withClient(3);
       const scope = yield* Scope.make();
-      const registry = makeBatchingRegistry({
+      const registry = createBatchingRegistry({
         withClient: () => Effect.succeed(raw),
         connectionState: transport.connectionState,
         scope,
@@ -922,7 +922,7 @@ test('a read-side link failure invalidates the cache in manual reconnect mode', 
 });
 
 test('a link lost during a write is not re-believed by the observe that follows', async () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   const result = await run(
     Effect.scoped(

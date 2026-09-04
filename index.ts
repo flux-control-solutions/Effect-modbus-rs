@@ -49,12 +49,12 @@
  * ```
  *
  * A planner only packs what a caller holds at one moment, and a caller with one
- * fiber per register never holds two values at once. {@link makeWriteDebouncer}
- * and {@link makeReadDebouncer} are the collection point that gives a planner
+ * fiber per register never holds two values at once. {@link createWriteDebouncer}
+ * and {@link createReadDebouncer} are the collection point that gives a planner
  * something to pack, holding an operation for a window so the ones that arrive
  * near it travel with it. Each caller still awaits its own operation.
  *
- * {@link makeRegisterCache} drops a write whose value the device already holds.
+ * {@link createRegisterCache} drops a write whose value the device already holds.
  * It records only what this process wrote, so it never answers a read.
  *
  * `transport.withBatchingClient(unitId, options)` puts the three together. It is
@@ -145,7 +145,12 @@
 
 export * from './src/errors';
 export type { EffectModbusClient } from './src/modbus-client';
-export { makeRetryPolicy, retryableExceptionCodes, RetryPolicies, retryModbus } from './src/retry';
+export {
+  createRetryPolicy,
+  retryableExceptionCodes,
+  RetryPolicies,
+  retryModbus,
+} from './src/retry';
 export type {
   ModbusErrorTag,
   ModbusRetryPolicy,
@@ -179,13 +184,13 @@ export type {
   SingleWriteStep,
   WritePlanStep,
 } from './src/register-plan';
-export { makeRegisterCache } from './src/register-cache';
+export { createRegisterCache } from './src/register-cache';
 export type { RegisterCache, RegisterCacheFilter } from './src/register-cache';
-export { makeWriteDebouncer } from './src/write-debouncer';
+export { createWriteDebouncer } from './src/write-debouncer';
 export type { DebouncedWrite, WriteDebouncer, WriteDebouncerOptions } from './src/write-debouncer';
-export { makeReadDebouncer } from './src/read-debouncer';
+export { createReadDebouncer } from './src/read-debouncer';
 export type { ReadDebouncer, ReadDebouncerOptions } from './src/read-debouncer';
-export { makeBatchingClient, makeBatchingRegistry } from './src/batching-client';
+export { makeBatchingClient, createBatchingRegistry } from './src/batching-client';
 export type {
   BatchingClientOptions,
   BatchingDebounceOptions,

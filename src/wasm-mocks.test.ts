@@ -12,7 +12,7 @@ import { WasmWsTransportService } from './WasmWsTransportService';
 /**
  * `makeMockTransport` is fully transport-agnostic (see mocks.test.ts for the exhaustive
  * native-side coverage) — these tests just confirm the new WASM `Effect.Service`/`Context.Tag`
- * wiring (and `makeTransportScoped`'s new `config` threading) works end to end, without
+ * wiring (and `createTransportScoped`'s new `config` threading) works end to end, without
  * needing a real (currently broken upstream) `modbus-rs-wasm` build.
  */
 
@@ -27,9 +27,9 @@ const device = {
   inputRegisters: [],
 };
 
-// A `WasmSerialPortHandle` is never actually touched by the mock transport — it ignores
-// its options entirely — so a fake stand-in is fine here.
-const fakePort = { isValid: () => true } as unknown as WasmSerialPortHandle;
+const fakePortFixture = { isValid: () => true } satisfies Pick<WasmSerialPortHandle, 'isValid'>;
+// SAFETY: The mock transport never reads the port; it only carries this typed fixture through options.
+const fakePort = fakePortFixture as WasmSerialPortHandle;
 
 test('WasmWsTransportService mock: read/write coils and registers', async () => {
   const result = await Effect.gen(function* () {

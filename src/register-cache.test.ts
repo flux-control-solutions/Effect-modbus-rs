@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 
-import { makeRegisterCache } from './register-cache';
+import { createRegisterCache } from './register-cache';
 
 test('the cache suppresses nothing until it has seen a write land', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   const { pending, suppressed } = cache.filter(1, [{ address: 2000, value: 10 }]);
 
@@ -12,7 +12,7 @@ test('the cache suppresses nothing until it has seen a write land', () => {
 });
 
 test('the cache suppresses a write that changes nothing', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(1, 2000, 10);
 
   const { pending, suppressed } = cache.filter(1, [
@@ -25,7 +25,7 @@ test('the cache suppresses a write that changes nothing', () => {
 });
 
 test('the cache compares in the encoding that reaches the wire', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(1, 2000, -1);
 
   // `-1` and `65535` are the same register contents. A comparison that says
@@ -35,7 +35,7 @@ test('the cache compares in the encoding that reaches the wire', () => {
 });
 
 test('the cache keeps the last write to a repeated address and counts the rest', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   const { pending, suppressed } = cache.filter(1, [
     { address: 2000, value: 10 },
@@ -48,7 +48,7 @@ test('the cache keeps the last write to a repeated address and counts the rest',
 });
 
 test('filter rejects every invalid address and value', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   for (const address of [-1, 1.5, 0x10000]) {
     expect(() => cache.filter(1, [{ address, value: 0 }])).toThrow(RangeError);
@@ -59,7 +59,7 @@ test('filter rejects every invalid address and value', () => {
 });
 
 test('filter rejects an invalid write even when a later write supersedes it', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   expect(() =>
     cache.filter(1, [
@@ -70,7 +70,7 @@ test('filter rejects an invalid write even when a later write supersedes it', ()
 });
 
 test('observe validates before mutating the cache', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   expect(() => cache.observe(1, -1, 10)).toThrow(RangeError);
   expect(() => cache.observe(1, 0, 0x10000)).toThrow(RangeError);
@@ -78,7 +78,7 @@ test('observe validates before mutating the cache', () => {
 });
 
 test('the cache keeps units apart', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(1, 2000, 10);
 
   expect(cache.filter(1, [{ address: 2000, value: 10 }]).pending).toEqual([]);
@@ -88,7 +88,7 @@ test('the cache keeps units apart', () => {
 });
 
 test('invalidate forgets one unit, or every unit', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(1, 2000, 10);
   cache.observe(2, 2000, 10);
 
@@ -102,7 +102,7 @@ test('invalidate forgets one unit, or every unit', () => {
 });
 
 test('invalidate matches a unit by its whole id, not by a prefix of it', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
   cache.observe(1, 2000, 10);
   cache.observe(11, 2000, 10);
 
@@ -113,7 +113,7 @@ test('invalidate matches a unit by its whole id, not by a prefix of it', () => {
 });
 
 test('an observation from before an invalidation does not restore the belief', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   // What a caller does around a write: read the generation, issue, then record.
   const generation = cache.generationOf(1);
@@ -129,7 +129,7 @@ test('an observation from before an invalidation does not restore the belief', (
 });
 
 test('invalidating one unit does not discard an observation in flight for another', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   const generation = cache.generationOf(2);
   // A different device on the same bus fails its write.
@@ -140,7 +140,7 @@ test('invalidating one unit does not discard an observation in flight for anothe
 });
 
 test('losing the bus discards an observation in flight for every unit', () => {
-  const cache = makeRegisterCache();
+  const cache = createRegisterCache();
 
   const generation = cache.generationOf(2);
   cache.invalidate();

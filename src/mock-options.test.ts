@@ -5,7 +5,7 @@ import type { WasmSerialPortHandle } from 'modbus-rs/web';
 
 import { AsciiTransportService } from './AsciiTransportService';
 import { ModbusTimeoutError } from './errors';
-import { makeRetryPolicy } from './retry';
+import { createRetryPolicy } from './retry';
 import { RtuTransportService } from './RtuTransportService';
 import { SerialTransportService } from './SerialTransportService';
 import { TcpTransportService } from './TcpTransportService';
@@ -29,7 +29,7 @@ import { WasmWsTransportService } from './WasmWsTransportService';
 /** The options parameter of the function that a `makeMockTransport` static gives. */
 type MockOptionsOf<TStatic> = TStatic extends (
   devices: never,
-) => (options: infer TOptions) => unknown
+) => (options: infer TOptions) => object
   ? TOptions
   : never;
 
@@ -98,10 +98,11 @@ const devices = [
   },
 ];
 
-const fast = makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
+const fast = createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
 
-/** The mock transport ignores its options, so a fake port handle is sufficient. */
-const fakePort = { isValid: () => true } as unknown as WasmSerialPortHandle;
+const fakePortFixture = { isValid: () => true } satisfies Pick<WasmSerialPortHandle, 'isValid'>;
+// SAFETY: The mock transport never reads the port; it only carries this typed fixture through options.
+const fakePort = fakePortFixture as WasmSerialPortHandle;
 
 /** Gives a `fault` hook that fails the first `failures` attempts, and its counter. */
 const failFirst = (failures: number) => {

@@ -98,11 +98,11 @@ export interface RegisterCache {
  * one cache per bus, shared by every client derived from it.
  *
  * @example
- * const cache = makeRegisterCache();
+ * const cache = createRegisterCache();
  * const { pending, suppressed } = cache.filter(3, [{ address: 2000, value: 512 }]);
  * // pending: the write; suppressed: empty, since nothing is known yet
  */
-export const makeRegisterCache = (): RegisterCache => {
+export const createRegisterCache = (): RegisterCache => {
   const held = new Map<string, number>();
   const keyOf = (unitId: number, address: number) => `${unitId}:${address}`;
 

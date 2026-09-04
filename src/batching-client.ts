@@ -26,8 +26,8 @@ import {
 import { ConnectionState } from './connection';
 import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
 import type { EffectModbusClient, ModbusOperations } from './modbus-client';
-import { makeReadDebouncer, type ReadDebouncer } from './read-debouncer';
-import { makeRegisterCache, type RegisterCache } from './register-cache';
+import { createReadDebouncer, type ReadDebouncer } from './read-debouncer';
+import { createRegisterCache, type RegisterCache } from './register-cache';
 import {
   planWrites,
   type PlanReadsOptions,
@@ -37,7 +37,7 @@ import {
 } from './register-plan';
 import type { ModbusRetryPolicy } from './retry';
 import { mergeSpanAttributes, type ModbusSpanAttributes } from './span-attributes';
-import { makeWriteDebouncer, type DebouncedWrite } from './write-debouncer';
+import { createWriteDebouncer, type DebouncedWrite } from './write-debouncer';
 
 /** How long operations are collected before they reach the bus. */
 export interface BatchingDebounceOptions {
@@ -319,19 +319,19 @@ export const makeBatchingClient = (options: {
           }),
         );
 
-    const writes = yield* makeWriteDebouncer({
+    const writes = yield* createWriteDebouncer({
       window: options.debounce?.writes?.window ?? 0,
       maxHold: options.debounce?.writes?.maxHold,
       flush: issueWrites,
     });
 
-    const holding = yield* makeReadDebouncer({
+    const holding = yield* createReadDebouncer({
       window: options.debounce?.reads?.window ?? 0,
       plan: options.plan?.reads,
       fetch: issueReads('modbus.read', client.readHoldingRegisters),
     });
 
-    const inputs = yield* makeReadDebouncer({
+    const inputs = yield* createReadDebouncer({
       window: options.debounce?.reads?.window ?? 0,
       plan: options.plan?.reads,
       fetch: issueReads('modbus.read', client.readInputRegisters),
@@ -432,7 +432,7 @@ export interface BatchingRegistry {
  * @param deps - The transport's raw client factory, link state, and scope.
  * @returns The batching methods, ready to spread onto a transport API.
  */
-export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegistry => {
+export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegistry => {
   const clientScope = Scope.forkUnsafe(deps.scope);
   const clients = new Map<number, BatchingModbusClient>();
   const creating = new Map<number, Deferred.Deferred<BatchingModbusClient, ModbusError>>();
@@ -475,7 +475,7 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
    */
   const sharedCache = Effect.fnUntraced(function* () {
     if (shared) return shared;
-    const cache = makeRegisterCache();
+    const cache = createRegisterCache();
     shared = cache;
     yield* Effect.forkIn(
       Stream.runForEach(SubscriptionRef.changes(deps.connectionState), (state) =>
@@ -543,7 +543,11 @@ export const makeBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegist
           yield* watchScope;
           if (closed) return yield* scopeClosedError();
 
-          const injected = typeof options?.cache === 'object' ? options.cache : undefined;
+          const configuredCache = options?.cache;
+          const injected =
+            configuredCache === undefined || configuredCache === true || configuredCache === false
+              ? undefined
+              : configuredCache;
           const fresh = yield* Deferred.make<BatchingModbusClient, ModbusError>();
           const election = yield* Effect.sync(() => {
             if (closed) return { _tag: 'Closed' as const } as const;

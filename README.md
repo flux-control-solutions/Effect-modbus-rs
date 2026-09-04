@@ -274,11 +274,11 @@ Effect.gen(function* () {
 
 Three things bring the transaction count down, and each is exported on its own:
 
-| Piece                                      | What it does                                                                        |
-| ------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `planWrites` / `planReads`                 | Pack neighbouring addresses into the fewest transactions. Pure, no state, no I/O.   |
-| `makeWriteDebouncer` / `makeReadDebouncer` | Collect operations that arrive near each other, so a planner has something to pack. |
-| `makeRegisterCache`                        | Drop a write whose value the device already holds.                                  |
+| Piece                                          | What it does                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `planWrites` / `planReads`                     | Pack neighbouring addresses into the fewest transactions. Pure, no state, no I/O.   |
+| `createWriteDebouncer` / `createReadDebouncer` | Collect operations that arrive near each other, so a planner has something to pack. |
+| `createRegisterCache`                          | Drop a write whose value the device already holds.                                  |
 
 ### Batching client API
 
@@ -444,7 +444,7 @@ Stateful, scoped, and driven by callbacks you supply — use these to batch over
 
 ```ts
 Effect.gen(function* () {
-  const writes = yield* makeWriteDebouncer({
+  const writes = yield* createWriteDebouncer({
     window: '250 millis',
     maxHold: '1 second',
     flush: (batch) => issueHowever(batch), // yours: cache, plan, span, write
@@ -460,19 +460,19 @@ Effect.gen(function* () {
 });
 ```
 
-`makeWriteDebouncer` takes `window`, an optional `maxHold` (four times `window` by default), and `flush`. It returns `write` / `writeNow` / `writeAll` / `writeAllNow`, a `flush` you can force, and a `pending` count for tests.
+`createWriteDebouncer` takes `window`, an optional `maxHold` (four times `window` by default), and `flush`. It returns `write` / `writeNow` / `writeAll` / `writeAllNow`, a `flush` you can force, and a `pending` count for tests.
 
-`makeReadDebouncer` takes `window`, an optional `plan` (the `planReads` options), and `fetch`, which must return one response per span. Its callback owns the function code, so reading input registers rather than holding registers means a second debouncer. It returns `read` / `readNow` / `readAll` / `readAllNow`, plus `flush` and `pending`.
+`createReadDebouncer` takes `window`, an optional `plan` (the `planReads` options), and `fetch`, which must return one response per span. Its callback owns the function code, so reading input registers rather than holding registers means a second debouncer. It returns `read` / `readNow` / `readAll` / `readAllNow`, plus `flush` and `pending`.
 
 Both take a `Scope` and flush in it rather than in the caller's, so a caller interrupted mid-wait cannot take the pending batch down with it. When that scope closes, callers still waiting are interrupted — their operations never reached the device, and reporting success would break the invariant the `Deferred` exists to hold.
 
-`makeRegisterCache` returns `filter(unitId, writes)`, `observe(unitId, address, value)`, and `invalidate(unitId?)`. Call `observe` only after the device acknowledged the write: a value recorded early suppresses the retry that would have fixed it.
+`createRegisterCache` returns `filter(unitId, writes)`, `observe(unitId, address, value)`, and `invalidate(unitId?)`. Call `observe` only after the device acknowledged the write: a value recorded early suppresses the retry that would have fixed it.
 
 #### Composing them yourself
 
 `makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving an Effect-wrapped client this package did not hand out, or a stub implementing that interface. A raw promise-based `modbus-rs` client is not accepted directly.
 
-`makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` and `batchingClient` are made of, including the per-unit declarations and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
+`createBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` and `batchingClient` are made of, including the per-unit declarations and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
 
 `mergeSpanAttributes(sources)` is the join rule described under [Spans](#spans), exported so a custom `flush` can apply the same one.
 
@@ -537,7 +537,7 @@ RetryPolicies.serial({
 });
 ```
 
-`makeRetryPolicy(options)` builds one from scratch with the same options.
+`createRetryPolicy(options)` builds one from scratch with the same options.
 
 ### Overriding per client and per operation
 
@@ -606,7 +606,7 @@ Any of these can be switched off (`errors: { ModbusTimeoutError: false }`), swit
 
 Delays follow `min(maxDelay, baseDelay × factor ** retryIndex)`, then get jittered.
 
-**Jitter is on by default** — for `makeRetryPolicy()` and for every template, none of which opts out. Each delay is multiplied by a random factor so a fleet of pollers does not re-hit a recovering device in lockstep:
+**Jitter is on by default** — for `createRetryPolicy()` and for every template, none of which opts out. Each delay is multiplied by a random factor so a fleet of pollers does not re-hit a recovering device in lockstep:
 
 | `jitter`                     | Delay                                                    |
 | ---------------------------- | -------------------------------------------------------- |
@@ -804,9 +804,9 @@ src/
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
   register-plan.ts           — planWrites / planReads: pure transaction packing
-  register-cache.ts          — makeRegisterCache: what each device already holds
-  write-debouncer.ts         — makeWriteDebouncer: coalesces writes that arrive separately
-  read-debouncer.ts          — makeReadDebouncer: collects reads that arrive separately
+  register-cache.ts          — createRegisterCache: what each device already holds
+  write-debouncer.ts         — createWriteDebouncer: coalesces writes that arrive separately
+  read-debouncer.ts          — createReadDebouncer: collects reads that arrive separately
   batching-client.ts         — the batching client and the per-transport registry
   span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport

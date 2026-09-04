@@ -5,15 +5,19 @@ import type { AsyncSerialModbusClient } from 'modbus-rs';
 
 import { ConnectionState } from './connection';
 import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
-import { makeRetryPolicy, retryModbus, RetryPolicies } from './retry';
-import { makeTransportScoped } from './shared-transport';
+import { createRetryPolicy, retryModbus, RetryPolicies } from './retry';
+import { createTransportScoped } from './shared-transport';
 import { TcpTransportService } from './TcpTransportService';
 
-const fast = makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
+const fast = createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
 const timeout = () =>
   new ModbusTimeoutError({ cause: new Error('timeout'), message: 'no response' });
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const unusedClientMethod = async (): Promise<never> => {
+  throw new Error('unexpected fake client method');
+};
 
 // ---------------------------------------------------------------------------
 // Policy layering, exercised through the mock transport.
@@ -30,7 +34,7 @@ const devices = [
 ];
 
 /** Mock transport whose next `n` operation attempts fail. */
-const mockWith = (options: { retry?: ReturnType<typeof makeRetryPolicy>; failures: number }) => {
+const mockWith = (options: { retry?: ReturnType<typeof createRetryPolicy>; failures: number }) => {
   const calls = { attempts: 0 };
   let remaining = options.failures;
   const failNext = (n: number) => {
@@ -81,7 +85,7 @@ test('a per-client policy replaces the transport policy rather than stacking', a
   await Effect.gen(function* () {
     const transport = yield* TcpTransportService;
     const client = yield* transport.withClient(1, {
-      retry: makeRetryPolicy({ maxRetries: 1, baseDelay: '1 millis' }),
+      retry: createRetryPolicy({ maxRetries: 1, baseDelay: '1 millis' }),
     });
     return yield* Effect.result(client.readHoldingRegisters({ address: 0, quantity: 1 }));
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
@@ -119,7 +123,7 @@ test('retryModbus wraps the client policy instead of replacing it', async () => 
   // around an effect the client has already wrapped in its own retry, where
   // nothing can see the inner policy. Both run: 3 inner attempts x 4 outer = 12.
   const { calls, layer } = mockWith({
-    retry: makeRetryPolicy({ maxRetries: 2, baseDelay: '1 millis' }),
+    retry: createRetryPolicy({ maxRetries: 2, baseDelay: '1 millis' }),
     failures: 99,
   });
   await Effect.gen(function* () {
@@ -128,7 +132,7 @@ test('retryModbus wraps the client policy instead of replacing it', async () => 
     return yield* Effect.result(
       client
         .readHoldingRegisters({ address: 0, quantity: 1 })
-        .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
+        .pipe(retryModbus(createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
     );
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 
@@ -144,7 +148,7 @@ test('retryModbus over a none client does not multiply', async () => {
     return yield* Effect.result(
       client
         .readHoldingRegisters({ address: 0, quantity: 1 })
-        .pipe(retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
+        .pipe(retryModbus(createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis' }))),
     );
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 
@@ -225,15 +229,31 @@ const makeFake = (config?: { reconnectFailures?: number; reconnectDelayMs?: numb
   let reconnectFailures = config?.reconnectFailures ?? 0;
 
   const client = {
+    pendingRequests: false,
+    isConnected: () => !clientFails,
     readHoldingRegisters: async () => {
       if (clientFails) throw connectionClosed();
       return new Uint16Array([7]);
     },
-  };
+    readInputRegisters: unusedClientMethod,
+    writeSingleRegister: unusedClientMethod,
+    writeMultipleRegisters: unusedClientMethod,
+    readWriteMultipleRegisters: unusedClientMethod,
+    readCoils: unusedClientMethod,
+    writeSingleCoil: unusedClientMethod,
+    writeMultipleCoils: unusedClientMethod,
+    readDiscreteInputs: unusedClientMethod,
+    readFifoQueue: unusedClientMethod,
+    readFileRecord: unusedClientMethod,
+    writeFileRecord: unusedClientMethod,
+    readExceptionStatus: unusedClientMethod,
+    diagnostics: unusedClientMethod,
+    readDeviceIdentification: unusedClientMethod,
+  } satisfies AsyncSerialModbusClient;
 
   const transport = {
     close: async () => {},
-    createClient: (_opts: { unitId: number }) => client as unknown as AsyncSerialModbusClient,
+    createClient: (_opts: { unitId: number }) => client,
     setRequestTimeout: (_ms: number) => {},
     clearRequestTimeout: () => {},
     reconnect: async () => {
@@ -248,7 +268,7 @@ const makeFake = (config?: { reconnectFailures?: number; reconnectDelayMs?: numb
     pendingRequests: false,
   };
 
-  const make = makeTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
+  const make = createTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
     'AsyncRtuTransport',
     () => Promise.resolve(transport),
     'FakeTransport',
@@ -264,7 +284,7 @@ const makeFake = (config?: { reconnectFailures?: number; reconnectDelayMs?: numb
 };
 
 const reconnectFast = {
-  policy: makeRetryPolicy({ maxRetries: 2, baseDelay: '1 millis', maxDelay: '4 millis' }),
+  policy: createRetryPolicy({ maxRetries: 2, baseDelay: '1 millis', maxDelay: '4 millis' }),
   resetAfter: '40 millis',
 } as const;
 

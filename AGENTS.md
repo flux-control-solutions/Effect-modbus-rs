@@ -33,9 +33,9 @@ src/
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
   register-plan.ts           — planWrites / planReads: pure transaction packing (L0)
-  register-cache.ts          — makeRegisterCache: what each device already holds (L1)
-  write-debouncer.ts         — makeWriteDebouncer: coalesces writes that arrive separately (L1)
-  read-debouncer.ts          — makeReadDebouncer: collects reads that arrive separately (L1)
+  register-cache.ts          — createRegisterCache: what each device already holds (L1)
+  write-debouncer.ts         — createWriteDebouncer: coalesces writes that arrive separately (L1)
+  read-debouncer.ts          — createReadDebouncer: collects reads that arrive separately (L1)
   span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
   batching-client.ts         — BatchingModbusClient + the per-transport registry (L2)
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport

@@ -1,9 +1,8 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 import type { WasmWsModbusClient, WasmWsTransport, WasmWsTransportOptions } from 'modbus-rs/web';
 
-import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import type { MockFaultOptions } from './mocks';
-import { makeTransportScoped } from './shared-transport';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createTransportScoped } from './shared-transport';
 import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
 /**
@@ -19,7 +18,7 @@ import type { TransportResilienceOptions, TransportServiceApi } from './shared-t
  *
  * @see WasmWsTransport — Upstream `modbus-rs` browser WebSocket transport.
  * @see WasmWsTransportOptions — Configuration for the WebSocket gateway connection.
- * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
+ * @see createTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class WasmWsTransportService extends Context.Service<
   WasmWsTransportService,
@@ -29,14 +28,16 @@ export class WasmWsTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link WasmWsTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = makeTransportScoped<
+  static readonly makeScoped = createTransportScoped<
     WasmWsTransportOptions,
     WasmWsModbusClient,
     WasmWsTransport
   >(
     'WasmWsTransport',
-    (TC: unknown, options: WasmWsTransportOptions) =>
-      (TC as typeof WasmWsTransport).connect(options),
+    (transportConstructor, options: WasmWsTransportOptions) => {
+      // SAFETY: The constructor is read from the WasmWsTransport export named above.
+      return (transportConstructor as typeof WasmWsTransport).connect(options);
+    },
     'WasmWsTransportService',
     { moduleSpecifier: 'modbus-rs/web' },
   );
@@ -64,11 +65,8 @@ export class WasmWsTransportService extends Context.Service<
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (options: WasmWsTransportOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.effect(
-        WasmWsTransportService,
-        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.effect(WasmWsTransportService, factory(options));
   };
 }
