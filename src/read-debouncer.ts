@@ -100,10 +100,11 @@ export interface ReadDebouncer {
  * A short response is a wire-level fault, not a programming error: the request
  * named a quantity and the answer did not carry it.
  */
-const shortResponse = (address: number): ModbusError => {
-  const message = `Response did not carry a value for register ${address}`;
-  return new ModbusTransportError({ cause: new Error(message), message });
-};
+const malformedResponse = (message: string): ModbusError =>
+  new ModbusTransportError({ cause: new Error(message), message });
+
+const shortResponse = (address: number): ModbusError =>
+  malformedResponse(`Response did not carry a value for register ${address}`);
 
 /** Completes one reader with its register, or with a short-response error. */
 const settleWith =
@@ -186,6 +187,21 @@ export const makeReadDebouncer = (
           },
         });
         const responses = yield* options.fetch(plan.spans);
+        if (responses.length !== plan.spans.length) {
+          return yield* malformedResponse(
+            `Expected ${plan.spans.length} read response(s), received ${responses.length}`,
+          );
+        }
+        for (let index = 0; index < plan.spans.length; index += 1) {
+          const span = plan.spans[index]!;
+          const response = responses[index]!;
+          if (response.length !== span.quantity) {
+            return yield* malformedResponse(
+              `Expected ${span.quantity} register(s) for span at address ${span.address}, ` +
+                `received ${response.length}`,
+            );
+          }
+        }
         return (address: number): number | undefined => {
           const location = plan.locate(address);
           return location === undefined ? undefined : responses[location.span]?.[location.offset];

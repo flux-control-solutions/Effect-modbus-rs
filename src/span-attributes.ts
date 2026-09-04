@@ -36,16 +36,23 @@ export type ModbusSpanAttributes = Record<string, string | number | boolean>;
 export const mergeSpanAttributes = (
   sources: Iterable<ModbusSpanAttributes | undefined>,
 ): ModbusSpanAttributes => {
-  const collected = new Map<string, Set<string>>();
+  const collected = new Map<
+    string,
+    { readonly first: string | number | boolean; readonly values: Set<string> }
+  >();
   for (const source of sources) {
     if (source === undefined) continue;
     for (const [key, value] of Object.entries(source)) {
-      const seen = collected.get(key) ?? new Set<string>();
-      seen.add(String(value));
-      collected.set(key, seen);
+      const entry = collected.get(key);
+      if (entry === undefined)
+        collected.set(key, { first: value, values: new Set([String(value)]) });
+      else entry.values.add(String(value));
     }
   }
   return Object.fromEntries(
-    Array.from(collected, ([key, values]) => [key, Array.from(values).join(',')]),
+    Array.from(collected, ([key, entry]) => [
+      key,
+      entry.values.size === 1 ? entry.first : Array.from(entry.values).join(','),
+    ]),
   );
 };

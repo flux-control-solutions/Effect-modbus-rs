@@ -728,6 +728,37 @@ test('touchedUnits names the units a client was built for', async () => {
   expect(units).toEqual([3, 4]);
 });
 
+test('mock clients and batching acquisition fail after explicit close', async () => {
+  const results = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const batched = yield* transport.withBatchingClient(3, { cache: false });
+        const closeScope = yield* Scope.make();
+
+        yield* Scope.provide(transport.close(), closeScope);
+
+        return yield* Effect.all({
+          read: Effect.result(raw.readHoldingRegisters({ address: 0, quantity: 1 })),
+          write: Effect.result(batched.writeNow({ address: 0, value: 1 })),
+          client: Effect.result(transport.withClient(4)),
+          declare: Effect.result(transport.withBatchingClient(4)),
+          lookup: Effect.result(transport.batchingClient(3)),
+          reconnect: Effect.result(transport.reconnect()),
+        });
+      }),
+    ),
+  );
+
+  for (const result of Object.values(results)) {
+    expect(result).toMatchObject({
+      _tag: 'Failure',
+      failure: { _tag: 'ModbusNotConnectedError' },
+    });
+  }
+});
+
 test('onShutdown writes a safe state while the bus is open', async () => {
   const values = await run(
     Effect.gen(function* () {
@@ -854,6 +885,38 @@ test('losing the link forgets what the devices held', async () => {
     ).toBe(true);
 
     // The device may have power-cycled, so the same value has to go out again.
+    expect(cache.filter(3, [{ address: 0, value: 77 }]).pending).toHaveLength(1);
+  }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
+});
+
+test('a read-side link failure invalidates the cache in manual reconnect mode', async () => {
+  let dropNext = false;
+  const layer = RtuTransportService.makeMockTransport(devices)({
+    portPath: '/dev/null',
+    baudRate: 19200,
+    fault: () => {
+      if (!dropNext) return undefined;
+      dropNext = false;
+      return new ModbusConnectionClosedError({
+        cause: new Error('mock link dropped'),
+        message: 'mock link dropped',
+      });
+    },
+  });
+
+  await Effect.gen(function* () {
+    const transport = yield* RtuTransportService;
+    const batched = yield* transport.withBatchingClient(3);
+    const cache = batched.cache!;
+
+    yield* batched.write({ address: 0, value: 77 });
+    expect(cache.filter(3, [{ address: 0, value: 77 }]).pending).toHaveLength(0);
+
+    dropNext = true;
+    yield* Effect.result(batched.read(0));
+    yield* Effect.sleep('20 millis');
+
+    expect((yield* SubscriptionRef.get(transport.connectionState))._tag).toBe('Down');
     expect(cache.filter(3, [{ address: 0, value: 77 }]).pending).toHaveLength(1);
   }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 });

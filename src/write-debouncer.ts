@@ -318,8 +318,10 @@ export const makeWriteDebouncer = (
       writes: ReadonlyArray<RegisterWrite>,
       attributes: ModbusSpanAttributes | undefined,
     ) =>
-      options.flush(
-        writes.map((write) => ({ address: write.address, value: write.value, attributes })),
+      flushLock.withPermits(1)(
+        options.flush(
+          writes.map((write) => ({ address: write.address, value: write.value, attributes })),
+        ),
       );
 
     const writeAll = (

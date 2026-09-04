@@ -265,6 +265,8 @@ export const makeEffectModbusClient = (client: AnyModbusClient): ModbusOperation
 export interface ClientResilience {
   /** Refuses the operation while the transport's circuit is open. */
   readonly guard: Effect.Effect<void, ModbusError>;
+  /** Records that an operation reached the device successfully. */
+  readonly onSuccess?: Effect.Effect<void>;
   /** Reports a failure so the transport can decide whether to reconnect. */
   readonly report: (error: ModbusError) => Effect.Effect<void>;
   /** Retry policy applied to each operation, if any. */
@@ -314,6 +316,7 @@ export const withResilience = (
     operation: () => Effect.Effect<A, ModbusError>,
   ): Effect.Effect<A, ModbusError> => {
     const attempt = Effect.andThen(resilience.guard, Effect.suspend(operation)).pipe(
+      Effect.tap(() => resilience.onSuccess ?? Effect.void),
       Effect.tapError((error) => resilience.report(error)),
     );
     return resilience.policy ? retryModbus(resilience.policy)(attempt) : attempt;

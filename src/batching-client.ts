@@ -170,13 +170,13 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
 }
 
 /**
- * Builds a batching client over a raw client for one unit.
+ * Builds a batching client over an Effect-wrapped client for one unit.
  *
  * The transport calls this from `withBatchingClient`, which is where a consumer
  * normally meets it. Call it directly to drive a client this package did not
- * hand out — a raw `modbus-rs` client behind the escape hatch, or a stub.
+ * hand out, such as another adapter implementing `EffectModbusClient`, or a stub.
  *
- * @param options - The unit, the raw client, and the policies.
+ * @param options - The unit, the Effect-wrapped client, and the policies.
  * @returns The batching client, bound to the current scope.
  */
 export const makeBatchingClient = (options: {

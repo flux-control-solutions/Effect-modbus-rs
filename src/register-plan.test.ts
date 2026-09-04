@@ -171,22 +171,36 @@ test('planWrites rejects an option that cannot describe a transaction', () => {
   expect(() => planWrites([], { minRunLength: 0 })).toThrow(RangeError);
 });
 
-test('planWrites rejects a pair of limits that puts FC16 out of reach', () => {
-  // Each limit is legal alone. Together they leave no run long enough to earn
-  // FC16, so every write would go out as its own FC06 and report nothing.
-  expect(() => planWrites([], { maxRegistersPerWrite: 3, minRunLength: 5 })).toThrow(RangeError);
-  expect(() => planWrites([], { maxRegistersPerWrite: 3, minRunLength: 4 })).toThrow(RangeError);
-  // Equal is the tightest legal pair: a full-length run is exactly one FC16.
+test('planWrites allows a minimum above the limit to select FC06-only writes', () => {
   expect(
     planWrites(
       [
         { address: 0, value: 1 },
         { address: 1, value: 2 },
         { address: 2, value: 3 },
+        { address: 3, value: 4 },
       ],
-      { maxRegistersPerWrite: 3, minRunLength: 3 },
+      { maxRegistersPerWrite: 3, minRunLength: 4 },
     ),
-  ).toEqual([{ kind: 'multiple', address: 0, values: new Uint16Array([1, 2, 3]) }]);
+  ).toEqual([
+    { kind: 'single', address: 0, value: 1 },
+    { kind: 'single', address: 1, value: 2 },
+    { kind: 'single', address: 2, value: 3 },
+    { kind: 'single', address: 3, value: 4 },
+  ]);
+
+  expect(
+    planWrites(
+      [
+        { address: 0, value: 1 },
+        { address: 1, value: 2 },
+      ],
+      { maxRegistersPerWrite: 1 },
+    ),
+  ).toEqual([
+    { kind: 'single', address: 0, value: 1 },
+    { kind: 'single', address: 1, value: 2 },
+  ]);
 });
 
 test('planWrites accepts the protocol address and transaction boundaries', () => {
@@ -202,10 +216,7 @@ test('planWrites holds its invariants over generated cases', () => {
     const maxRegistersPerWrite = drawInt(random, 1, 8);
     const options: PlanWritesOptions = {
       maxRegistersPerWrite,
-      // The two limits are not independent. A run is cut at the first and has to
-      // reach the second to earn FC16, so a minimum above the cut is rejected
-      // rather than silently putting FC16 out of reach.
-      minRunLength: drawInt(random, 1, Math.min(4, maxRegistersPerWrite)),
+      minRunLength: drawInt(random, 1, 4),
     };
     const writes: RegisterWrite[] = drawAddresses(random, drawInt(random, 0, 30)).map(
       (address) => ({ address, value: drawInt(random, 0, 0xffff) }),
@@ -293,6 +304,15 @@ test('planReads locates an address a gap merge pulled in', () => {
   expect(plan.spans).toEqual([{ address: 10, quantity: 4 }]);
   expect(plan.locate(11)).toEqual({ span: 0, offset: 1 });
   expect(plan.locate(14)).toBeUndefined();
+});
+
+test('planReads does not locate values that cannot address a register', () => {
+  const plan = planReads([10, 13], { maxGap: 2 });
+
+  expect(plan.locate(Number.NaN)).toBeUndefined();
+  expect(plan.locate(10.5)).toBeUndefined();
+  expect(plan.locate(-1)).toBeUndefined();
+  expect(plan.locate(0x10000)).toBeUndefined();
 });
 
 test('planReads splits a span at the read limit even with no gap', () => {

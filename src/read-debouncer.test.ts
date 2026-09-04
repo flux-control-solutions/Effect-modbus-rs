@@ -283,6 +283,32 @@ test('a response that is short of the span it promised fails as a transport erro
   expect(Exit.isFailure(exit)).toBe(true);
 });
 
+test('a short response fails every reader sharing its span', async () => {
+  const device = makeDevice({ short: true });
+
+  const results = await withDebouncer({ window: '20 millis', fetch: device.fetch }, (debouncer) =>
+    Effect.all([Effect.result(debouncer.read(1)), Effect.result(debouncer.read(2))], {
+      concurrency: 'unbounded',
+    }),
+  );
+
+  expect(results).toMatchObject([
+    { _tag: 'Failure', failure: { _tag: 'ModbusTransportError' } },
+    { _tag: 'Failure', failure: { _tag: 'ModbusTransportError' } },
+  ]);
+});
+
+test('a missing span response fails the read as a transport error', async () => {
+  const result = await withDebouncer({ window: 0, fetch: () => Effect.succeed([]) }, (debouncer) =>
+    Effect.result(debouncer.read(1)),
+  );
+
+  expect(result).toMatchObject({
+    _tag: 'Failure',
+    failure: { _tag: 'ModbusTransportError' },
+  });
+});
+
 test('readNow answers the readers already collected, in the same transaction', async () => {
   const device = makeDevice();
 

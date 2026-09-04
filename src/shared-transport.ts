@@ -306,7 +306,8 @@ export function makeTransportScoped<
     const connectionState = yield* SubscriptionRef.make<ConnectionState>(
       ConnectionState.Disconnected(),
     );
-    const supervised = reconnectOptions ? resolveReconnect(reconnectOptions) : null;
+    const resolvedReconnect = resolveReconnect(reconnectOptions ?? {});
+    const supervised = reconnectOptions ? resolvedReconnect : null;
     // Captured here so the API's methods keep `R = never` while still being
     // able to fork the supervisor into the service's own lifetime.
     const serviceScope = yield* Effect.scope;
@@ -356,7 +357,7 @@ export function makeTransportScoped<
       return t;
     });
 
-    yield* Effect.addFinalizer(() => {
+    const closeTransport = Effect.suspend(() => {
       if (closed) return Effect.void;
       closed = true;
       const t = transport;
@@ -364,11 +365,16 @@ export function makeTransportScoped<
       return Effect.andThen(
         Effect.logDebug(`Closing ${serviceName}`),
         Effect.andThen(
-          Effect.promise(() => t.close()),
+          Effect.tryPromise({
+            try: () => t.close(),
+            catch: (error) => toModbusError(error as Error),
+          }),
           SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
         ),
       );
     });
+
+    yield* Effect.addFinalizer(() => Effect.orDie(closeTransport));
 
     const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
@@ -394,7 +400,14 @@ export function makeTransportScoped<
      * ends up starting the supervisor.
      */
     const report = (error: ModbusError): Effect.Effect<void> => {
-      if (!supervised || closed || !supervised.triggers(error)) return Effect.void;
+      if (closed || !resolvedReconnect.triggers(error)) return Effect.void;
+      if (!supervised) {
+        return SubscriptionRef.update(connectionState, (current) =>
+          ConnectionState.$is('Connected')(current)
+            ? ConnectionState.Down({ cause: error })
+            : current,
+        );
+      }
       return claimReconnect(
         reconnectOnce,
         connectionState,
@@ -408,6 +421,11 @@ export function makeTransportScoped<
       // Without a supervisor there is no breaker: nothing else would ever
       // close the circuit again.
       guard: supervised ? guardCircuit(connectionState) : Effect.void,
+      onSuccess: supervised
+        ? undefined
+        : SubscriptionRef.update(connectionState, (current) =>
+            ConnectionState.$is('Down')(current) ? ConnectionState.Connected() : current,
+          ),
       report,
     };
 
@@ -505,17 +523,10 @@ export function makeTransportScoped<
 
       close: Effect.fnUntraced(function* () {
         if (closed) return;
-        closed = true;
-        yield* SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
-        const t = transport;
-        if (t) {
-          yield* Effect.tryPromise({
-            try: () => t.close(),
-            catch: (error) => toModbusError(error as Error),
-          });
-        }
         const scope = yield* Effect.scope;
-        yield* Scope.close(scope as Scope.Closeable, Exit.void);
+        yield* Scope.close(scope as Scope.Closeable, Exit.void).pipe(
+          Effect.onExit(() => closeTransport),
+        );
       }),
 
       withBatchingClient: batching.withBatchingClient,

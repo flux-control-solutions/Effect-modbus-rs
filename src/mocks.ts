@@ -1,4 +1,4 @@
-import { Effect, Schema, SubscriptionRef } from 'effect';
+import { Effect, Exit, Schema, Scope, SubscriptionRef } from 'effect';
 import {
   CoilState,
   type AsciiTransportOptions,
@@ -19,9 +19,9 @@ import {
 } from 'modbus-rs';
 import type { WasmWsTransportOptions, WasmSerialTransportOptions } from 'modbus-rs/web';
 
-import { makeBatchingRegistry } from './batching-client';
+import { makeBatchingRegistry, type BatchingClientOptions } from './batching-client';
 import { claimReconnect, ConnectionState, guardCircuit, resolveReconnect } from './connection';
-import { ModbusInvalidArgumentError, type ModbusError } from './errors';
+import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
 import { withResilience, type ModbusOperations } from './modbus-client';
 import type { ModbusRetryPolicy } from './retry';
 import type { TransportResilienceOptions, WithoutUpstreamRetry } from './shared-transport';
@@ -397,15 +397,41 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
       const connectionState = yield* SubscriptionRef.make<ConnectionState>(
         ConnectionState.Connected(),
       );
-      const supervised = options.reconnect ? resolveReconnect(options.reconnect) : null;
+      const resolvedReconnect = resolveReconnect(options.reconnect ?? {});
+      const supervised = options.reconnect ? resolvedReconnect : null;
       const serviceScope = yield* Effect.scope;
+      let closed = false;
+
+      const transportClosed = () =>
+        new ModbusNotConnectedError({
+          cause: new Error('Mock transport has been closed'),
+          message: 'Mock transport has been closed',
+        });
+
+      const ensureOpen = Effect.suspend(() =>
+        closed ? Effect.fail(transportClosed()) : Effect.void,
+      );
+
+      const closeTransport = Effect.suspend(() => {
+        if (closed) return Effect.void;
+        closed = true;
+        return Effect.andThen(
+          Effect.logDebug('Mock: closing transport'),
+          SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
+        );
+      });
+
+      yield* Effect.addFinalizer(() => closeTransport);
 
       const reconnectOnce = Effect.andThen(
-        Effect.logDebug('Mock: reconnecting'),
-        Effect.suspend(() => {
-          const injected = options.reconnectFault?.();
-          return injected ? Effect.fail(injected) : Effect.void;
-        }),
+        ensureOpen,
+        Effect.andThen(
+          Effect.logDebug('Mock: reconnecting'),
+          Effect.suspend(() => {
+            const injected = options.reconnectFault?.();
+            return injected ? Effect.fail(injected) : Effect.void;
+          }),
+        ),
       );
 
       /**
@@ -415,21 +441,38 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
        * on either side of the claim.
        */
       const report = (error: ModbusError): Effect.Effect<void> => {
-        if (!supervised || !supervised.triggers(error)) return Effect.void;
+        if (closed || !resolvedReconnect.triggers(error)) return Effect.void;
+        if (!supervised) {
+          return SubscriptionRef.update(connectionState, (current) =>
+            ConnectionState.$is('Connected')(current)
+              ? ConnectionState.Down({ cause: error })
+              : current,
+          );
+        }
         return claimReconnect(reconnectOnce, connectionState, supervised, serviceScope);
       };
 
       const guard = Effect.andThen(
-        supervised ? guardCircuit(connectionState) : Effect.void,
-        Effect.suspend(() => {
-          const injected = options.fault?.();
-          return injected ? Effect.fail(injected) : Effect.void;
-        }),
+        ensureOpen,
+        Effect.andThen(
+          supervised ? guardCircuit(connectionState) : Effect.void,
+          Effect.suspend(() => {
+            const injected = options.fault?.();
+            return injected ? Effect.fail(injected) : Effect.void;
+          }),
+        ),
       );
+
+      const onSuccess = supervised
+        ? undefined
+        : SubscriptionRef.update(connectionState, (current) =>
+            ConnectionState.$is('Down')(current) ? ConnectionState.Connected() : current,
+          );
 
       const touchedUnits = new Set<number>();
 
       const makeOperations = Effect.fnUntraced(function* (unitId: number) {
+        yield* ensureOpen;
         const state = deviceStates.get(unitId);
         if (!state) {
           return yield* new ModbusInvalidArgumentError({
@@ -448,6 +491,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         const operations = yield* makeOperations(unitId);
         return withResilience(operations, {
           guard,
+          onSuccess,
           report,
           policy: clientOptions?.retry ?? options.retry,
         });
@@ -468,6 +512,7 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
         const operations = yield* makeOperations(unitId);
         return withResilience(batching.guardRawWrites(unitId, operations), {
           guard,
+          onSuccess,
           report,
           policy: clientOptions?.retry ?? options.retry,
         });
@@ -478,25 +523,32 @@ export const makeMockTransport = (devices: SlaveDeviceDefinitions) => {
 
         withClient,
 
-        withBatchingClient: batching.withBatchingClient,
-        batchingClient: batching.batchingClient,
+        withBatchingClient: (
+          unitId: number,
+          clientOptions?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
+        ) => Effect.andThen(ensureOpen, batching.withBatchingClient(unitId, clientOptions)),
+        batchingClient: (unitId: number) =>
+          Effect.andThen(ensureOpen, batching.batchingClient(unitId)),
 
         get touchedUnits() {
           return new Set(touchedUnits);
         },
 
-        setRequestTimeout: (_timeoutMs: number) => Effect.void,
-        clearRequestTimeout: () => Effect.void,
+        setRequestTimeout: (_timeoutMs: number) => ensureOpen,
+        clearRequestTimeout: () => ensureOpen,
         reconnect: () =>
           Effect.andThen(
             reconnectOnce,
             SubscriptionRef.set(connectionState, ConnectionState.Connected()),
           ),
         close: () =>
-          Effect.andThen(
-            Effect.logDebug('Mock: closing transport'),
-            SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
-          ) as Effect.Effect<void, ModbusError, never>,
+          Effect.gen(function* () {
+            if (closed) return;
+            const scope = yield* Effect.scope;
+            yield* Scope.close(scope as Scope.Closeable, Exit.void).pipe(
+              Effect.onExit(() => closeTransport),
+            );
+          }),
         hasPendingRequests: () => false,
       };
     });

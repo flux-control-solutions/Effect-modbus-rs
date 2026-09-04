@@ -14,8 +14,10 @@ import { makeRetryPolicy, retryModbus, type ModbusErrorTag, type ModbusRetryPoli
  * - `Connected` — usable.
  * - `Reconnecting` — the supervisor is re-establishing the link. Operations are
  *   refused with {@link ModbusCircuitOpenError} rather than queued on a dead bus.
- * - `Down` — reconnect attempts were exhausted; the supervisor is waiting out
- *   `resetAfter` before probing again. Operations are refused.
+ * - `Down` — a connection failure was observed. With a supervisor, operations
+ *   are refused while it waits to probe again. Without one, the state remains
+ *   observable but operations retain manual behavior until `reconnect()` or a
+ *   successful operation restores `Connected`.
  */
 export type ConnectionState = Data.TaggedEnum<{
   Disconnected: object;
@@ -33,7 +35,8 @@ export const ConnectionState = Data.taggedEnum<ConnectionState>();
  * Supplying this on a transport hands reconnection to a supervisor fiber owned
  * by that transport: one reconnect for the whole application rather than one
  * per failing call site. Omit it and the transport keeps its manual behaviour —
- * `reconnect()` still works, nothing happens on its own.
+ * failures still update `connectionState`, but `reconnect()` must be called by
+ * the application and no circuit breaker is enabled.
  */
 export interface ReconnectOptions {
   /**

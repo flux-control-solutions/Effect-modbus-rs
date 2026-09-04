@@ -110,6 +110,40 @@ test('a zero window writes straight through, one batch each', async () => {
   expect(recorder.batches).toHaveLength(2);
 });
 
+test('zero-window writes cannot apply an older value after a newer one', async () => {
+  const applied: number[] = [];
+
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        let flushCount = 0;
+        const flush = (batch: ReadonlyArray<DebouncedWrite>) =>
+          Effect.gen(function* () {
+            flushCount += 1;
+            if (flushCount === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            for (const write of batch) applied.push(write.value);
+          });
+
+        const debouncer = yield* makeWriteDebouncer({ window: 0, flush });
+        const older = yield* Effect.forkChild(debouncer.write({ address: 2000, value: 100 }));
+        yield* Deferred.await(firstStarted);
+
+        const newer = yield* Effect.forkChild(debouncer.writeNow({ address: 2000, value: 200 }));
+        yield* Effect.sleep('10 millis');
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Effect.all([Fiber.join(older), Fiber.join(newer)], { concurrency: 'unbounded' });
+      }),
+    ),
+  );
+
+  expect(applied).toEqual([100, 200]);
+});
+
 test('a failed flush fails the callers whose values it carried', async () => {
   const recorder = makeRecorder(() => true);
 

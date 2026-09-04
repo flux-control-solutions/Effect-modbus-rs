@@ -210,3 +210,45 @@ test('reconnect after close fails with ModbusNotConnectedError', async () => {
     if (Result.isFailure(result)) expect(result.failure._tag).toBe('ModbusNotConnectedError');
   }).pipe(Effect.runPromise);
 });
+
+test('explicit close runs batching shutdown actions before closing the handle', async () => {
+  const events: string[] = [];
+  let closed = false;
+  let held = 999;
+  const client = {
+    writeSingleRegister: async (options: { readonly value: number }) => {
+      if (closed) throw new Error('[MODBUS_CONNECTION_CLOSED] transport closed');
+      events.push('write');
+      held = options.value;
+    },
+  } as unknown as AsyncSerialModbusClient;
+  const transport = {
+    close: async () => {
+      events.push('close');
+      closed = true;
+    },
+    createClient: (_opts: { unitId: number }) => client,
+    setRequestTimeout: (_ms: number) => {},
+    clearRequestTimeout: () => {},
+    reconnect: async () => {},
+    pendingRequests: false,
+  };
+  const make = makeTransportScoped<FakeOptions, AsyncSerialModbusClient, typeof transport>(
+    'AsyncRtuTransport',
+    () => Promise.resolve(transport),
+    'CloseAwareTransport',
+  );
+
+  await Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const api = yield* Scope.provide(make({ label: 'test' }), scope);
+    const batched = yield* api.withBatchingClient(1, { cache: false });
+    yield* Scope.provide(batched.onShutdown(batched.writeNow({ address: 0, value: 0 })), scope);
+
+    const exit = yield* Effect.exit(Scope.provide(api.close(), scope));
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(held).toBe(0);
+    expect(events).toEqual(['write', 'close']);
+  }).pipe(Effect.runPromise);
+});

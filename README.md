@@ -470,7 +470,7 @@ Both take a `Scope` and flush in it rather than in the caller's, so a caller int
 
 #### Composing them yourself
 
-`makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving a client this package did not hand out — a raw `modbus-rs` client, or a stub.
+`makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving an Effect-wrapped client this package did not hand out, or a stub implementing that interface. A raw promise-based `modbus-rs` client is not accepted directly.
 
 `makeBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` and `batchingClient` are made of, including the per-unit declarations and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
 
@@ -634,14 +634,19 @@ TcpTransportService.make({
 
 While the link is being re-established, operations are refused with `ModbusCircuitOpenError` instead of queueing requests onto a dead bus. Because that error is retryable by default and costs nothing on the wire, a polling loop with a generous policy simply rides out the outage; one with a short budget fails fast and lets the caller decide.
 
+Without `reconnect`, a connection-level failure still publishes `Down`, but no
+supervisor starts and no circuit breaker is enabled. Call `transport.reconnect()`
+to recover manually. A later successful operation also restores `Connected`, so
+a transient failure recovered by an operation retry does not leave stale state.
+
 State transitions are published on `transport.connectionState`:
 
-| State          | Meaning                                                                                |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `Disconnected` | Never opened, or closed. The next operation opens it lazily.                           |
-| `Connected`    | Usable.                                                                                |
-| `Reconnecting` | Supervisor is re-establishing the link. Operations refused.                            |
-| `Down`         | Attempts exhausted; waiting out `resetAfter` before probing again. Operations refused. |
+| State          | Meaning                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `Disconnected` | Never opened, or closed. The next operation opens it lazily.                                  |
+| `Connected`    | Usable.                                                                                       |
+| `Reconnecting` | Supervisor is re-establishing the link. Operations refused.                                   |
+| `Down`         | Link failure observed. A configured supervisor waits to probe; manual mode remains unguarded. |
 
 ```ts
 Effect.gen(function* () {

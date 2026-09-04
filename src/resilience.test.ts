@@ -372,7 +372,7 @@ test('many fibers failing together produce one reconnect, not one each', async (
   }).pipe(Effect.scoped, Effect.runPromise);
 });
 
-test('without a reconnect policy there is no supervisor and no breaker', async () => {
+test('without a reconnect policy a failure updates state but does not start a supervisor', async () => {
   const fake = makeFake();
   await Effect.gen(function* () {
     const api = yield* fake.make({ label: 'x' });
@@ -388,8 +388,39 @@ test('without a reconnect policy there is no supervisor and no breaker', async (
 
     yield* Effect.sleep('20 millis');
     expect(fake.calls.reconnect).toBe(0);
+    expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Down');
+
+    // Manual mode remains unguarded, and reconnect restores the observed state.
+    yield* api.reconnect();
+    expect(fake.calls.reconnect).toBe(1);
     expect((yield* SubscriptionRef.get(api.connectionState))._tag).toBe('Connected');
   }).pipe(Effect.scoped, Effect.runPromise);
+});
+
+test('a successful retry restores manual connection state', async () => {
+  let fail = true;
+  const layer = TcpTransportService.makeMockTransport(devices)({
+    host: '127.0.0.1',
+    port: 502,
+    retry: fast,
+    fault: () => {
+      if (!fail) return undefined;
+      fail = false;
+      return new ModbusConnectionClosedError({
+        cause: new Error('link dropped'),
+        message: 'link dropped',
+      });
+    },
+  });
+
+  await Effect.gen(function* () {
+    const transport = yield* TcpTransportService;
+    const client = yield* transport.withClient(1);
+    const value = yield* client.readHoldingRegisters({ address: 0, quantity: 1 });
+
+    expect(Array.from(value)).toEqual([42]);
+    expect((yield* SubscriptionRef.get(transport.connectionState))._tag).toBe('Connected');
+  }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise);
 });
 
 test('teardown stops the supervisor', async () => {
