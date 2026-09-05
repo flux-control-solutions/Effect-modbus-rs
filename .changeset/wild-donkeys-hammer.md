@@ -2,24 +2,66 @@
 '@flux-control/effect-modbus-rs': minor
 ---
 
-Add transaction batching: register planners, a write cache, debouncers, and `transport.withBatchingClient`.
+Add an optional batching client for register operations. The existing client remains available as a low-level, full-control option.
 
-A caller that derives each register independently — one fiber per output, one accessor per parameter — issues one transaction per register. On a half-duplex multi-drop bus that is the dominant cost, and the registers such a caller wants are usually neighbours. Three new layers bring the count down, and each one is usable without the layer above it.
+## Low-level full-control client
 
-**`planWrites` and `planReads`** (`src/register-plan.ts`) are pure. `planWrites` sorts writes by address, groups contiguous addresses into runs, splits each run at the FC16 limit, and emits FC06 for a run shorter than `minRunLength`. `planReads` merges addresses into spans within `maxGap` unrequested registers of each other and returns a `locate` index back into the responses. Both accept the device's own limits, because many devices stop short of what the specification allows.
+`transport.withClient(unitId)` continues to return an `EffectModbusClient`. This client exposes all standard Modbus operations and issues the exact transaction that the caller specifies.
 
-**`createWriteDebouncer`, `createReadDebouncer`, and `createRegisterCache`** are the collection point a planner needs. A caller that never holds two values at once gives a planner nothing to pack, so these collect on time instead. A write is held for a window, each arrival restarts it, and `maxHold` caps the total hold. A later write to one address replaces the value and inherits its waiters, so only the newest value reaches the wire and everyone waiting on that address learns whether it got there. Each caller awaits its own `Deferred`, which keeps "the effect succeeded" meaning "the value reached the device". The read debouncer has no supersede rule and no ceiling: its window opens on the first arrival and does not restart. The cache drops a write whose value the device already holds, keyed by unit and address so one cache serves a whole bus — except where dropping one would split a contiguous run into one FC06 per register, since each batch is planned both filtered and whole and the plan with fewer transactions wins.
+Use this client for these operations:
 
-**`transport.withBatchingClient(unitId, options)`** puts the three together. It is the sibling of `withClient`, not a replacement for it: `withClient` issues the transaction a caller names, and a batching client decides the transactions for a caller that names registers instead. A unit is declared once and reached for with `transport.batchingClient(unitId)`, because every option here is a fact about the unit rather than about a caller. `transport.touchedUnits` reports transport-wide activity, while `client.onShutdown(action)` runs a device-specific safety action when the calling scope closes — stated on the client that addresses the device, because a safe state is the device's own answer.
+- Issue exact register transactions with caller-selected addresses and quantities.
+- Read and write coils.
+- Read discrete inputs.
+- Access diagnostics and file records.
+- Control transaction schedules and groups directly.
 
-Nothing is debounced unless `debounce` asks for it, matching the rest of this package: default timing stays predictable. `writeAll` and `readAll` still plan, so a caller that holds a group of registers gets packed transactions with no window at all.
+The batching client does not replace this API. Both clients use the same transport connection.
 
-Three points to know before adopting it, none of which the version number separates:
+For a unit that uses batching, the low-level client still supports reads, coils, diagnostics, file records, and other non-register-write operations. The transport rejects raw FC06, FC16, and FC23 writes for that unit. Without this block, the writes can bypass a pending batch or its cache.
 
-1. **`BatchingModbusClient` does not extend `ModbusOperations`.** There is no `writeSingleRegister` and no `readHoldingRegisters` on it. For one unit, choose one holding-register write path for the transport's lifetime. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`; the raw client remains available for exact reads, coils, and other non-register-write operations. Coils are not covered by batching because the planners pack registers.
-2. **The cache invalidates when the link is lost, not only after a failed transaction.** A device that power-cycles comes back holding something else, and losing the link is the stronger sign of that. An invalidation that lands while a write is in flight wins over the observation that follows it, so the write that was already on the wire cannot restore a belief the link loss discarded. The cache and the fiber that watches `connectionState` are both created on first use, so a transport nobody batches on carries neither.
-3. **`writeNow` flushes the pending batch and joins it.** It is an enqueue with supersede followed by an immediate flush, not a path around the batch. The newest value wins.
+## Batching client
 
-Nothing existing changes. `withClient`, the retry policies, the reconnect supervisor, and the circuit breaker behave exactly as before, and a caller that does not call `withBatchingClient` sees no new fibers and no new state.
+`transport.withBatchingClient(unitId, options)` declares a `BatchingModbusClient` for one unit. Other callers get that client with `transport.batchingClient(unitId)`.
 
-The read window has not been measured against a live RS-485 bus. Treat any published guidance on its size as an estimate from one transaction at 19200 baud until it has.
+The batching client provides these features:
+
+- `write`, `writeNow`, `writeAll`, and `writeAllNow` pack adjacent writes into FC06 or FC16 transactions.
+- `read`, `readNow`, `readAll`, and `readAllNow` pack holding-register reads into FC03 spans.
+- The `inputs` reader provides the same read operations for input registers with FC04.
+- Optional write and read windows collect operations that arrive at different times.
+- The write cache removes writes when the device already contains the value.
+- Device-specific planner limits control the maximum transaction size and permitted gaps between reads.
+- Each caller receives the result of its own operation. This rule also applies when operations share one transaction.
+
+Debounce windows are disabled by default. Group methods still plan one caller group without a debounce window.
+
+The write window restarts after each new write. `maxHold` limits the total delay for a continuous stream of writes.
+
+The read window starts with the first request and does not restart. Thus, later readers cannot continuously delay the batch.
+
+The cache records acknowledged writes by unit and address. It does not answer reads.
+
+A failed write invalidates the cache for that unit. A lost connection invalidates all cache entries.
+
+Each unit has one batching client, one cache view, and one set of options. A second declaration for the same unit fails with `ModbusInvalidArgumentError`.
+
+## Operation and lifecycle details
+
+`BatchingModbusClient` does not extend `ModbusOperations`. This separation prevents register writes from bypassing the batch order and cache.
+
+`writeNow` and `writeAllNow` join the pending batch and flush it immediately. A newer write for the same address replaces the older value.
+
+`client.onShutdown(action)` registers a device-specific action for scope shutdown. The action runs while the transport is open and before the client closes.
+
+The client emits `modbus.write` and `modbus.read` spans. These spans include unit IDs, register counts, suppressed-write counts, and transaction counts.
+
+## Standalone batching components
+
+The batching components are also public APIs:
+
+- `planWrites` and `planReads` provide pure transaction plans without state or I/O.
+- `createWriteDebouncer` and `createReadDebouncer` collect operations for caller-supplied flush functions.
+- `createRegisterCache` tracks acknowledged register values.
+- `makeBatchingClient` creates a batching client over an `EffectModbusClient`.
+- `createBatchingRegistry` adds per-unit declarations and connection-state cache invalidation to a custom transport.
