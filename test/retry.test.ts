@@ -9,8 +9,13 @@ import {
   ModbusTimeoutError,
   ModbusTransportError,
   type ModbusError,
-} from './errors';
-import { createRetryPolicy, retryModbus, RetryPolicies, type ModbusRetryPolicy } from './retry';
+} from '../src/errors';
+import {
+  createRetryPolicy,
+  retryModbus,
+  RetryPolicies,
+  type ModbusRetryPolicy,
+} from '../src/retry';
 
 const timeout = () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'timeout' });
 const transportError = () => new ModbusTransportError({ cause: new Error('crc'), message: 'crc' });

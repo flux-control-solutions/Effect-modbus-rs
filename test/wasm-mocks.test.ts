@@ -4,10 +4,10 @@ import { Effect } from 'effect';
 import { CoilState } from 'modbus-rs';
 import type { WasmSerialPortHandle } from 'modbus-rs/web';
 
-import { ModbusInvalidArgumentError } from './errors';
-import { WasmRtuTransportService } from './WasmRtuTransportService';
-import { WasmSerialTransportService } from './WasmSerialTransportService';
-import { WasmWsTransportService } from './WasmWsTransportService';
+import { ModbusInvalidArgumentError } from '../src/errors';
+import { WasmRtuTransportService } from '../src/WasmRtuTransportService';
+import { WasmSerialTransportService } from '../src/WasmSerialTransportService';
+import { WasmWsTransportService } from '../src/WasmWsTransportService';
 
 /**
  * `makeMockTransport` is fully transport-agnostic (see mocks.test.ts for the exhaustive

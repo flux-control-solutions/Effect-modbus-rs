@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 
-import { mergeSpanAttributes } from './span-attributes';
+import { mergeSpanAttributes } from '../src/span-attributes';
 
 test('a single caller keeps each span attribute scalar unchanged', () => {
   expect(mergeSpanAttributes([{ attempts: 2, active: false, point: 'Supply' }])).toEqual({

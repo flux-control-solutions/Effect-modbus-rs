@@ -3,16 +3,16 @@ import { test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import type { WasmSerialPortHandle } from 'modbus-rs/web';
 
-import { AsciiTransportService } from './AsciiTransportService';
-import { ModbusTimeoutError } from './errors';
-import { createRetryPolicy } from './retry';
-import { RtuTransportService } from './RtuTransportService';
-import { SerialTransportService } from './SerialTransportService';
-import { TcpTransportService } from './TcpTransportService';
-import { WasmAsciiTransportService } from './WasmAsciiTransportService';
-import { WasmRtuTransportService } from './WasmRtuTransportService';
-import { WasmSerialTransportService } from './WasmSerialTransportService';
-import { WasmWsTransportService } from './WasmWsTransportService';
+import { AsciiTransportService } from '../src/AsciiTransportService';
+import { ModbusTimeoutError } from '../src/errors';
+import { createRetryPolicy } from '../src/retry';
+import { RtuTransportService } from '../src/RtuTransportService';
+import { SerialTransportService } from '../src/SerialTransportService';
+import { TcpTransportService } from '../src/TcpTransportService';
+import { WasmAsciiTransportService } from '../src/WasmAsciiTransportService';
+import { WasmRtuTransportService } from '../src/WasmRtuTransportService';
+import { WasmSerialTransportService } from '../src/WasmSerialTransportService';
+import { WasmWsTransportService } from '../src/WasmWsTransportService';
 
 // ---------------------------------------------------------------------------
 // Each transport tag declares the options of its own `makeMockTransport`. The

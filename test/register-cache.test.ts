@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 
-import { createRegisterCache } from './register-cache';
+import { createRegisterCache } from '../src/register-cache';
 
 test('the cache suppresses nothing until it has seen a write land', () => {
   const cache = createRegisterCache();

@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { CoilState } from 'modbus-rs';
 import init, { type WasmWsModbusClient } from 'modbus-rs/web';
 
-import { createEffectModbusClient } from './modbus-client';
+import { createEffectModbusClient } from '../src/modbus-client';
 
 /**
  * `WasmWsModbusClient`/`WasmSerialModbusClient` have private constructors (only

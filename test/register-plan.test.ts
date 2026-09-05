@@ -9,7 +9,7 @@ import {
   type PlanWritesOptions,
   type RegisterWrite,
   type WritePlanStep,
-} from './register-plan';
+} from '../src/register-plan';
 
 /**
  * Seeded generator, so a failing property prints a case that reproduces.

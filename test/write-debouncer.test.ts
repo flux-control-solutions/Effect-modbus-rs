@@ -2,8 +2,12 @@ import { expect, test } from 'bun:test';
 
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 
-import { ModbusTimeoutError, type ModbusError } from './errors';
-import { createWriteDebouncer, type DebouncedWrite, type WriteDebouncer } from './write-debouncer';
+import { ModbusTimeoutError, type ModbusError } from '../src/errors';
+import {
+  createWriteDebouncer,
+  type DebouncedWrite,
+  type WriteDebouncer,
+} from '../src/write-debouncer';
 
 /** Records every batch handed to the flush, and what each one wrote. */
 const makeRecorder = (fail?: () => boolean) => {

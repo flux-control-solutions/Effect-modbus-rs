@@ -3,7 +3,7 @@ import { test, expect } from 'bun:test';
 import { Effect, Result, Exit, Fiber, Scope } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
-import { createTransportScoped } from './shared-transport';
+import { createTransportScoped } from '../src/shared-transport';
 
 interface FakeOptions {
   readonly label: string;

@@ -3,11 +3,11 @@ import { test, expect } from 'bun:test';
 import { Effect, Result, Exit, Scope, SubscriptionRef } from 'effect';
 import type { AsyncSerialModbusClient } from 'modbus-rs';
 
-import { ConnectionState } from './connection';
-import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
-import { createRetryPolicy, retryModbus, RetryPolicies } from './retry';
-import { createTransportScoped } from './shared-transport';
-import { TcpTransportService } from './TcpTransportService';
+import { ConnectionState } from '../src/connection';
+import { ModbusConnectionClosedError, ModbusTimeoutError } from '../src/errors';
+import { createRetryPolicy, retryModbus, RetryPolicies } from '../src/retry';
+import { createTransportScoped } from '../src/shared-transport';
+import { TcpTransportService } from '../src/TcpTransportService';
 
 const fast = createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
 const timeout = () =>

@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test';
 
 import { Deferred, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef, Tracer } from 'effect';
 
-import { createBatchingRegistry, makeBatchingClient } from './batching-client';
-import { ConnectionState } from './connection';
-import { ModbusConnectionClosedError, ModbusTimeoutError } from './errors';
-import type { SlaveDeviceDefinitions } from './mocks';
-import { createRegisterCache } from './register-cache';
-import { RetryPolicies } from './retry';
-import { RtuTransportService } from './RtuTransportService';
+import { createBatchingRegistry, makeBatchingClient } from '../src/batching-client';
+import { ConnectionState } from '../src/connection';
+import { ModbusConnectionClosedError, ModbusTimeoutError } from '../src/errors';
+import type { SlaveDeviceDefinitions } from '../src/mocks';
+import { createRegisterCache } from '../src/register-cache';
+import { RetryPolicies } from '../src/retry';
+import { RtuTransportService } from '../src/RtuTransportService';
 
 const devices: SlaveDeviceDefinitions = [
   {

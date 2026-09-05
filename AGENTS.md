@@ -12,12 +12,12 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 ## Commands
 
-| Action      | Command                                      |
-| ----------- | -------------------------------------------- |
-| Install     | `bun install`                                |
-| Type-check  | `bun run typecheck`                          |
-| Test        | `bun run test` (create under `**/*.test.ts`) |
-| Run example | `bun run examples/<name>.ts`                 |
+| Action      | Command                               |
+| ----------- | ------------------------------------- |
+| Install     | `bun install`                         |
+| Type-check  | `bun run typecheck`                   |
+| Test        | `bun run test` (create under `test/`) |
+| Run example | `bun run examples/<name>.ts`          |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.
 
@@ -62,6 +62,7 @@ examples/
   tcp-server.ts              — TCP server example
   serial-server.ts           — Serial RTU server example
   wasm/                      — Standalone runnable Vite app exercising the browser transports (own README, own npm project — see below)
+test/                         — Bun tests for the public source modules
 ```
 
 `examples/wasm/` is its own npm project (package.json, tsconfig.json, vite.config.ts) — a real Vite app, not Bun-run `.ts`, since it needs an actual browser bundler to exercise the WASM transports. It links back to this package via `"effect-modbus-rs": "file:../.."`. The root `tsconfig.json` excludes it (`examples/wasm`) since it has its own DOM-aware tsconfig; the root `bun run test`/`typecheck` scripts don't touch it. Run it with `cd examples/wasm && npm install && npm run dev` — see its README for the current known-limitation caveat.

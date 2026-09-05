@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": ["index.ts", "src/**/*.ts", "examples/**/*.ts"],
+  "entry": ["index.ts", "src/**/*.ts", "test/**/*.ts", "examples/**/*.ts"],
   "ignorePatterns": ["node_modules/", "references/", ".opencode/"],
   "duplicates": {
     "minOccurrences": 3,

@@ -2,9 +2,9 @@ import { expect, test } from 'bun:test';
 
 import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
 
-import { ModbusTimeoutError, type ModbusError } from './errors';
-import { createReadDebouncer, type ReadDebouncer } from './read-debouncer';
-import type { ReadSpan } from './register-plan';
+import { ModbusTimeoutError, type ModbusError } from '../src/errors';
+import { createReadDebouncer, type ReadDebouncer } from '../src/read-debouncer';
+import type { ReadSpan } from '../src/register-plan';
 
 /**
  * A device whose register `n` holds `n * 10`, recording every span it is asked
