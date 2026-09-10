@@ -298,6 +298,32 @@ Three things bring the transaction count down, and each is exported on its own:
 
 **A `BatchingModbusClient` is not an `EffectModbusClient`.** It deliberately does not extend `ModbusOperations`: there is no `writeSingleRegister` and no `readHoldingRegisters` on it. For a given unit, choose one holding-register write path for the transport's lifetime. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`; otherwise they could bypass the pending batch and its cache. A raw client for the same unit remains available for exact reads, coils, file records, diagnostics, and the other non-register-write operations. Coils are not covered by batching because the planners pack registers.
 
+Each unit can have a low-level client, a batching client, or both at once. Once a batching client exists for a unit, the low-level client can still read registers, read/write coils, and use diagnostics — but it can no longer write holding registers directly. A direct write is blocked with a typed error, so it cannot slip past the batch or leave the cache out of date. All holding-register writes for that unit must go through the batching client instead.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Registry as Batching registry
+    participant Raw as Low-level client
+    participant Batch as Batching client
+    participant Dev as Device
+
+    App->>Registry: withBatchingClient(unitId)
+    Registry-->>App: BatchingModbusClient
+    Note over Registry: unit now has a batching client
+
+    App->>Raw: writeSingleRegister(unitId, ...)
+    Raw->>Registry: guarded write check
+    Registry-->>Raw: fails: ModbusInvalidArgumentError
+    Note over Raw: reads, coils, diagnostics,\nfile records still work on Raw
+
+    App->>Batch: write(...)
+    Batch->>Registry: enqueue in debouncer
+    Registry->>Dev: flush (via the same underlying client)
+    Dev-->>Registry: ack
+    Registry-->>Batch: resolve
+```
+
 ### Windows
 
 Nothing is debounced unless you ask for it, the same way nothing retries or reconnects unless you ask:
@@ -314,6 +340,35 @@ Effect.gen(function* () {
 ```
 
 A write is held for `window`, and each new arrival restarts it. `maxHold` caps the total hold, so a register that updates faster than the window still reaches the wire — without the ceiling, every arrival would postpone the wait forever. It defaults to four times `window`.
+
+A write does not go to the device right away. It waits in the debouncer for the length of `window`. Each new write to the same address resets that wait, so a burst of updates can still land as one transaction. `maxHold` sets a limit on the total wait, so a register that updates fast still reaches the device on time. When the window ends, or `maxHold` is reached, the debouncer sends the batch and tells every waiting caller the result.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Open: first write arrives\n(opens window, starts maxHold clock)
+    Open --> Open: new write arrives\n(same address is superseded, timer restarts)
+    Open --> Flushing: window elapses, or maxHold reached
+    Flushing --> Idle: batch sent to device,\nall waiting callers resolve
+```
+
+```mermaid
+sequenceDiagram
+    participant A as Caller A
+    participant B as Caller B
+    participant D as Debouncer
+    participant Dev as Device
+
+    A->>D: write(2000, 10)
+    Note over D: batch opens, window timer starts
+    B->>D: write(2001, 20)
+    Note over D: new arrival restarts window\n(unless maxHold is closer)
+    Note over D: window elapses OR maxHold reached
+    D->>Dev: flush (one packed transaction)
+    Dev-->>D: ack / error
+    D-->>A: write() resolves
+    D-->>B: write() resolves
+```
 
 A read window does not restart: it opens on the first arrival and expires on time, which a stream of readers cannot push out. A useful size is on the order of one transaction; measure one on your bus before choosing.
 
