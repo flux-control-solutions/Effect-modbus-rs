@@ -12,12 +12,12 @@ Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs` npm bindi
 
 ## Commands
 
-| Action      | Command                                      |
-| ----------- | -------------------------------------------- |
-| Install     | `bun install`                                |
-| Type-check  | `bun run typecheck`                          |
-| Test        | `bun run test` (create under `**/*.test.ts`) |
-| Run example | `bun run examples/<name>.ts`                 |
+| Action      | Command                               |
+| ----------- | ------------------------------------- |
+| Install     | `bun install`                         |
+| Type-check  | `bun run typecheck`                   |
+| Test        | `bun run test` (create under `test/`) |
+| Run example | `bun run examples/<name>.ts`          |
 
 No build step — `noEmit` is on; Bun runs `.ts` directly.
 
@@ -32,6 +32,12 @@ src/
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
+  register-plan.ts           — planWrites / planReads: pure transaction packing (L0)
+  register-cache.ts          — createRegisterCache: what each device already holds (L1)
+  write-debouncer.ts         — createWriteDebouncer: coalesces writes that arrive separately (L1)
+  read-debouncer.ts          — createReadDebouncer: collects reads that arrive separately (L1)
+  span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
+  batching-client.ts         — BatchingModbusClient + the per-transport registry (L2)
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Context.Service wrapping AsyncAsciiTransport
@@ -50,11 +56,13 @@ examples/
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
   retry-policies.ts          — Retry policies: backoff, jitter, per-error rules
+  batching.ts                — Transaction batching: planners, windows, cache, spans
   tcp-polling-stream.ts      — TCP polling, reconnect, and stream
   tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
   tcp-server.ts              — TCP server example
   serial-server.ts           — Serial RTU server example
   wasm/                      — Standalone runnable Vite app exercising the browser transports (own README, own npm project — see below)
+test/                         — Bun tests for the public source modules
 ```
 
 `examples/wasm/` is its own npm project (package.json, tsconfig.json, vite.config.ts) — a real Vite app, not Bun-run `.ts`, since it needs an actual browser bundler to exercise the WASM transports. It links back to this package via `"effect-modbus-rs": "file:../.."`. The root `tsconfig.json` excludes it (`examples/wasm`) since it has its own DOM-aware tsconfig; the root `bun run test`/`typecheck` scripts don't touch it. Run it with `cd examples/wasm && npm install && npm run dev` — see its README for the current known-limitation caveat.
@@ -69,6 +77,11 @@ examples/
 - **Resilience is transport-owned** — `src/retry.ts` builds error-aware `Schedule`s (exponential + jitter, per-error curves, shared attempt budget); `src/connection.ts` owns the connection state machine, the supervised reconnect, and the circuit breaker. A transport takes `retry` and `reconnect` options and applies them to every client it hands out (`withResilience` in `src/modbus-client.ts`). Overrides at `withClient(unitId, { retry })` and `client.withRetry(policy)` **replace** the policy — never compose — so attempt counts cannot multiply (`clientOptions?.retry ?? transportRetry`; `withRetry` rebuilds from the raw `operations`). `retryModbus(policy)` is the exception and **wraps**: piped around an already-policied client the two nest and multiply (measured 3 × 4 = 12), so it belongs only over a `RetryPolicies.none()` client, driving a compound operation as a unit. Reconnection is never a call-site activity: one supervisor fiber per transport, not one per failing caller (see issue #3 and PR #10's review).
 - **Nothing retries or reconnects implicitly** — both options default to off. Predictable default timing is a deliberate design decision. Jitter, however, is on by default _within_ a policy.
 - **This layer owns retry exclusively** — `modbus-rs`'s transport-level `retryAttempts`/`retryDelayMs`/`retryBackoffStrategy` are stripped from every transport constructor via `WithoutUpstreamRetry<T>` (`src/shared-transport.ts`), surfacing as the exported `RtuTransportOpenOptions`/`AsciiTransportOpenOptions`/`TcpTransportOpenOptions`. They retry beneath the Effect boundary (invisible to the policy, the circuit breaker, and the logs), reconnect inline (racing the supervisor fiber), and multiply attempt counts; `retryBackoffStrategy` is inert upstream regardless. `Omit` fails open, so `src/upstream-options.test.ts` holds compile-time assertions that the keys still exist upstream and are gone from what we expose — if an upstream rename ever voids the `Omit`, `bun run typecheck` fails. Do not re-expose these; the escape hatch is a raw `modbus-rs` client.
+- **Transaction batching is three layers, each usable alone** — `register-plan.ts` is pure (no Effect, no state); `register-cache.ts` / `write-debouncer.ts` / `read-debouncer.ts` are the stateful middle; `batching-client.ts` composes them into `transport.withBatchingClient(unitId, options)`. `withClient` issues the transaction the caller names until batching is selected for that unit. **`BatchingModbusClient` must never extend `ModbusOperations`**: a raw register write goes around the debouncer and the cache, and a held value can then land after a newer one written past it. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit are guarded; raw reads, coils, and other non-register-write operations remain available. Coils are out of batching: the planners pack registers.
+- **Debouncing is opt-in, like retry and reconnect** — both windows default to zero, and a zero window is a real bypass rather than a zero sleep, so a harness that settles by yielding rather than by advancing a clock still reaches a flush. `writeAll` / `readAll` plan without a window, since a caller holding a group needs a planner and not a collection point.
+- **The write cache belongs to the transport, and watches `connectionState`** — it is a belief about a physical device and there is one physical device, so two caches on one unit disagree. It invalidates a unit after a failed write and everything when the link leaves `Connected`. Cache and watcher are both created on first `withBatchingClient` call, so a transport nobody batches on carries neither. It compares in the encoding that reaches the wire (`encodeRegisterValue`): `-1` and `65535` are the same register contents, and a comparison that says otherwise rewrites forever.
+- **A batching client is cached per unit ID and its options are fixed by the first call** — two batching clients on one unit hold two batches and coalesce neither. A second call with a different configuration fails with `ModbusInvalidArgumentError` rather than quietly handing back something else.
+- **`modbus.write` opens after the cache filter, and only when a write survives it** — the span records what reached the bus, not what a caller proposed. Caller attributes are opaque and applied first; the `modbus.*` keys are applied last and win a collision. A repeated key across a batch is joined with a comma (`mergeSpanAttributes`), because a batch carries several callers' vocabulary and none of them should silently lose.
 - **`makeMockTransport`** — each service has a static `makeMockTransport(devices)` that returns a `Layer` using an in-memory mock. Takes `SlaveDeviceDefinitions` (array of `SlaveDeviceDefinition` with Schema-validated coils, discrete inputs, holding/input registers per unitId).
 
 ## Conventions

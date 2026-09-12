@@ -19,7 +19,7 @@ import {
   ModbusInvalidArgumentError,
   ModbusTimeoutError,
 } from '../src/errors';
-import { makeRetryPolicy, retryModbus, RetryPolicies } from '../src/retry';
+import { createRetryPolicy, retryModbus, RetryPolicies } from '../src/retry';
 import { TcpTransportService } from '../src/TcpTransportService';
 
 const devices = [
@@ -155,7 +155,7 @@ const program = Effect.gen(function* () {
     const current = yield* raw.readHoldingRegisters({ address: 0, quantity: 1 });
     yield* raw.writeSingleRegister({ address: 0, value: (current[0] ?? 0) + 1 });
   }).pipe(
-    retryModbus(makeRetryPolicy({ maxRetries: 3, baseDelay: '50 millis' })),
+    retryModbus(createRetryPolicy({ maxRetries: 3, baseDelay: '50 millis' })),
     Effect.andThen(log('transaction committed')),
   );
 

@@ -36,7 +36,7 @@ export const serialRtuServerLayer = (
       const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindRtu(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug(`Serial RTU server bound to ${options.portPath}`);
@@ -46,7 +46,8 @@ export const serialRtuServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),
@@ -87,7 +88,7 @@ export const serialAsciiServerLayer = (
       const { AsyncSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncSerialModbusServer.bindAscii(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug(`Serial ASCII server bound to ${options.portPath}`);
@@ -97,7 +98,8 @@ export const serialAsciiServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),

@@ -47,7 +47,7 @@ export const wasmWsServerLayer = (
       const { WasmWsModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmWsModbusServer.bind(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug(`WASM WS server bound to ${options.wsUrl}`);
@@ -55,7 +55,8 @@ export const wasmWsServerLayer = (
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: () => server.serve(),
-          catch: (error) => toModbusError(error as Error),
+          catch: (error) =>
+            toModbusError(error instanceof Error ? error : new Error(String(error))),
         }).pipe(Effect.catch((error) => Effect.logError('WASM WS server loop ended', error))),
       );
 
@@ -64,7 +65,8 @@ export const wasmWsServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),

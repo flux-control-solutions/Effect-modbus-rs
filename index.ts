@@ -34,6 +34,55 @@
  * - {@link wasmWsServerLayer} — Browser WS-gateway server (experimental upstream surface).
  * - {@link wasmSerialRtuServerLayer} / {@link wasmSerialAsciiServerLayer} — Browser Web Serial servers (experimental).
  *
+ * ## Transaction batching
+ *
+ * A caller that derives each register independently produces one transaction per
+ * register, which is the dominant cost on a half-duplex bus. Three pieces bring
+ * that count down, and each one is usable without the others.
+ *
+ * {@link planWrites} and {@link planReads} pack neighbouring addresses into the
+ * fewest transactions that cover them. They hold no state and run no I/O:
+ *
+ * ```ts
+ * planWrites([{ address: 2000, value: 10 }, { address: 2001, value: 20 }]);
+ * // [{ kind: "multiple", address: 2000, values: Uint16Array [10, 20] }]
+ * ```
+ *
+ * A planner only packs what a caller holds at one moment, and a caller with one
+ * fiber per register never holds two values at once. {@link createWriteDebouncer}
+ * and {@link createReadDebouncer} are the collection point that gives a planner
+ * something to pack, holding an operation for a window so the ones that arrive
+ * near it travel with it. Each caller still awaits its own operation.
+ *
+ * {@link createRegisterCache} drops a write whose value the device already holds.
+ * It records only what this process wrote, so it never answers a read.
+ *
+ * `transport.withBatchingClient(unitId, options)` puts the three together. It is
+ * the sibling of `withClient`, not a replacement for it: `withClient` issues the
+ * transaction a caller names, and a batching client decides the transactions for
+ * a caller that names registers instead.
+ *
+ * ```ts
+ * const client = yield* transport.withClient(3);            // exact read
+ * yield* client.readHoldingRegisters({ address: 2000, quantity: 2 });
+ *
+ * const batched = yield* transport.withBatchingClient(3, {  // decides the transactions
+ *   debounce: { writes: { window: "250 millis", maxHold: "1 second" } },
+ * });
+ * yield* batched.write({ address: 2000, value: 512 });
+ * yield* batched.readAll([0x0000, 0x0001, 0x0020]);
+ * ```
+ *
+ * A {@link BatchingModbusClient} deliberately does not extend
+ * {@link ModbusOperations}: a raw write on the same object would go around the
+ * cache and around the batch. Once a batching client exists for a unit, raw
+ * FC06, FC16, and FC23 operations on that unit fail. The raw client remains
+ * available for exact reads, coils, and other non-register-write operations.
+ *
+ * Nothing is debounced unless `debounce` asks for it, matching the rest of this
+ * package. `writeAll` and `readAll` still plan, so a caller that holds a group of
+ * registers gets packed transactions with no window at all.
+ *
  * ## Errors
  *
  * All Modbus operations fail with a {@link ModbusError} discriminated union.
@@ -96,7 +145,12 @@
 
 export * from './src/errors';
 export type { EffectModbusClient } from './src/modbus-client';
-export { makeRetryPolicy, retryableExceptionCodes, RetryPolicies, retryModbus } from './src/retry';
+export {
+  createRetryPolicy,
+  retryableExceptionCodes,
+  RetryPolicies,
+  retryModbus,
+} from './src/retry';
 export type {
   ModbusErrorTag,
   ModbusRetryPolicy,
@@ -112,6 +166,41 @@ export type {
   WithoutUpstreamRetry,
 } from './src/shared-transport';
 export type { ModbusOperations } from './src/modbus-client';
+export {
+  encodeRegisterValue,
+  MODBUS_MAX_READ_REGISTERS,
+  MODBUS_MAX_WRITE_REGISTERS,
+  planReads,
+  planWrites,
+} from './src/register-plan';
+export type {
+  MultipleWriteStep,
+  PlanReadsOptions,
+  PlanWritesOptions,
+  ReadLocation,
+  ReadPlan,
+  ReadSpan,
+  RegisterWrite,
+  SingleWriteStep,
+  WritePlanStep,
+} from './src/register-plan';
+export { createRegisterCache } from './src/register-cache';
+export type { RegisterCache, RegisterCacheFilter } from './src/register-cache';
+export { createWriteDebouncer } from './src/write-debouncer';
+export type { DebouncedWrite, WriteDebouncer, WriteDebouncerOptions } from './src/write-debouncer';
+export { createReadDebouncer } from './src/read-debouncer';
+export type { ReadDebouncer, ReadDebouncerOptions } from './src/read-debouncer';
+export { makeBatchingClient, createBatchingRegistry } from './src/batching-client';
+export type {
+  BatchingClientOptions,
+  BatchingDebounceOptions,
+  BatchingModbusClient,
+  BatchingRegistry,
+  BatchingRegistryDeps,
+  BatchingRegisterReader,
+} from './src/batching-client';
+export { mergeSpanAttributes } from './src/span-attributes';
+export type { ModbusSpanAttributes } from './src/span-attributes';
 export { AsciiTransportService } from './src/AsciiTransportService';
 export type { AsciiTransportOpenOptions } from './src/AsciiTransportService';
 export { SerialTransportService } from './src/SerialTransportService';

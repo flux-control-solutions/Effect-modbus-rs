@@ -40,7 +40,7 @@ export const tcpServerLayer = (
       const { AsyncTcpModbusServer } = yield* Effect.promise(() => import('modbus-rs'));
       const server = yield* Effect.tryPromise({
         try: () => AsyncTcpModbusServer.bind(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug(`TCP server bound to ${options.host}:${options.port}`);
@@ -50,7 +50,8 @@ export const tcpServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),

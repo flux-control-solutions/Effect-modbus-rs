@@ -3,8 +3,8 @@ import { test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { CoilState } from 'modbus-rs';
 
-import { ModbusInvalidArgumentError } from './errors';
-import { RtuTransportService } from './RtuTransportService';
+import { ModbusInvalidArgumentError } from '../src/errors';
+import { RtuTransportService } from '../src/RtuTransportService';
 
 const device = {
   unitId: 1,

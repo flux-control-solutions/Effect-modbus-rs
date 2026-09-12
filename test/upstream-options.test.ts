@@ -2,10 +2,10 @@ import { test, expect } from 'bun:test';
 
 import type { AsciiTransportOptions, RtuTransportOptions, TcpTransportOptions } from 'modbus-rs';
 
-import type { AsciiTransportOpenOptions } from './AsciiTransportService';
-import type { RtuTransportOpenOptions } from './RtuTransportService';
-import type { UpstreamRetryOptionKey } from './shared-transport';
-import type { TcpTransportOpenOptions } from './TcpTransportService';
+import type { AsciiTransportOpenOptions } from '../src/AsciiTransportService';
+import type { RtuTransportOpenOptions } from '../src/RtuTransportService';
+import type { UpstreamRetryOptionKey } from '../src/shared-transport';
+import type { TcpTransportOpenOptions } from '../src/TcpTransportService';
 
 // ---------------------------------------------------------------------------
 // The retry knobs are withheld with `Omit`, which fails open: if upstream

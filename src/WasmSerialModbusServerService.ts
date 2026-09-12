@@ -50,7 +50,7 @@ export const wasmSerialRtuServerLayer = (
       const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmSerialModbusServer.bindRtu(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug('WASM serial RTU server bound');
@@ -58,7 +58,8 @@ export const wasmSerialRtuServerLayer = (
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: () => server.serve(),
-          catch: (error) => toModbusError(error as Error),
+          catch: (error) =>
+            toModbusError(error instanceof Error ? error : new Error(String(error))),
         }).pipe(
           Effect.catch((error) => Effect.logError('WASM serial RTU server loop ended', error)),
         ),
@@ -69,7 +70,8 @@ export const wasmSerialRtuServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),
@@ -99,7 +101,7 @@ export const wasmSerialAsciiServerLayer = (
       const { WasmSerialModbusServer } = yield* Effect.promise(() => import('modbus-rs/web'));
       const server = yield* Effect.tryPromise({
         try: () => WasmSerialModbusServer.bindAscii(options, handlers),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug('WASM serial ASCII server bound');
@@ -107,7 +109,8 @@ export const wasmSerialAsciiServerLayer = (
       yield* Effect.forkScoped(
         Effect.tryPromise({
           try: () => server.serve(),
-          catch: (error) => toModbusError(error as Error),
+          catch: (error) =>
+            toModbusError(error instanceof Error ? error : new Error(String(error))),
         }).pipe(
           Effect.catch((error) => Effect.logError('WASM serial ASCII server loop ended', error)),
         ),
@@ -118,7 +121,8 @@ export const wasmSerialAsciiServerLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => server.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),

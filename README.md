@@ -43,7 +43,7 @@ program.pipe(
     ModbusExceptionError: (err) => Console.log(`Modbus exception ${err.exception}: ${err.message}`),
     ModbusInvalidArgumentError: (err) => Console.log(`Invalid argument: ${err.message}`),
   }),
-  Effect.catchAll((err) => Console.log(`Unhandled error: ${err.message}`)),
+  Effect.catch((err) => Console.log(`Unhandled error: ${err.message}`)),
   Effect.provide(RtuTransportService.make({ portPath: '/dev/ttyUSB0', baudRate: 9600 })),
   Effect.scoped,
   Effect.runPromise,
@@ -254,6 +254,283 @@ See [Testing with mocks](#testing-with-mocks) for the `fault` hook and the `reco
 | `writeFileRecord({ requests })`                            | `void`                         |
 | `readDeviceIdentification({ readDeviceIdCode, objectId })` | `DeviceIdentificationResponse` |
 
+## Transaction batching
+
+`withClient` issues exactly the transaction you name, and stays the right client when you know what the bus should carry. `withBatchingClient` is its sibling for the other case — code with one accessor per register, which knows what it wants to read and write but not what that ought to cost.
+
+```ts
+Effect.gen(function* () {
+  const client = yield* transport.withClient(3); // exact read
+  yield* client.readHoldingRegisters({ address: 2000, quantity: 2 });
+
+  const batched = yield* transport.withBatchingClient(3); // decides the transactions
+  yield* batched.writeAll([
+    { address: 2000, value: 512 },
+    { address: 2001, value: 256 },
+  ]); // one FC16
+  yield* batched.readAll([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]); // two FC03
+});
+```
+
+Three things bring the transaction count down, and each is exported on its own:
+
+| Piece                                          | What it does                                                                        |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `planWrites` / `planReads`                     | Pack neighbouring addresses into the fewest transactions. Pure, no state, no I/O.   |
+| `createWriteDebouncer` / `createReadDebouncer` | Collect operations that arrive near each other, so a planner has something to pack. |
+| `createRegisterCache`                          | Drop a write whose value the device already holds.                                  |
+
+### Batching client API
+
+| Method                              | Function code | Notes                                                      |
+| ----------------------------------- | ------------- | ---------------------------------------------------------- |
+| `write({ address, value })`         | FC06 / FC16   | Held for the write window, if one is configured.           |
+| `writeNow({ address, value })`      | FC06 / FC16   | Enqueue with supersede, then flush and join. Newest wins.  |
+| `writeAll(writes)`                  | FC06 / FC16   | One caller, one group, planned together.                   |
+| `writeAllNow(writes)`               | FC06 / FC16   | The same, issued immediately.                              |
+| `read(address)`                     | FC03          | Collected for the read window, if one is configured.       |
+| `readNow(address)`                  | FC03          | Immediate, and answers every reader already collected.     |
+| `readAll(addresses)`                | FC03          | One caller, planned into spans, values in the order asked. |
+| `readAllNow(addresses)`             | FC03          | The same, issued immediately.                              |
+| `inputs.read` … `inputs.readAllNow` | FC04          | The same four reads over the input registers.              |
+| `flush`                             | —             | Issue everything pending, now. Never fails.                |
+| `cache`                             | —             | The cache this client filters against, or `undefined`.     |
+
+**A `BatchingModbusClient` is not an `EffectModbusClient`.** It deliberately does not extend `ModbusOperations`: there is no `writeSingleRegister` and no `readHoldingRegisters` on it. For a given unit, choose one holding-register write path for the transport's lifetime. Once a batching client exists, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`; otherwise they could bypass the pending batch and its cache. A raw client for the same unit remains available for exact reads, coils, file records, diagnostics, and the other non-register-write operations. Coils are not covered by batching because the planners pack registers.
+
+Each unit can have a low-level client, a batching client, or both at once. Once a batching client exists for a unit, the low-level client can still read registers, read/write coils, and use diagnostics — but it can no longer write holding registers directly. A direct write is blocked with a typed error, so it cannot slip past the batch or leave the cache out of date. All holding-register writes for that unit must go through the batching client instead.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Registry as Batching registry
+    participant Raw as Low-level client
+    participant Batch as Batching client
+    participant Dev as Device
+
+    App->>Registry: withBatchingClient(unitId)
+    Registry-->>App: BatchingModbusClient
+    Note over Registry: unit now has a batching client
+
+    App->>Raw: writeSingleRegister(unitId, ...)
+    Raw->>Registry: guarded write check
+    Registry-->>Raw: fails: ModbusInvalidArgumentError
+    Note over Raw: reads, coils, diagnostics,\nfile records still work on Raw
+
+    App->>Batch: write(...)
+    Batch->>Registry: enqueue in debouncer
+    Registry->>Dev: flush (via the same underlying client)
+    Dev-->>Registry: ack
+    Registry-->>Batch: resolve
+```
+
+### Windows
+
+Nothing is debounced unless you ask for it, the same way nothing retries or reconnects unless you ask:
+
+```ts
+Effect.gen(function* () {
+  const batched = yield* transport.withBatchingClient(3, {
+    debounce: {
+      writes: { window: '250 millis', maxHold: '1 second' },
+      reads: { window: '5 millis' },
+    },
+  });
+});
+```
+
+A write is held for `window`, and each new arrival restarts it. `maxHold` caps the total hold, so a register that updates faster than the window still reaches the wire — without the ceiling, every arrival would postpone the wait forever. It defaults to four times `window`.
+
+A write does not go to the device right away. It waits in the debouncer for the length of `window`. Each new write to the same address resets that wait, so a burst of updates can still land as one transaction. `maxHold` sets a limit on the total wait, so a register that updates fast still reaches the device on time. When the window ends, or `maxHold` is reached, the debouncer sends the batch and tells every waiting caller the result.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Open: first write arrives\n(opens window, starts maxHold clock)
+    Open --> Open: new write arrives\n(same address is superseded, timer restarts)
+    Open --> Flushing: window elapses, or maxHold reached
+    Flushing --> Idle: batch sent to device,\nall waiting callers resolve
+```
+
+```mermaid
+sequenceDiagram
+    participant A as Caller A
+    participant B as Caller B
+    participant D as Debouncer
+    participant Dev as Device
+
+    A->>D: write(2000, 10)
+    Note over D: batch opens, window timer starts
+    B->>D: write(2001, 20)
+    Note over D: new arrival restarts window\n(unless maxHold is closer)
+    Note over D: window elapses OR maxHold reached
+    D->>Dev: flush (one packed transaction)
+    Dev-->>D: ack / error
+    D-->>A: write() resolves
+    D-->>B: write() resolves
+```
+
+A read window does not restart: it opens on the first arrival and expires on time, which a stream of readers cannot push out. A useful size is on the order of one transaction; measure one on your bus before choosing.
+
+`writeAll` and `readAll` plan whatever they are given, so code that already holds a group of registers needs no window at all.
+
+### The cache
+
+The cache records what this process wrote, keyed by unit and address. It is not a read cache and never answers a read. One cache serves every device on a transport, because a cache is a belief about a physical device and two caches on one unit disagree.
+
+It is emptied for a unit after a failed write, and emptied entirely when the link is lost — a device that power-cycles comes back holding something else. An invalidation that lands while a write is still on the wire wins over the observation that follows it, so losing the link cannot be undone by a write that was already in flight. Pass `cache: false` to write every value, or pass your own `RegisterCache` to share one.
+
+Suppressing a write is not always cheaper. Dropping one address out of the middle of a contiguous run splits that run into one FC06 per register, so a cache meant to save turnarounds can spend them instead. Each batch is therefore planned both ways — filtered, and whole — and the plan with fewer transactions wins, with a tie going to the filtered one because its frames are shorter. Keeping a run whole rewrites a register with the value the cache believes it already holds, and never sends more than `cache: false` would have. If you need a register left alone rather than rewritten, use `withClient`: it issues exactly the transaction you name.
+
+The cache and the fiber that watches the link are created on first use, so a transport nobody batches on carries neither.
+
+### Declaring a unit, and reaching for it
+
+Every option a batching client takes is a fact about the unit, not about a caller. One unit holds one batch, one belief about what the device contains, and one window — so two callers can only ever configure a unit correctly by passing identical options. Rather than compare them, the two operations are separate:
+
+```ts
+const damper =
+  yield * transport.withBatchingClient(3, { debounce: { writes: { window: '50 millis' } } });
+const same = yield * transport.batchingClient(3); // elsewhere, no options to restate
+```
+
+`withBatchingClient` declares. Declaring a unit twice fails with `ModbusInvalidArgumentError`, whatever the second call asks for. `batchingClient` looks up, and fails the same way when nothing has declared that unit. A lookup that arrives while a declaration is still in flight waits for it, so neither call has to know which one ran first.
+
+### Shutdown
+
+```ts
+Effect.gen(function* () {
+  const damper = yield* transport.withBatchingClient(3);
+  yield* damper.onShutdown(damper.writeAllNow([{ address: 2000, value: 0 }]));
+
+  const motor = yield* transport.withBatchingClient(7);
+  yield* motor.onShutdown(motor.writeNow({ address: 40, value: MOTOR_STOP }));
+});
+```
+
+A safe state is the device's own answer — zero volts for one, a stopped motor for
+another — so it is stated on the client that addresses the device. A unit whose
+client registers nothing is left alone. The action runs when the calling scope
+closes, while the transport is still open, and before the client is torn down.
+
+A failure is logged and raised as a defect. The other actions in the scope still
+run, so a device that cannot be reached does not cost the rest of the bus its
+turn. Wrap the action in `Effect.ignoreLogged` to accept the failure instead.
+
+`transport.touchedUnits` reports which units a client was built for. That is
+transport-wide diagnostic state, not device ownership, and it is not the input to
+a shutdown policy.
+
+### Spans
+
+A batching client opens `modbus.write` and `modbus.read` spans, carrying:
+
+| Attribute                  | Content                     |
+| -------------------------- | --------------------------- |
+| `modbus.unit_ids`          | The units the batch reached |
+| `modbus.register_count`    | Registers written or read   |
+| `modbus.suppressed_count`  | Writes the cache removed    |
+| `modbus.transaction_count` | Transactions issued         |
+
+The write span opens _after_ the cache filter, and only when a write survives it, so it records what reached the bus rather than what was proposed. Only the callers whose values are in the transaction contribute their vocabulary to it — a suppressed caller does not name itself on a frame that did not carry its value. Attach your own vocabulary as a second argument:
+
+```ts
+Effect.gen(function* () {
+  yield* batched.write({ address: 2000, value: 512 }, { 'app.point': 'Supply fan' });
+});
+```
+
+Your keys are opaque to this package and are applied first; the `modbus.*` keys are applied last and win a collision, so a caller cannot overwrite the record of what the library wrote. When a batch carries several callers' worth of vocabulary, values for a repeated key are joined with a comma rather than one silently winning.
+
+### Using the layers directly
+
+The batching client is a composition, not a wall. Each layer is exported, and each works without the layer above it.
+
+#### The planners
+
+Pure — no Effect, no state, no I/O. Use them when you own your own scheduling and only want the packing.
+
+```ts
+import { planReads, planWrites } from '@flux-control/effect-modbus-rs';
+
+planWrites([
+  { address: 2003, value: 40 },
+  { address: 2000, value: 10 },
+  { address: 2010, value: 99 },
+  { address: 2001, value: 20 },
+  { address: 2002, value: 30 },
+]);
+// [
+//   { kind: "multiple", address: 2000, values: Uint16Array [10, 20, 30, 40] },
+//   { kind: "single",   address: 2010, value: 99 },
+// ]
+
+const plan = planReads([0x0000, 0x0001, 0x0002, 0x0020, 0x0021]);
+plan.spans; // [{ address: 0, quantity: 3 }, { address: 32, quantity: 2 }]
+plan.locate(0x0021); // { span: 1, offset: 1 } — index back into the responses
+plan.locate(0x0010); // undefined
+```
+
+Each step maps onto exactly one client call: `single` onto `writeSingleRegister`, `multiple` onto `writeMultipleRegisters`. `locate` answers for every address a span covers, so you issue the spans, keep the responses in order, and read each value out without tracking the grouping yourself.
+
+`planWrites(writes, options?)`:
+
+| Option                 | Default                            | What it does                                                                    |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------- |
+| `maxRegistersPerWrite` | `MODBUS_MAX_WRITE_REGISTERS` (123) | Registers one FC16 may carry. A longer run splits into consecutive steps.       |
+| `minRunLength`         | `2`                                | Shortest run that becomes FC16. Anything shorter becomes one FC06 per register. |
+
+`planReads(addresses, options?)`:
+
+| Option                | Default                           | What it does                                                  |
+| --------------------- | --------------------------------- | ------------------------------------------------------------- |
+| `maxRegistersPerRead` | `MODBUS_MAX_READ_REGISTERS` (125) | Registers one read may return. A span never grows past this.  |
+| `maxGap`              | `0`                               | Unrequested registers the planner may read to join two spans. |
+
+Both constants are the specification's limits, and both are exported. Many devices stop short of them — pass the device's own number when it does.
+
+> **Raising `maxGap` can take healthy registers down with it.** A gap may cover an address the device does not implement. That span then fails with `ILLEGAL_DATA_ADDRESS`, and every address in it fails, including the ones that would have answered. Raise it only against a register map that says the gap is readable.
+
+Both planners throw `RangeError` for an address, a value, or an option that is out of range, since those are programming errors rather than bus conditions. `encodeRegisterValue` is exported for the same reason the planners use it: `-1` and `65535` are the same register contents, so anything comparing a proposed value against a device value has to encode first or it will rewrite the register forever.
+
+#### The debouncers and the cache
+
+Stateful, scoped, and driven by callbacks you supply — use these to batch over a client this package did not hand out.
+
+```ts
+Effect.gen(function* () {
+  const writes = yield* createWriteDebouncer({
+    window: '250 millis',
+    maxHold: '1 second',
+    flush: (batch) => issueHowever(batch), // yours: cache, plan, span, write
+  });
+
+  // Two callers that never meet, one transaction:
+  yield* Effect.all(
+    [writes.write({ address: 2000, value: 10 }), writes.write({ address: 2001, value: 20 })],
+    {
+      concurrency: 'unbounded',
+    },
+  );
+});
+```
+
+`createWriteDebouncer` takes `window`, an optional `maxHold` (four times `window` by default), and `flush`. It returns `write` / `writeNow` / `writeAll` / `writeAllNow`, a `flush` you can force, and a `pending` count for tests.
+
+`createReadDebouncer` takes `window`, an optional `plan` (the `planReads` options), and `fetch`, which must return one response per span. Its callback owns the function code, so reading input registers rather than holding registers means a second debouncer. It returns `read` / `readNow` / `readAll` / `readAllNow`, plus `flush` and `pending`.
+
+Both take a `Scope` and flush in it rather than in the caller's, so a caller interrupted mid-wait cannot take the pending batch down with it. When that scope closes, callers still waiting are interrupted — their operations never reached the device, and reporting success would break the invariant the `Deferred` exists to hold.
+
+`createRegisterCache` returns `filter(unitId, writes)`, `observe(unitId, address, value)`, and `invalidate(unitId?)`. Call `observe` only after the device acknowledged the write: a value recorded early suppresses the retry that would have fixed it.
+
+#### Composing them yourself
+
+`makeBatchingClient({ unitId, client, cache, debounce, plan })` builds a `BatchingModbusClient` over any `EffectModbusClient`, which is the escape hatch when you are driving an Effect-wrapped client this package did not hand out, or a stub implementing that interface. A raw promise-based `modbus-rs` client is not accepted directly.
+
+`createBatchingRegistry(deps)` is one level below that: it is what `withBatchingClient` and `batchingClient` are made of, including the per-unit declarations and the fiber that watches the link. You need it only if you are writing a transport of your own; both this package's transports and its mock use it. A custom transport must pass each public raw client through `registry.guardRawWrites(unitId, client)` so selecting batching also enforces the one-register-write-path rule.
+
+`mergeSpanAttributes(sources)` is the join rule described under [Spans](#spans), exported so a custom `flush` can apply the same one.
+
 ## Error handling
 
 Errors from the underlying Rust layer are mapped to typed `Effect` errors via `Data.TaggedError`:
@@ -287,8 +564,10 @@ const layer = TcpTransportService.make({
 });
 
 // call sites never mention retries
-const client = yield * transport.withClient(1);
-yield * client.readHoldingRegisters({ address: 0, quantity: 10 });
+Effect.gen(function* () {
+  const client = yield* transport.withClient(1);
+  yield* client.readHoldingRegisters({ address: 0, quantity: 10 });
+});
 ```
 
 With neither option set, a transport behaves exactly as it always has: one attempt per operation, reconnection only when you ask for it.
@@ -313,16 +592,18 @@ RetryPolicies.serial({
 });
 ```
 
-`makeRetryPolicy(options)` builds one from scratch with the same options.
+`createRetryPolicy(options)` builds one from scratch with the same options.
 
 ### Overriding per client and per operation
 
 One bus often hosts device types that need different logic. A per-client policy **replaces** the transport's, so overrides can never multiply attempt counts:
 
 ```ts
-const meter = yield * transport.withClient(1, { retry: RetryPolicies.serial() });
-const plc = yield * transport.withClient(2, { retry: RetryPolicies.serial({ maxRetries: 8 }) });
-const legacy = yield * transport.withClient(3, { retry: RetryPolicies.none() });
+Effect.gen(function* () {
+  const meter = yield* transport.withClient(1, { retry: RetryPolicies.serial() });
+  const plc = yield* transport.withClient(2, { retry: RetryPolicies.serial({ maxRetries: 8 }) });
+  const legacy = yield* transport.withClient(3, { retry: RetryPolicies.none() });
+});
 ```
 
 Clients built for the same unit ID under different policies share one underlying connection.
@@ -330,7 +611,9 @@ Clients built for the same unit ID under different policies share one underlying
 `client.withRetry(policy)` does the same for a single operation:
 
 ```ts
-yield * client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+Effect.gen(function* () {
+  yield* client.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
+});
 ```
 
 Resolution order is **per-operation → per-client → transport → none**. First match wins; the others are discarded, not combined.
@@ -378,7 +661,7 @@ Any of these can be switched off (`errors: { ModbusTimeoutError: false }`), swit
 
 Delays follow `min(maxDelay, baseDelay × factor ** retryIndex)`, then get jittered.
 
-**Jitter is on by default** — for `makeRetryPolicy()` and for every template, none of which opts out. Each delay is multiplied by a random factor so a fleet of pollers does not re-hit a recovering device in lockstep:
+**Jitter is on by default** — for `createRetryPolicy()` and for every template, none of which opts out. Each delay is multiplied by a random factor so a fleet of pollers does not re-hit a recovering device in lockstep:
 
 | `jitter`                     | Delay                                                    |
 | ---------------------------- | -------------------------------------------------------- |
@@ -406,20 +689,26 @@ TcpTransportService.make({
 
 While the link is being re-established, operations are refused with `ModbusCircuitOpenError` instead of queueing requests onto a dead bus. Because that error is retryable by default and costs nothing on the wire, a polling loop with a generous policy simply rides out the outage; one with a short budget fails fast and lets the caller decide.
 
+Without `reconnect`, a connection-level failure still publishes `Down`, but no
+supervisor starts and no circuit breaker is enabled. Call `transport.reconnect()`
+to recover manually. A later successful operation also restores `Connected`, so
+a transient failure recovered by an operation retry does not leave stale state.
+
 State transitions are published on `transport.connectionState`:
 
-| State          | Meaning                                                                                |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `Disconnected` | Never opened, or closed. The next operation opens it lazily.                           |
-| `Connected`    | Usable.                                                                                |
-| `Reconnecting` | Supervisor is re-establishing the link. Operations refused.                            |
-| `Down`         | Attempts exhausted; waiting out `resetAfter` before probing again. Operations refused. |
+| State          | Meaning                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `Disconnected` | Never opened, or closed. The next operation opens it lazily.                                  |
+| `Connected`    | Usable.                                                                                       |
+| `Reconnecting` | Supervisor is re-establishing the link. Operations refused.                                   |
+| `Down`         | Link failure observed. A configured supervisor waits to probe; manual mode remains unguarded. |
 
 ```ts
-yield *
-  Stream.runForEach(transport.connectionState.changes, (state) =>
+Effect.gen(function* () {
+  yield* Stream.runForEach(SubscriptionRef.changes(transport.connectionState), (state) =>
     Console.log(`link: ${state._tag}`),
   );
+});
 ```
 
 ### Retrying a transaction
@@ -427,13 +716,14 @@ yield *
 `retryModbus(policy)` remains exported for the one case the transport cannot express: driving a **compound** operation as a unit, where retrying individual frames would be wrong.
 
 ```ts
-const client = yield * transport.withClient(1, { retry: RetryPolicies.none() });
+Effect.gen(function* () {
+  const client = yield* transport.withClient(1, { retry: RetryPolicies.none() });
 
-yield *
-  Effect.gen(function* () {
+  yield* Effect.gen(function* () {
     const current = yield* client.readHoldingRegisters({ address: 0, quantity: 2 });
     yield* client.writeMultipleRegisters({ address: 0, values: bump(current) });
   }).pipe(retryModbus(RetryPolicies.tcp()));
+});
 ```
 
 Take a `RetryPolicies.none()` client first. Unlike `withClient({ retry })` and `client.withRetry()`, which replace the policy in force, `retryModbus` wraps whatever the client is already doing — so over a policied client the two nest and the attempt counts multiply. See [Replacing vs. wrapping](#replacing-vs-wrapping).
@@ -568,6 +858,12 @@ src/
   connection.ts              — Connection state machine, reconnect supervisor, circuit breaker
   retry.ts                   — Opt-in retry policies (backoff, jitter, per-error rules)
   shared-transport.ts        — Generic scoped transport lifecycle management, WithoutUpstreamRetry
+  register-plan.ts           — planWrites / planReads: pure transaction packing
+  register-cache.ts          — createRegisterCache: what each device already holds
+  write-debouncer.ts         — createWriteDebouncer: coalesces writes that arrive separately
+  read-debouncer.ts          — createReadDebouncer: collects reads that arrive separately
+  batching-client.ts         — the batching client and the per-transport registry
+  span-attributes.ts         — ModbusSpanAttributes and the merge rule for a batch
   RtuTransportService.ts     — Scoped Context.Service wrapping AsyncRtuTransport
   TcpTransportService.ts     — Scoped Context.Service wrapping AsyncTcpTransport
   AsciiTransportService.ts   — Scoped Context.Service wrapping AsyncAsciiTransport
@@ -591,6 +887,7 @@ examples/
   tcp-mock.ts                — TCP with in-memory mock (multi-device)
   ascii-mock.ts              — ASCII with in-memory mock (error-case)
   retry-policies.ts          — Transport-owned resilience: policies, overrides, transactions
+  batching.ts                — Transaction batching: planners, cache, windows, spans
   tcp-polling-stream.ts      — TCP polling, reconnect, and stream
   tcp-finalizer-reset.ts     — TCP scope finalizer reset demo
   tcp-server.ts              — TCP server example

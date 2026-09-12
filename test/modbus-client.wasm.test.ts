@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { CoilState } from 'modbus-rs';
 import init, { type WasmWsModbusClient } from 'modbus-rs/web';
 
-import { makeEffectModbusClient } from './modbus-client';
+import { createEffectModbusClient } from '../src/modbus-client';
 
 /**
  * `WasmWsModbusClient`/`WasmSerialModbusClient` have private constructors (only
@@ -13,14 +13,25 @@ import { makeEffectModbusClient } from './modbus-client';
  * test. What's no longer necessary is guessing at its resolved shapes: the upstream
  * `modbus-rs-wasm` publish now declares (and, per the `init()` call below, actually loads)
  * a WASM client whose method surface is identical to the native client's — `CoilState[]`,
- * full `FifoQueueResponse`, full `DeviceIdentificationResponse` — so `makeEffectModbusClient`
+ * full `FifoQueueResponse`, full `DeviceIdentificationResponse` — so `createEffectModbusClient`
  * handles both transports as a pure pass-through, and this fake mirrors real shapes rather
  * than working around assumed-broken ones. If upstream regresses (or this stops matching
  * it), the `init()` assertion or the shapes below will be the first thing to fail.
  */
 await init();
 
+const unused = async (): Promise<never> => {
+  throw new Error('unexpected fake client method');
+};
+
 const fakeClient = {
+  pendingRequests: false,
+  isConnected: () => true,
+  readHoldingRegisters: unused,
+  readInputRegisters: unused,
+  writeSingleRegister: unused,
+  writeMultipleRegisters: unused,
+  readWriteMultipleRegisters: unused,
   readCoils: async () => [CoilState.On, CoilState.Off],
   readDiscreteInputs: async () => [CoilState.Off, CoilState.On],
   writeSingleCoil: async () => undefined,
@@ -32,9 +43,14 @@ const fakeClient = {
     nextObjectId: 0,
     objects: [{ id: 0, value: 'Acme' }],
   }),
-} as unknown as WasmWsModbusClient;
+  readFileRecord: unused,
+  writeFileRecord: unused,
+  maskWriteRegister: unused,
+  readExceptionStatus: unused,
+  diagnostics: unused,
+} satisfies WasmWsModbusClient;
 
-const client = makeEffectModbusClient(fakeClient);
+const client = createEffectModbusClient(fakeClient);
 
 test('readCoils passes CoilState[] straight through', async () => {
   const result = await Effect.runPromise(client.readCoils({ address: 0, quantity: 2 }));

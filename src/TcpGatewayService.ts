@@ -51,7 +51,7 @@ export const tcpGatewayLayer = (
       const { AsyncTcpGateway } = yield* Effect.promise(() => import('modbus-rs'));
       const gateway = yield* Effect.tryPromise({
         try: () => AsyncTcpGateway.bind(options, gatewayConfig),
-        catch: (error) => toModbusError(error as Error),
+        catch: (error) => toModbusError(error instanceof Error ? error : new Error(String(error))),
       });
 
       yield* Effect.logDebug(`TCP gateway bound to ${options.host}:${options.port}`);
@@ -61,7 +61,8 @@ export const tcpGatewayLayer = (
           Effect.andThen(
             Effect.tryPromise({
               try: () => gateway.shutdown(),
-              catch: (error) => toModbusError(error as Error),
+              catch: (error) =>
+                toModbusError(error instanceof Error ? error : new Error(String(error))),
             }),
           ),
           Effect.catch(() => Effect.void),

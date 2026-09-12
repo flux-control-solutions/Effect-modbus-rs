@@ -36,7 +36,7 @@ export type AnyModbusClient = NativeModbusClient | WasmModbusClient;
 const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
   Effect.tryPromise({
     try: try_,
-    catch: (error) => toModbusError(error as Error),
+    catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
   });
 
 /**
@@ -237,7 +237,7 @@ export interface ModbusOperations {
  * @see AsyncSerialModbusClient — Upstream native serial client API.
  * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const makeEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
+export const createEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
   readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
   readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
   writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
@@ -265,6 +265,8 @@ export const makeEffectModbusClient = (client: AnyModbusClient): ModbusOperation
 export interface ClientResilience {
   /** Refuses the operation while the transport's circuit is open. */
   readonly guard: Effect.Effect<void, ModbusError>;
+  /** Records that an operation reached the device successfully. */
+  readonly onSuccess?: Effect.Effect<void>;
   /** Reports a failure so the transport can decide whether to reconnect. */
   readonly report: (error: ModbusError) => Effect.Effect<void>;
   /** Retry policy applied to each operation, if any. */
@@ -314,6 +316,7 @@ export const withResilience = (
     operation: () => Effect.Effect<A, ModbusError>,
   ): Effect.Effect<A, ModbusError> => {
     const attempt = Effect.andThen(resilience.guard, Effect.suspend(operation)).pipe(
+      Effect.tap(() => resilience.onSuccess ?? Effect.void),
       Effect.tapError((error) => resilience.report(error)),
     );
     return resilience.policy ? retryModbus(resilience.policy)(attempt) : attempt;

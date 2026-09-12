@@ -1,7 +1,7 @@
 import { Context, Layer } from 'effect';
 
 import { AsciiTransportService, type AsciiTransportOpenOptions } from './AsciiTransportService';
-import { makeMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
 import { RtuTransportService, type RtuTransportOpenOptions } from './RtuTransportService';
 import type { TransportResilienceOptions, TransportServiceApi } from './shared-transport';
 
@@ -70,7 +70,7 @@ export class SerialTransportService extends Context.Service<
    * @see makeMockTransport — The mock factory that this method uses.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (
       options: (AsciiTransportOpenOptions | RtuTransportOpenOptions) &
         TransportResilienceOptions &

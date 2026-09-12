@@ -1,5 +1,12 @@
 import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
+import type { AsyncAsciiTransport, AsyncRtuTransport, AsyncTcpTransport } from 'modbus-rs';
+import type { WasmAsciiTransport, WasmRtuTransport, WasmWsTransport } from 'modbus-rs/web';
 
+import {
+  createBatchingRegistry,
+  type BatchingClientOptions,
+  type BatchingModbusClient,
+} from './batching-client';
 import {
   claimReconnect,
   ConnectionState,
@@ -7,9 +14,9 @@ import {
   guardCircuit,
   type ReconnectOptions,
 } from './connection';
-import { type ModbusError, ModbusNotConnectedError, toModbusError } from './errors';
+import { ModbusNotConnectedError, toModbusError, type ModbusError } from './errors';
 import {
-  makeEffectModbusClient,
+  createEffectModbusClient,
   withResilience,
   type AnyModbusClient,
   type EffectModbusClient,
@@ -143,7 +150,7 @@ const singleFlight = <A>(
  * Provides lazy connection, per-unit-ID client caching, timeout management,
  * reconnection, and graceful shutdown — all within the Effect scope.
  *
- * @see makeTransportScoped — Factory that produces this API from a raw transport.
+ * @see createTransportScoped — Factory that produces this API from a raw transport.
  */
 export interface TransportServiceApi {
   /**
@@ -153,6 +160,11 @@ export interface TransportServiceApi {
    * replaces it — useful when one bus hosts device types that need different
    * logic. The underlying `modbus-rs` client is cached per unit ID, so clients
    * built with different policies still share one connection.
+   *
+   * Once `withBatchingClient` has created a client for this unit, raw FC06,
+   * FC16, and FC23 operations fail. Reads, coils, and other operations remain
+   * available. One unit must use one holding-register write path so raw writes
+   * cannot bypass a pending batch or its cache.
    *
    * @param unitId - Modbus unit ID to address.
    * @param options - Per-client policy replacing the transport default.
@@ -168,7 +180,7 @@ export interface TransportServiceApi {
    * a status indicator:
    *
    * ```ts
-   * yield* Stream.runForEach(transport.connectionState.changes, (state) =>
+   * yield* Stream.runForEach(SubscriptionRef.changes(transport.connectionState), (state) =>
    *   Console.log(`link: ${state._tag}`))
    * ```
    */
@@ -188,6 +200,48 @@ export interface TransportServiceApi {
   reconnect(): Effect.Effect<void, ModbusError>;
   /** Closes the transport and its scope immediately. */
   close(): Effect.Effect<void, ModbusError, Scope.Scope>;
+  /**
+   * Declares the {@link BatchingModbusClient} for a unit.
+   *
+   * Where `withClient` issues the transaction a caller names, this client
+   * decides the transactions for the caller: it packs neighbouring registers,
+   * drops writes the device already agrees with, and — when a window is
+   * configured — collects operations that arrive near each other.
+   *
+   * A unit is declared once, because every option here is a fact about the unit
+   * rather than about a caller: one unit holds one batch, one belief about the
+   * device, and one window. Declaring a unit twice fails with
+   * `ModbusInvalidArgumentError`. Use {@link batchingClient} to reach a client
+   * another part of the program declared.
+   *
+   * Nothing is debounced unless `debounce` asks for it, matching the rest of
+   * this package: default timing stays predictable.
+   *
+   * @param unitId - Modbus unit ID to address.
+   * @param options - The cache, the windows, and the planner limits.
+   */
+  withBatchingClient(
+    unitId: number,
+    options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
+  ): Effect.Effect<BatchingModbusClient, ModbusError>;
+  /**
+   * The {@link BatchingModbusClient} declared for a unit.
+   *
+   * Fails with `ModbusInvalidArgumentError` when nothing has declared one. A
+   * declaration already under way is awaited, so a lookup does not depend on
+   * which fiber ran first.
+   *
+   * @param unitId - Modbus unit ID to address.
+   */
+  batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
+  /**
+   * Units a client has been built for on this transport.
+   *
+   * Transport-wide diagnostic state, not device ownership. For a device-specific
+   * shutdown action, use `BatchingModbusClient.onShutdown` on the client that
+   * addresses the device.
+   */
+  readonly touchedUnits: ReadonlySet<number>;
   /** Whether the transport currently has in-flight requests. */
   hasPendingRequests(): boolean;
 }
@@ -200,6 +254,54 @@ interface TransportHandle<TClient> {
   reconnect(): Promise<void>;
   pendingRequests: boolean;
 }
+
+type TransportConstructor =
+  | typeof AsyncAsciiTransport
+  | typeof AsyncRtuTransport
+  | typeof AsyncTcpTransport
+  | typeof WasmAsciiTransport
+  | typeof WasmRtuTransport
+  | typeof WasmWsTransport;
+
+type TransportConstructorName =
+  | 'AsyncAsciiTransport'
+  | 'AsyncRtuTransport'
+  | 'AsyncTcpTransport'
+  | 'WasmAsciiTransport'
+  | 'WasmRtuTransport'
+  | 'WasmWsTransport';
+
+const loadTransportConstructor = async (
+  transportKey: TransportConstructorName,
+  moduleSpecifier: 'modbus-rs' | 'modbus-rs/web',
+): Promise<TransportConstructor> => {
+  // Keep both imports literal so bundlers apply the package's conditional exports.
+  if (moduleSpecifier === 'modbus-rs/web') {
+    const mod = await import('modbus-rs/web');
+    switch (transportKey) {
+      case 'WasmAsciiTransport':
+        return mod.WasmAsciiTransport;
+      case 'WasmRtuTransport':
+        return mod.WasmRtuTransport;
+      case 'WasmWsTransport':
+        return mod.WasmWsTransport;
+      default:
+        throw new Error(`${transportKey} is not exported by modbus-rs/web`);
+    }
+  }
+
+  const mod = await import('modbus-rs');
+  switch (transportKey) {
+    case 'AsyncAsciiTransport':
+      return mod.AsyncAsciiTransport;
+    case 'AsyncRtuTransport':
+      return mod.AsyncRtuTransport;
+    case 'AsyncTcpTransport':
+      return mod.AsyncTcpTransport;
+    default:
+      throw new Error(`${transportKey} is not exported by modbus-rs`);
+  }
+};
 
 /**
  * Generic factory for the scoped constructor body of an `Effect.Service`.
@@ -222,13 +324,13 @@ interface TransportHandle<TClient> {
  * @param config - Optional module specifier override for browser WASM transports.
  * @returns An `Effect` that produces a {@link TransportServiceApi}.
  */
-export function makeTransportScoped<
+export function createTransportScoped<
   TOptions,
   TClient extends AnyModbusClient,
   TTransport extends TransportHandle<TClient>,
 >(
-  transportKey: string,
-  openMethod: (TC: unknown, options: TOptions) => Promise<TTransport>,
+  transportKey: TransportConstructorName,
+  openMethod: (TC: TransportConstructor, options: TOptions) => Promise<TTransport>,
   serviceName: string,
   config?: {
     /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
@@ -237,15 +339,13 @@ export function makeTransportScoped<
 ) {
   return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
     // Resilience is this package's concern; only the rest reaches modbus-rs.
-    const { retry: transportRetry, reconnect: reconnectOptions, ...rest } = options;
-    const openOptions = rest as unknown as TOptions;
-    // Branched as a literal specifier (not a variable) so bundlers reliably apply
-    // modbus-rs's conditional exports when resolving the dynamic import.
-    const mod: Record<string, unknown> =
-      config?.moduleSpecifier === 'modbus-rs/web'
-        ? yield* Effect.promise(() => import('modbus-rs/web'))
-        : yield* Effect.promise(() => import('modbus-rs'));
-    const TC = mod[transportKey];
+    const { retry: transportRetry, reconnect: reconnectOptions } = options;
+    const openOptions = { ...options };
+    Reflect.deleteProperty(openOptions, 'retry');
+    Reflect.deleteProperty(openOptions, 'reconnect');
+    const TC = yield* Effect.promise(() =>
+      loadTransportConstructor(transportKey, config?.moduleSpecifier ?? 'modbus-rs'),
+    );
 
     let transport: TTransport | null = null;
 
@@ -254,7 +354,8 @@ export function makeTransportScoped<
     const connectionState = yield* SubscriptionRef.make<ConnectionState>(
       ConnectionState.Disconnected(),
     );
-    const supervised = reconnectOptions ? resolveReconnect(reconnectOptions) : null;
+    const resolvedReconnect = resolveReconnect(reconnectOptions ?? {});
+    const supervised = reconnectOptions ? resolvedReconnect : null;
     // Captured here so the API's methods keep `R = never` while still being
     // able to fork the supervisor into the service's own lifetime.
     const serviceScope = yield* Effect.scope;
@@ -282,7 +383,7 @@ export function makeTransportScoped<
     // caller is interrupted before the connection completes.
     const openTransport = Effect.tryPromise({
       try: () => openMethod(TC, openOptions),
-      catch: (error) => toModbusError(error as Error),
+      catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
     }).pipe(
       Effect.tap((t) =>
         closed
@@ -304,7 +405,7 @@ export function makeTransportScoped<
       return t;
     });
 
-    yield* Effect.addFinalizer(() => {
+    const closeTransport = Effect.suspend(() => {
       if (closed) return Effect.void;
       closed = true;
       const t = transport;
@@ -312,11 +413,17 @@ export function makeTransportScoped<
       return Effect.andThen(
         Effect.logDebug(`Closing ${serviceName}`),
         Effect.andThen(
-          Effect.promise(() => t.close()),
+          Effect.tryPromise({
+            try: () => t.close(),
+            catch: (cause) =>
+              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
+          }),
           SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
         ),
       );
     });
+
+    yield* Effect.addFinalizer(() => Effect.orDie(closeTransport));
 
     const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
@@ -328,7 +435,8 @@ export function makeTransportScoped<
         reconnecting,
         Effect.tryPromise({
           try: () => t.reconnect(),
-          catch: (error) => toModbusError(error as Error),
+          catch: (cause) =>
+            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
         }).pipe(Effect.tap(() => (closed ? closeOrphan(t) : Effect.void))),
       );
     });
@@ -342,7 +450,14 @@ export function makeTransportScoped<
      * ends up starting the supervisor.
      */
     const report = (error: ModbusError): Effect.Effect<void> => {
-      if (!supervised || closed || !supervised.triggers(error)) return Effect.void;
+      if (closed || !resolvedReconnect.triggers(error)) return Effect.void;
+      if (!supervised) {
+        return SubscriptionRef.update(connectionState, (current) =>
+          ConnectionState.$is('Connected')(current)
+            ? ConnectionState.Down({ cause: error })
+            : current,
+        );
+      }
       return claimReconnect(
         reconnectOnce,
         connectionState,
@@ -356,30 +471,60 @@ export function makeTransportScoped<
       // Without a supervisor there is no breaker: nothing else would ever
       // close the circuit again.
       guard: supervised ? guardCircuit(connectionState) : Effect.void,
+      onSuccess: supervised
+        ? undefined
+        : SubscriptionRef.update(connectionState, (current) =>
+            ConnectionState.$is('Down')(current) ? ConnectionState.Connected() : current,
+          ),
       report,
     };
+
+    const makeOperations = Effect.fnUntraced(function* (unitId: number) {
+      const t = yield* ensureOpen();
+      let client = clientSet.get(unitId);
+      if (!client) {
+        client = yield* Effect.try({
+          try: () => t.createClient({ unitId }),
+          catch: (cause) =>
+            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
+        });
+        clientSet.set(unitId, client);
+      }
+      return createEffectModbusClient(client);
+    });
+
+    const makeClient = Effect.fnUntraced(function* (
+      unitId: number,
+      clientOptions?: { readonly retry?: ModbusRetryPolicy },
+    ) {
+      const operations = yield* makeOperations(unitId);
+      return withResilience(operations, {
+        ...resilience,
+        policy: clientOptions?.retry ?? transportRetry,
+      });
+    });
+
+    const batching = createBatchingRegistry({
+      withClient: makeClient,
+      connectionState,
+      scope: serviceScope,
+    });
+
+    const withClient = Effect.fnUntraced(function* (
+      unitId: number,
+      clientOptions?: { readonly retry?: ModbusRetryPolicy },
+    ) {
+      const operations = yield* makeOperations(unitId);
+      return withResilience(batching.guardRawWrites(unitId, operations), {
+        ...resilience,
+        policy: clientOptions?.retry ?? transportRetry,
+      });
+    });
 
     return {
       connectionState,
 
-      withClient: Effect.fnUntraced(function* (
-        unitId: number,
-        clientOptions?: { readonly retry?: ModbusRetryPolicy },
-      ) {
-        const t = yield* ensureOpen();
-        let client = clientSet.get(unitId);
-        if (!client) {
-          client = yield* Effect.try({
-            try: () => t.createClient({ unitId }),
-            catch: (error) => toModbusError(error as Error),
-          });
-          clientSet.set(unitId, client);
-        }
-        return withResilience(makeEffectModbusClient(client), {
-          ...resilience,
-          policy: clientOptions?.retry ?? transportRetry,
-        });
-      }),
+      withClient,
 
       setRequestTimeout: Effect.fnUntraced(function* (timeoutMs: number) {
         const t = transport;
@@ -414,7 +559,8 @@ export function makeTransportScoped<
           reconnecting,
           Effect.tryPromise({
             try: () => t.reconnect(),
-            catch: (error) => toModbusError(error as Error),
+            catch: (cause) =>
+              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
           }).pipe(
             // A reconnect that lands after the scope finalizer has closed the
             // transport has reopened a handle nobody owns.
@@ -429,18 +575,16 @@ export function makeTransportScoped<
 
       close: Effect.fnUntraced(function* () {
         if (closed) return;
-        closed = true;
-        yield* SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
-        const t = transport;
-        if (t) {
-          yield* Effect.tryPromise({
-            try: () => t.close(),
-            catch: (error) => toModbusError(error as Error),
-          });
-        }
         const scope = yield* Effect.scope;
-        yield* Scope.close(scope as Scope.Closeable, Exit.void);
+        yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
       }),
+
+      withBatchingClient: batching.withBatchingClient,
+      batchingClient: batching.batchingClient,
+
+      get touchedUnits() {
+        return new Set(clientSet.keys());
+      },
 
       hasPendingRequests: () => {
         if (closed) return false;

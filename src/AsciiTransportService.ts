@@ -1,13 +1,12 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Layer } from 'effect';
 import type {
   AsyncAsciiTransport,
   AsyncSerialModbusClient,
   AsciiTransportOptions,
 } from 'modbus-rs';
 
-import { SlaveDeviceDefinitions, makeMockTransport } from './mocks';
-import type { MockFaultOptions } from './mocks';
-import { makeTransportScoped } from './shared-transport';
+import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
   WithoutUpstreamRetry,
@@ -35,7 +34,7 @@ export type AsciiTransportOpenOptions = WithoutUpstreamRetry<AsciiTransportOptio
  *
  * @see AsyncAsciiTransport — Upstream `modbus-rs` ASCII transport.
  * @see AsciiTransportOpenOptions — Configuration for the ASCII serial port.
- * @see makeTransportScoped — Generic lifecycle logic from shared-transport.
+ * @see createTransportScoped — Generic lifecycle logic from shared-transport.
  */
 export class AsciiTransportService extends Context.Service<
   AsciiTransportService,
@@ -45,14 +44,16 @@ export class AsciiTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link AsciiTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = makeTransportScoped<
+  static readonly makeScoped = createTransportScoped<
     AsciiTransportOpenOptions,
     AsyncSerialModbusClient,
     AsyncAsciiTransport
   >(
     'AsyncAsciiTransport',
-    (TC: unknown, options: AsciiTransportOpenOptions) =>
-      (TC as typeof AsyncAsciiTransport).open(options),
+    (transportConstructor, options: AsciiTransportOpenOptions) => {
+      // SAFETY: The constructor is read from the AsyncAsciiTransport export named above.
+      return (transportConstructor as typeof AsyncAsciiTransport).open(options);
+    },
     'AsciiTransportService',
   );
 
@@ -79,11 +80,8 @@ export class AsciiTransportService extends Context.Service<
    * @see makeMockTransport — The underlying mock factory.
    */
   static makeMockTransport = (devices: SlaveDeviceDefinitions) => {
-    const factory = makeMockTransport(devices);
+    const factory = createMockTransport(devices);
     return (options: AsciiTransportOpenOptions & TransportResilienceOptions & MockFaultOptions) =>
-      Layer.effect(
-        AsciiTransportService,
-        factory(options) as unknown as Effect.Effect<TransportServiceApi>,
-      );
+      Layer.effect(AsciiTransportService, factory(options));
   };
 }

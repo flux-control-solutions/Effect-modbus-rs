@@ -24,6 +24,26 @@ interface ProbeResult {
   readonly exports?: readonly string[];
 }
 
+/** Concrete runtime values a JavaScript module may expose as a named export. */
+type RuntimeExport =
+  | string
+  | number
+  | boolean
+  | bigint
+  | symbol
+  | null
+  | undefined
+  | object
+  | ((...args: never[]) => object);
+
+/** Boundary contract for a dynamically loaded JavaScript module namespace. */
+interface RuntimeModuleNamespace {
+  readonly ModbusErrorCode?: RuntimeExport;
+}
+
+/** A dynamically loaded module used only for its linking and evaluation side effects. */
+type LoadedModule = object;
+
 /** The upstream binding export whose browser runtime availability is checked. */
 const EXPECTED_EXPORT = 'ModbusErrorCode';
 
@@ -31,17 +51,17 @@ const EXPECTED_EXPORT = 'ModbusErrorCode';
 const probeNamespace = async (
   specifier: string,
   note: string,
-  load: () => Promise<Record<string, unknown>>,
+  load: () => Promise<RuntimeModuleNamespace>,
 ): Promise<ProbeResult> => {
   try {
     const namespace = await load();
     const exports = Object.keys(namespace).sort();
-    return exports.includes(EXPECTED_EXPORT)
+    return EXPECTED_EXPORT in namespace
       ? {
           specifier,
           note,
           status: 'ok',
-          detail: `\`${EXPECTED_EXPORT}\` is exported: ${JSON.stringify(namespace[EXPECTED_EXPORT])}`,
+          detail: `\`${EXPECTED_EXPORT}\` is exported: ${JSON.stringify(namespace.ModbusErrorCode) ?? String(namespace.ModbusErrorCode)}`,
           exports,
         }
       : {
@@ -64,7 +84,7 @@ const probeNamespace = async (
 const probeStaticImport = async (
   specifier: string,
   note: string,
-  load: () => Promise<unknown>,
+  load: () => Promise<LoadedModule>,
 ): Promise<ProbeResult> => {
   try {
     await load();
@@ -82,12 +102,12 @@ const runProbes = (): Promise<readonly ProbeResult[]> =>
     probeNamespace(
       'modbus-rs',
       'Resolves to dist/index.browser.js under the `browser` condition, which is `export * from "modbus-rs-wasm"`.',
-      () => import('modbus-rs') as Promise<Record<string, unknown>>,
+      () => import('modbus-rs'),
     ),
     probeNamespace(
       'modbus-rs/web',
       'The explicit web subpath — `export * from "modbus-rs-wasm/web"`. Same underlying wasm-bindgen output, different target.',
-      () => import('modbus-rs/web') as Promise<Record<string, unknown>>,
+      () => import('modbus-rs/web'),
     ),
     probeStaticImport(
       "src/static-import-probe.ts → import { ModbusErrorCode } from 'modbus-rs'",
