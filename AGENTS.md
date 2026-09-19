@@ -106,8 +106,6 @@ Shallow clones of key dependencies live in `references/` for offline browsing (g
 | effect    | `references/effect`    | `packages/effect/src/` for core types                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | modbus-rs | `references/modbus-rs` | `mbus-ffi/javascript/` — unified native+WASM npm package (`index.d.ts`/`index.browser.d.ts`/`index.web.d.ts` for types, `index.js`/`index.browser.js`/`index.web.js` for impl). For the WASM API specifically, `mbus-ffi/src/wasm/**` (Rust source) is current-truth — `documentation/wasm_bindings.md` and `documentation/client/wasm.md` describe an older, now-changed API (`WasmModbusClient`/`WasmTcpTransport`/snake_case methods) and should not be trusted without cross-checking the Rust source. |
 
-The skill at `.opencode/skills/reference-dependencies/SKILL.md` is the dedicated instruction for reference lookup.
-
 ## WASM/browser support
 
 - `modbus-rs`'s WASM build is published separately as `modbus-rs-wasm` and re-exported under `modbus-rs`'s `./web` subpath (`import ... from "modbus-rs/web"`). Type-only imports for `Wasm*` symbols must use that subpath, not the bare `"modbus-rs"` specifier — this project's `tsconfig.json` has no `customConditions`, so bare imports always resolve to the native (`default`) condition regardless of what environment the code will actually run in.
