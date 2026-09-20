@@ -69,14 +69,11 @@ See `README.md` for lifecycle diagrams, configuration details, and examples.
 - Test changed retry counts, cache invalidation, batching order, failures, and cleanup.
 - Use `import type` for type-only imports. Let oxfmt control formatting and import order.
 
-## Tooling and references
+## Tooling
 
 - Use the configured Fallow tools to review changed code when available.
 - Keep generated `CHANGELOG.md` excluded from oxfmt. Changesets controls its formatting.
 - Keep dependency versions and compiler settings in `package.json` and the TypeScript configuration.
-- If reference clones exist under `references/`, check their revisions against the installed dependencies before use.
-- For Effect internals, use `references/effect/packages/effect/src/` when available.
-- For upstream bindings, inspect `mbus-ffi/javascript/` and `mbus-ffi/src/wasm/` in the matching `modbus-rs` source revision.
 
 ## Written communication
 
