@@ -711,6 +711,32 @@ Effect.gen(function* () {
 });
 ```
 
+### Connect timeout
+
+The `modbus-rs` bindings do not limit the time of a connect. A TCP connect to a host that does not answer waits until the operating system stops it. On Linux with default settings, this takes about 2 minutes. During that time, every operation joins the same pending connect.
+
+Set `connectTimeout` to limit how long each operation waits for an open or a reconnect:
+
+```ts
+TcpTransportService.make({
+  host: '192.0.2.1',
+  port: 502,
+  connectTimeout: '3 seconds', // limit for each wait on an open or reconnect
+  reconnect: {},
+});
+```
+
+The limit applies to each operation that waits for an open or reconnect. When it expires, that operation fails with `ModbusTimeoutError`.
+
+The native connect cannot be cancelled, so it continues after the timeout:
+
+- Later operations wait for the same native connect, each for at most the limit. A transport never has more than one pending native connect.
+- When the native connect succeeds later, the transport uses it. A late reconnect that succeeds after the supervisor published `Down` publishes `Connected` at once.
+- When the native connect fails, the next operation starts a new connect.
+- A supervised reconnect attempt that times out is retried by the reconnect policy by default. When the attempts are exhausted, the transport publishes `Down`.
+
+The option applies to every transport. It is unbounded by default. `requestTimeoutMs` limits each request, but it does not limit the connect.
+
 ### Retrying a transaction
 
 `retryModbus(policy)` remains exported for the one case the transport cannot express: driving a **compound** operation as a unit, where retrying individual frames would be wrong.
