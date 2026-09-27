@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
+import { Deferred, Duration, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
 import type { AsyncAsciiTransport, AsyncRtuTransport, AsyncTcpTransport } from 'modbus-rs';
 import type { WasmAsciiTransport, WasmRtuTransport, WasmWsTransport } from 'modbus-rs/web';
 
@@ -14,7 +14,12 @@ import {
   guardCircuit,
   type ReconnectOptions,
 } from './connection';
-import { ModbusNotConnectedError, toModbusError, type ModbusError } from './errors';
+import {
+  ModbusNotConnectedError,
+  ModbusTimeoutError,
+  toModbusError,
+  type ModbusError,
+} from './errors';
 import {
   createEffectModbusClient,
   withResilience,
@@ -41,6 +46,19 @@ export interface TransportResilienceOptions {
    * enables the circuit breaker that keeps callers off a dead bus.
    */
   readonly reconnect?: ReconnectOptions;
+  /**
+   * Time limit for each open or reconnect of the underlying transport.
+   *
+   * The `modbus-rs` bindings do not limit the connect time. A TCP connect to a
+   * host that does not answer waits until the operating system stops it, which
+   * takes about 2 minutes on Linux with default settings.
+   *
+   * When the limit expires, the open or reconnect fails with
+   * {@link ModbusTimeoutError}, and the next operation starts a new connect.
+   * The native connect cannot be cancelled. If a timed-out open completes
+   * later, the transport closes that handle. Unbounded by default.
+   */
+  readonly connectTimeout?: Duration.Input;
 }
 
 /**
@@ -340,9 +358,14 @@ export function createTransportScoped<
   return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
     // Resilience is this package's concern; only the rest reaches modbus-rs.
     const { retry: transportRetry, reconnect: reconnectOptions } = options;
+    const connectTimeout =
+      options.connectTimeout === undefined
+        ? undefined
+        : Duration.fromInputUnsafe(options.connectTimeout);
     const openOptions = { ...options };
     Reflect.deleteProperty(openOptions, 'retry');
     Reflect.deleteProperty(openOptions, 'reconnect');
+    Reflect.deleteProperty(openOptions, 'connectTimeout');
     const TC = yield* Effect.promise(() =>
       loadTransportConstructor(transportKey, config?.moduleSpecifier ?? 'modbus-rs'),
     );
@@ -378,24 +401,57 @@ export function createTransportScoped<
     const closeOrphan = (t: TTransport) =>
       Effect.forkDetach(Effect.ignore(Effect.tryPromise(() => t.close())));
 
+    /**
+     * Applies {@link TransportResilienceOptions.connectTimeout} to one native
+     * open or reconnect. The native promise continues after the timeout, so
+     * `onAbandon` gives the caller a way to clean up its late result.
+     */
+    const limitConnect = <A>(
+      work: Effect.Effect<A, ModbusError>,
+      onAbandon: Effect.Effect<void> = Effect.void,
+    ): Effect.Effect<A, ModbusError> => {
+      if (connectTimeout === undefined) return work;
+      const message = `${serviceName}: connect did not complete within ${Duration.format(connectTimeout)}`;
+      return Effect.timeoutOrElse(work, {
+        duration: connectTimeout,
+        orElse: () =>
+          Effect.andThen(
+            onAbandon,
+            Effect.fail(new ModbusTimeoutError({ cause: new Error(message), message })),
+          ),
+      });
+    };
+
     // Assigning `transport` inside the shared work rather than in the caller
     // keeps the handle reachable — and therefore closeable — even if every
     // caller is interrupted before the connection completes.
-    const openTransport = Effect.tryPromise({
-      try: () => openMethod(TC, openOptions),
-      catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
-    }).pipe(
-      Effect.tap((t) =>
-        closed
-          ? closeOrphan(t)
-          : Effect.andThen(
-              Effect.sync(() => {
-                transport = t;
-              }),
-              SubscriptionRef.set(connectionState, ConnectionState.Connected()),
-            ),
-      ),
-    );
+    const openTransport = Effect.suspend(() => {
+      let pending: Promise<TTransport> | undefined;
+      const connect = Effect.tryPromise({
+        try: () => {
+          pending = openMethod(TC, openOptions);
+          return pending;
+        },
+        catch: (cause) => toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
+      });
+      // The limit covers only the native promise. After a timeout the tap below
+      // never runs, so the late handle has no other owner and must be closed.
+      const closeLateHandle = Effect.sync(() => {
+        void pending?.then((t) => t.close()).catch(() => undefined);
+      });
+      return limitConnect(connect, closeLateHandle).pipe(
+        Effect.tap((t) =>
+          closed
+            ? closeOrphan(t)
+            : Effect.andThen(
+                Effect.sync(() => {
+                  transport = t;
+                }),
+                SubscriptionRef.set(connectionState, ConnectionState.Connected()),
+              ),
+        ),
+      );
+    });
 
     const ensureOpen = Effect.fnUntraced(function* () {
       if (closed) return yield* transportClosed();
@@ -427,18 +483,43 @@ export function createTransportScoped<
 
     const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
+    /** The native reconnect that runs on `transport`, if any. */
+    let nativeReconnect: Promise<void> | null = null;
+
+    /**
+     * Reconnects one handle within the connect limit.
+     *
+     * A timed-out native reconnect continues on the same handle. A later
+     * attempt joins it, so two native reconnects never run on one handle.
+     * The closed check runs inside the native promise, because no Effect waits
+     * for a reconnect that timed out.
+     */
+    const reconnectTransport = (t: TTransport) =>
+      limitConnect(
+        Effect.tryPromise({
+          try: () => {
+            if (nativeReconnect) return nativeReconnect;
+            // A reconnect that lands after the scope finalizer has closed the
+            // transport has reopened a handle nobody owns.
+            const run: Promise<void> = t
+              .reconnect()
+              .then(() => (closed ? t.close().catch(() => undefined) : undefined))
+              .finally(() => {
+                if (nativeReconnect === run) nativeReconnect = null;
+              });
+            nativeReconnect = run;
+            return run;
+          },
+          catch: (cause) =>
+            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
+        }),
+      );
+
     /** The transport's own reconnect, as the supervisor drives it. */
     const reconnectOnce = Effect.suspend(() => {
       const t = transport;
       if (closed || !t) return transportClosed();
-      return singleFlight(
-        reconnecting,
-        Effect.tryPromise({
-          try: () => t.reconnect(),
-          catch: (cause) =>
-            toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
-        }).pipe(Effect.tap(() => (closed ? closeOrphan(t) : Effect.void))),
-      );
+      return singleFlight(reconnecting, reconnectTransport(t));
     });
 
     /**
@@ -555,18 +636,7 @@ export function createTransportScoped<
           yield* ensureOpen();
           return;
         }
-        yield* singleFlight(
-          reconnecting,
-          Effect.tryPromise({
-            try: () => t.reconnect(),
-            catch: (cause) =>
-              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
-          }).pipe(
-            // A reconnect that lands after the scope finalizer has closed the
-            // transport has reopened a handle nobody owns.
-            Effect.tap(() => (closed ? closeOrphan(t) : Effect.void)),
-          ),
-        );
+        yield* singleFlight(reconnecting, reconnectTransport(t));
         // Mirrors ensureOpen: report the closure rather than a success against
         // a transport that was torn down while the reconnect was in flight.
         if (closed) return yield* transportClosed();
