@@ -27,8 +27,8 @@ export class ModbusExceptionError extends Data.TaggedError('ModbusExceptionError
  * with {@link RtuTransportOptions.requestTimeoutMs | requestTimeoutMs} /
  * {@link RtuTransportOptions.responseTimeoutMs | responseTimeoutMs}.
  *
- * The transport also raises this error locally when an open or reconnect
- * exceeds the `connectTimeout` transport option.
+ * The transport also raises this error locally when an operation waits for an
+ * open or reconnect longer than the `connectTimeout` transport option.
  *
  * @see ModbusErrorCode.TIMEOUT — `modbus-rs` error code that triggers this error.
  */

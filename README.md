@@ -715,13 +715,13 @@ Effect.gen(function* () {
 
 The `modbus-rs` bindings do not limit the time of a connect. A TCP connect to a host that does not answer waits until the operating system stops it. On Linux with default settings, this takes about 2 minutes. During that time, every operation joins the same pending connect.
 
-Set `connectTimeout` to limit each open and each reconnect:
+Set `connectTimeout` to limit how long each operation waits for an open or a reconnect:
 
 ```ts
 TcpTransportService.make({
   host: '192.0.2.1',
   port: 502,
-  connectTimeout: '3 seconds', // limit for each open and reconnect
+  connectTimeout: '3 seconds', // limit for each wait on an open or reconnect
   reconnect: {},
 });
 ```

@@ -47,7 +47,8 @@ export interface TransportResilienceOptions {
    */
   readonly reconnect?: ReconnectOptions;
   /**
-   * Time limit for each open or reconnect of the underlying transport.
+   * Time limit for each operation that waits for an open or reconnect of the
+   * underlying transport.
    *
    * The `modbus-rs` bindings do not limit the connect time. A TCP connect to a
    * host that does not answer waits until the operating system stops it, which
