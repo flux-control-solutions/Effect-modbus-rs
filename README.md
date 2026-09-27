@@ -726,12 +726,14 @@ TcpTransportService.make({
 });
 ```
 
-When the limit expires, the open or reconnect fails with `ModbusTimeoutError`:
+The limit applies to each operation that waits for an open or reconnect. When it expires, that operation fails with `ModbusTimeoutError`.
 
-- The lazy open fails every operation that waits for it. The next operation starts a new connect.
-- A supervised reconnect attempt fails. The reconnect policy retries it by default. When the attempts are exhausted, the transport publishes `Down`.
+The native connect cannot be cancelled, so it continues after the timeout:
 
-The native connect cannot be cancelled, so it continues after the timeout. If a timed-out open completes later, the transport closes that handle. A later reconnect waits for a timed-out native reconnect that still runs on the same handle, instead of starting a second one.
+- Later operations wait for the same native connect, each for at most the limit. A transport never has more than one pending native connect.
+- When the native connect succeeds later, the transport uses it. A late reconnect that succeeds after the supervisor published `Down` publishes `Connected` at once.
+- When the native connect fails, the next operation starts a new connect.
+- A supervised reconnect attempt that times out is retried by the reconnect policy by default. When the attempts are exhausted, the transport publishes `Down`.
 
 The option applies to every transport. It is unbounded by default. `requestTimeoutMs` limits each request, but it does not limit the connect.
 

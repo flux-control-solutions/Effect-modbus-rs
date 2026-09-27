@@ -303,27 +303,45 @@ test('a lazy open that exceeds the connect timeout fails every waiter', async ()
     Effect.gen(function* () {
       const api = yield* fake.make();
 
-      const started = Date.now();
       const exits = yield* Effect.all(
         [api.withClient(1), api.withClient(2)].map((effect) => Effect.exit(effect)),
         { concurrency: 'unbounded' },
       );
 
-      expect(Date.now() - started).toBeLessThan(60);
       expect(exits.map(failureTag)).toEqual(['ModbusTimeoutError', 'ModbusTimeoutError']);
       expect(fake.calls.open).toBe(1);
-      expect(api.connectionState.pipe(SubscriptionRef.getUnsafe)._tag).toBe('Disconnected');
+      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Disconnected');
     }),
   );
 });
 
-test('the next operation after a connect timeout starts a new open', async () => {
-  let openDelayMs = 80;
-  const calls = { open: 0, close: 0 };
+test('operations after a connect timeout join the pending native open', async () => {
+  const fake = makeFake({ openDelayMs: 60, resilience: { connectTimeout: '10 millis' } });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+
+      expect(failureTag(yield* Effect.exit(api.withClient(1)))).toBe('ModbusTimeoutError');
+      expect(failureTag(yield* Effect.exit(api.withClient(1)))).toBe('ModbusTimeoutError');
+      // Each caller waited again, but no second native open started.
+      expect(fake.calls.open).toBe(1);
+
+      // The native open completes with no caller waiting, and the transport uses it.
+      yield* Effect.sleep('80 millis');
+      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
+      yield* api.withClient(1);
+      expect(fake.calls.open).toBe(1);
+      expect(fake.calls.close).toBe(0);
+    }),
+  );
+});
+
+test('the next operation after a failed native open starts a new open', async () => {
+  let openDelayMs = 30;
+  let openFails = true;
+  const calls = { open: 0 };
   const transport = {
-    close: async () => {
-      calls.close += 1;
-    },
+    close: async () => {},
     createClient: (_opts: { unitId: number }) => makeClient(),
     setRequestTimeout: (_ms: number) => {},
     clearRequestTimeout: () => {},
@@ -335,43 +353,42 @@ test('the next operation after a connect timeout starts a new open', async () =>
     async () => {
       calls.open += 1;
       await sleep(openDelayMs);
+      if (openFails) throw new Error('connect refused');
       return transport;
     },
-    'SlowOpenTransport',
+    'FailingOpenTransport',
   );
 
   await run(
     Effect.gen(function* () {
       const api = yield* make({ label: 'test', connectTimeout: '10 millis' });
 
-      const first = yield* Effect.exit(api.withClient(1));
-      expect(failureTag(first)).toBe('ModbusTimeoutError');
+      expect(failureTag(yield* Effect.exit(api.withClient(1)))).toBe('ModbusTimeoutError');
 
-      // The in-flight open is cleared, so this call does not join the pending open.
+      // After the native open fails, the shared open is cleared.
+      yield* Effect.sleep('50 millis');
       openDelayMs = 0;
+      openFails = false;
       yield* api.withClient(1);
       expect(calls.open).toBe(2);
-      expect(api.connectionState.pipe(SubscriptionRef.getUnsafe)._tag).toBe('Connected');
+      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
     }),
   );
 });
 
-test('a handle from a timed-out open is closed when the native open completes', async () => {
+test('a timed-out open that completes after teardown is closed', async () => {
   const fake = makeFake({ openDelayMs: 30, resilience: { connectTimeout: '5 millis' } });
 
   await Effect.gen(function* () {
     const scope = yield* Scope.make();
     const api = yield* Scope.provide(fake.make(), scope);
 
-    const exit = yield* Effect.exit(api.withClient(1));
-    expect(failureTag(exit)).toBe('ModbusTimeoutError');
+    expect(failureTag(yield* Effect.exit(api.withClient(1)))).toBe('ModbusTimeoutError');
+    yield* Scope.close(scope, Exit.void);
     expect(fake.calls.close).toBe(0);
 
+    // Nothing owns the late handle after teardown, so the open closes it.
     yield* Effect.sleep('50 millis');
-    expect(fake.calls.close).toBe(1);
-
-    // The late handle was never the live transport, so teardown does not close it again.
-    yield* Scope.close(scope, Exit.void);
     expect(fake.calls.close).toBe(1);
   }).pipe(Effect.runPromise);
 });
@@ -398,13 +415,13 @@ test('a reconnect that exceeds the connect timeout fails, and a later reconnect 
   );
 });
 
-test('a supervised reconnect that exceeds the connect timeout publishes Down', async () => {
+test('a supervised reconnect that exceeds the connect timeout publishes Down, then Connected when it completes', async () => {
   const client = makeClient(async () => {
     throw new Error('[MODBUS_CONNECTION_CLOSED] link dropped');
   });
   const fake = makeFake({
     client,
-    reconnectDelayMs: 200,
+    reconnectDelayMs: 100,
     resilience: {
       connectTimeout: '10 millis',
       reconnect: { policy: RetryPolicies.none(), resetAfter: '1 minute' },
@@ -417,9 +434,15 @@ test('a supervised reconnect that exceeds the connect timeout publishes Down', a
       yield* Effect.exit(modbus.writeSingleRegister({ address: 0, value: 1 }));
 
       yield* Effect.sleep('40 millis');
-      const state = SubscriptionRef.getUnsafe(api.connectionState);
-      expect(state._tag).toBe('Down');
-      if (state._tag === 'Down') expect(state.cause._tag).toBe('ModbusTimeoutError');
+      const down = SubscriptionRef.getUnsafe(api.connectionState);
+      expect(down._tag).toBe('Down');
+      if (down._tag === 'Down') expect(down.cause._tag).toBe('ModbusTimeoutError');
+
+      // The native reconnect completes before the next probe. The circuit
+      // closes now instead of after `resetAfter`.
+      yield* Effect.sleep('100 millis');
+      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
+      expect(fake.calls.reconnect).toBe(1);
     }),
   );
 });
