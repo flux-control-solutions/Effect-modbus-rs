@@ -47,7 +47,7 @@
     "@effect/platform-bun": "^4.0.0-rc.109",
     "@oxlint/plugins": "1.76.0",
     "@types/bun": "latest",
-    "effect": "^4.0.0-rc.109",
+    "effect": "4.0.0-rc.109",
     "fallow": "^2.104.0",
     "husky": "^9.1.7",
     "oxfmt": "^0.71.0",
