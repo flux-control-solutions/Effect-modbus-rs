@@ -410,7 +410,7 @@ const damper =
     );
 ```
 
-The recovered client keeps the options of the first declaration. `client.debounce` gives its debounce windows, so the owner can compare them with the windows that it expects.
+The recovered client keeps the options of the first declaration. `client.debounce` gives its debounce windows as frozen, resolved `Duration` values, so the owner can compare them with the windows that it expects. An omitted `maxHold` shows as four times the write window, which is the limit that the client applies.
 
 ### Shutdown
 

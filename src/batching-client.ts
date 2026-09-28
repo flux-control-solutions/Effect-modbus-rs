@@ -42,7 +42,7 @@ import {
 } from './register-plan';
 import type { ModbusRetryPolicy } from './retry';
 import { mergeSpanAttributes, type ModbusSpanAttributes } from './span-attributes';
-import { createWriteDebouncer, type DebouncedWrite } from './write-debouncer';
+import { createWriteDebouncer, resolveWriteHold, type DebouncedWrite } from './write-debouncer';
 
 /** How long operations are collected before they reach the bus. */
 export interface BatchingDebounceOptions {
@@ -70,6 +70,52 @@ export interface BatchingDebounceOptions {
     readonly window: Duration.Input;
   };
 }
+
+/**
+ * The debounce windows that a batching client applies, as resolved values.
+ *
+ * A write entry always has `maxHold`. When the declaration omitted it, it is
+ * four times the window, which is the limit the write debouncer applies.
+ */
+export interface BatchingDebounceWindows {
+  /** The write window and the hold limit. Omitted when writes are not debounced. */
+  readonly writes?: {
+    readonly window: Duration.Duration;
+    readonly maxHold: Duration.Duration;
+  };
+  /** The read window. Omitted when reads are not debounced. */
+  readonly reads?: {
+    readonly window: Duration.Duration;
+  };
+}
+
+/**
+ * Resolves and freezes the windows that a client reports.
+ *
+ * The debouncers read their timing when they are built. A copy keeps the
+ * reported values equal to those timings, even if the caller later changes the
+ * options object that it passed.
+ */
+const resolveDebounceWindows = (
+  options: BatchingDebounceOptions | undefined,
+): BatchingDebounceWindows | undefined => {
+  if (options === undefined) return undefined;
+  const hold =
+    options.writes === undefined
+      ? undefined
+      : resolveWriteHold(options.writes.window, options.writes.maxHold);
+  return Object.freeze({
+    ...(hold && {
+      writes: Object.freeze({
+        window: Duration.millis(hold.windowMs),
+        maxHold: Duration.millis(hold.maxHoldMs),
+      }),
+    }),
+    ...(options.reads && {
+      reads: Object.freeze({ window: Duration.fromInputUnsafe(options.reads.window) }),
+    }),
+  });
+};
 
 /** Options for {@link makeBatchingClient}. */
 export interface BatchingClientOptions {
@@ -155,13 +201,16 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
   readonly cache: RegisterCache | undefined;
 
   /**
-   * The debounce windows this client was declared with, or `undefined` when it
-   * has none.
+   * The debounce windows this client applies, or `undefined` when its
+   * declaration had no `debounce` option.
+   *
+   * The values are resolved and frozen when the client is built. An omitted
+   * `maxHold` shows as four times the write window.
    *
    * A caller that recovers an existing client with `batchingClient` did not
    * choose these windows. Compare them with the windows that the caller expects.
    */
-  readonly debounce: BatchingDebounceOptions | undefined;
+  readonly debounce: BatchingDebounceWindows | undefined;
 
   /**
    * Runs an action when the calling scope closes, while the bus is still open
@@ -384,7 +433,7 @@ export const makeBatchingClient = (options: {
     return {
       unitId,
       cache,
-      debounce: options.debounce,
+      debounce: resolveDebounceWindows(options.debounce),
       write: writes.write,
       writeNow: writes.writeNow,
       writeAll: writes.writeAll,

@@ -164,15 +164,27 @@ interface TimerState {
  *   debouncer.write({ address: 2001, value: 20 }),
  * ], { concurrency: 'unbounded' });
  */
+/**
+ * Resolves the window and the hold limit that a write debouncer applies.
+ *
+ * The batching client reports these values, so both use this one rule.
+ *
+ * @param window - The write window.
+ * @param maxHold - The hold limit. When omitted, it is four times the window.
+ * @returns The window and the hold limit in milliseconds.
+ */
+export const resolveWriteHold = (window: Duration.Input, maxHold: Duration.Input | undefined) => {
+  const windowMs = Duration.toMillis(Duration.fromInputUnsafe(window));
+  const maxHoldMs =
+    maxHold === undefined ? windowMs * 4 : Duration.toMillis(Duration.fromInputUnsafe(maxHold));
+  return { windowMs, maxHoldMs };
+};
+
 export const createWriteDebouncer = (
   options: WriteDebouncerOptions,
 ): Effect.Effect<WriteDebouncer, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const windowMs = Duration.toMillis(Duration.fromInputUnsafe(options.window));
-    const maxHoldMs =
-      options.maxHold === undefined
-        ? windowMs * 4
-        : Duration.toMillis(Duration.fromInputUnsafe(options.maxHold));
+    const { windowMs, maxHoldMs } = resolveWriteHold(options.window, options.maxHold);
 
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);

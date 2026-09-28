@@ -194,6 +194,7 @@ export { makeBatchingClient, createBatchingRegistry } from './src/batching-clien
 export type {
   BatchingClientOptions,
   BatchingDebounceOptions,
+  BatchingDebounceWindows,
   BatchingModbusClient,
   BatchingRegistry,
   BatchingRegistryDeps,
