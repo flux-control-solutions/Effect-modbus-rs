@@ -144,13 +144,11 @@ const singleFlight = <A>(
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const fresh = yield* Deferred.make<A, ModbusError>();
-      const [deferred, isLeader] = yield* Ref.modify(
-        inFlight,
-        (current): Election<A> =>
-          Option.match(current, {
-            onSome: (existing) => [[existing, false], current],
-            onNone: () => [[fresh, true], Option.some(fresh)],
-          }),
+      const [deferred, isLeader] = yield* Ref.modify(inFlight, (current): Election<A> =>
+        Option.match(current, {
+          onSome: (existing) => [[existing, false], current],
+          onNone: () => [[fresh, true], Option.some(fresh)],
+        }),
       );
       if (isLeader) {
         yield* Effect.forkDetach(
