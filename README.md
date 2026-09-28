@@ -394,7 +394,23 @@ const damper =
 const same = yield * transport.batchingClient(3); // elsewhere, no options to restate
 ```
 
-`withBatchingClient` declares. Declaring a unit twice fails with `ModbusInvalidArgumentError`, whatever the second call asks for. `batchingClient` looks up, and fails the same way when nothing has declared that unit. A lookup that arrives while a declaration is still in flight waits for it, so neither call has to know which one ran first.
+`withBatchingClient` declares. Declaring a unit twice fails with `ModbusUnitAlreadyDeclaredError`, whatever the second call asks for. `batchingClient` looks up, and fails with `ModbusInvalidArgumentError` when nothing has declared that unit. A lookup that arrives while a declaration is still in flight waits for it, so neither call has to know which one ran first.
+
+A declaration belongs to the transport scope, not to the caller. It stays when the caller is interrupted, and when the owner that made it closes while the transport stays open. An owner that can start again over the same transport can catch the error and recover the existing client:
+
+```ts
+const damper =
+  yield *
+  transport
+    .withBatchingClient(3, { debounce })
+    .pipe(
+      Effect.catchTag('ModbusUnitAlreadyDeclaredError', (error) =>
+        transport.batchingClient(error.unitId),
+      ),
+    );
+```
+
+The recovered client keeps the options of the first declaration. `client.debounce` gives its debounce windows, so the owner can compare them with the windows that it expects.
 
 ### Shutdown
 
@@ -546,6 +562,8 @@ Errors from the underlying Rust layer are mapped to typed `Effect` errors via `D
 | `ModbusInternalError`         | Unclassified error                                    |
 
 Handle with `Effect.catchTags`. The `ModbusError` union type covers all seven variants.
+
+`withBatchingClient` can also fail with `ModbusUnitAlreadyDeclaredError` when the unit already has a batching client. This error is not a member of `ModbusError`, because it never comes from the bus. See [Declaring a unit, and reaching for it](#declaring-a-unit-and-reaching-for-it).
 
 ## Resilience: retries, reconnection, and circuit breaking
 

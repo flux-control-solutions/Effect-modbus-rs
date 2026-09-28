@@ -24,7 +24,12 @@ import {
 } from 'effect';
 
 import { ConnectionState } from './connection';
-import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
+import {
+  ModbusInvalidArgumentError,
+  ModbusNotConnectedError,
+  ModbusUnitAlreadyDeclaredError,
+  type ModbusError,
+} from './errors';
 import type { EffectModbusClient, ModbusOperations } from './modbus-client';
 import { createReadDebouncer, type ReadDebouncer } from './read-debouncer';
 import { createRegisterCache, type RegisterCache } from './register-cache';
@@ -148,6 +153,15 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
 
   /** The cache this client filters against, or `undefined` when `cache` is `false`. */
   readonly cache: RegisterCache | undefined;
+
+  /**
+   * The debounce windows this client was declared with, or `undefined` when it
+   * has none.
+   *
+   * A caller that recovers an existing client with `batchingClient` did not
+   * choose these windows. Compare them with the windows that the caller expects.
+   */
+  readonly debounce: BatchingDebounceOptions | undefined;
 
   /**
    * Runs an action when the calling scope closes, while the bus is still open
@@ -370,6 +384,7 @@ export const makeBatchingClient = (options: {
     return {
       unitId,
       cache,
+      debounce: options.debounce,
       write: writes.write,
       writeNow: writes.writeNow,
       writeAll: writes.writeAll,
@@ -397,7 +412,10 @@ export interface BatchingRegistryDeps {
 /** The batching half of a transport's API. */
 export interface BatchingRegistry {
   /**
-   * Declares the batching client for a unit. Fails if the unit already has one.
+   * Declares the batching client for a unit.
+   *
+   * Fails with `ModbusUnitAlreadyDeclaredError` if the unit already has a
+   * completed declaration or a declaration in progress.
    *
    * The declaration belongs to the registry's transport scope, not to the
    * calling fiber. Construction therefore continues if the caller is
@@ -408,7 +426,7 @@ export interface BatchingRegistry {
   withBatchingClient(
     unitId: number,
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
-  ): Effect.Effect<BatchingModbusClient, ModbusError>;
+  ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError>;
   /** The batching client for a unit. Fails if nothing has declared one. */
   batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
   /** Disables raw holding-register writes once a batching client exists for the unit. */
@@ -523,7 +541,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
     const message =
       `Unit ${unitId} already has a batching client. One unit has one batch, so a unit ` +
       `is declared once. Use batchingClient(${unitId}) to reach the existing one.`;
-    return new ModbusInvalidArgumentError({ cause: new Error(message), message });
+    return new ModbusUnitAlreadyDeclaredError({ cause: new Error(message), message, unitId });
   };
 
   const notDeclaredError = (unitId: number) => {
@@ -537,7 +555,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
     withBatchingClient: (
       unitId: number,
       options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
-    ): Effect.Effect<BatchingModbusClient, ModbusError> =>
+    ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* watchScope;

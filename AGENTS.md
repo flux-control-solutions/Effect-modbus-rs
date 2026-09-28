@@ -52,7 +52,8 @@ Package tests and type checks do not check that application. Verify browser chan
 - Keep one write cache per transport. Create the cache and its connection watcher only when batching is first requested.
 - Invalidate a unit's cache after a failed write. Invalidate all cached writes when the connection leaves `Connected`.
 - Compare cached values using their wire encoding.
-- Cache one batching client per unit ID. Reject later declarations with different options using `ModbusInvalidArgumentError`.
+- Cache one batching client per unit ID. Reject every later declaration of the unit with `ModbusUnitAlreadyDeclaredError`.
+- Keep `ModbusUnitAlreadyDeclaredError` out of the `ModbusError` union. It is a declaration error, not a bus error, so retry policies do not apply to it.
 - Open `modbus.write` spans after cache filtering and only for writes that reach the bus.
 - Apply caller span attributes first and reserved `modbus.*` attributes last. Join repeated batch attribute values with commas.
 

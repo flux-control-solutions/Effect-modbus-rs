@@ -4,7 +4,11 @@ import { Deferred, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef, Tracer } 
 
 import { createBatchingRegistry, makeBatchingClient } from '../src/batching-client';
 import { ConnectionState } from '../src/connection';
-import { ModbusConnectionClosedError, ModbusTimeoutError } from '../src/errors';
+import {
+  ModbusConnectionClosedError,
+  ModbusTimeoutError,
+  ModbusUnitAlreadyDeclaredError,
+} from '../src/errors';
 import type { SlaveDeviceDefinitions } from '../src/mocks';
 import { createRegisterCache } from '../src/register-cache';
 import { RetryPolicies } from '../src/retry';
@@ -368,9 +372,48 @@ test('a unit is declared once, and the lookup returns that client', async () => 
 
   expect(result).toEqual({
     same: true,
-    identical: 'ModbusInvalidArgumentError',
-    different: 'ModbusInvalidArgumentError',
+    identical: 'ModbusUnitAlreadyDeclaredError',
+    different: 'ModbusUnitAlreadyDeclaredError',
     undeclared: 'ModbusInvalidArgumentError',
+  });
+});
+
+test('a second declaration fails with its own error, and the caller recovers the client', async () => {
+  const debounce = { writes: { window: '50 millis', maxHold: '200 millis' } } as const;
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const declared = yield* transport.withBatchingClient(3, { debounce });
+
+      const failure = yield* Effect.flip(transport.withBatchingClient(3));
+      // The tag lets a caller recover the declaration without also catching a
+      // bad address or quantity, which share `ModbusInvalidArgumentError`.
+      const recovered = yield* transport
+        .withBatchingClient(3)
+        .pipe(
+          Effect.catchTag('ModbusUnitAlreadyDeclaredError', (error) =>
+            transport.batchingClient(error.unitId),
+          ),
+        );
+
+      return {
+        isError: failure instanceof ModbusUnitAlreadyDeclaredError,
+        tag: failure._tag,
+        unitId: failure instanceof ModbusUnitAlreadyDeclaredError ? failure.unitId : undefined,
+        same: recovered === declared,
+        debounce: recovered.debounce,
+        undebounced: (yield* transport.withBatchingClient(4)).debounce,
+      };
+    }),
+  );
+
+  expect(result).toEqual({
+    isError: true,
+    tag: 'ModbusUnitAlreadyDeclaredError',
+    unitId: 3,
+    same: true,
+    debounce,
+    undebounced: undefined,
   });
 });
 
