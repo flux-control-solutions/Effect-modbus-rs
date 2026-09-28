@@ -24,7 +24,12 @@ import {
 } from 'effect';
 
 import { ConnectionState } from './connection';
-import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
+import {
+  ModbusInvalidArgumentError,
+  ModbusNotConnectedError,
+  ModbusUnitAlreadyDeclaredError,
+  type ModbusError,
+} from './errors';
 import type { EffectModbusClient, ModbusOperations } from './modbus-client';
 import { createReadDebouncer, type ReadDebouncer } from './read-debouncer';
 import { createRegisterCache, type RegisterCache } from './register-cache';
@@ -37,7 +42,7 @@ import {
 } from './register-plan';
 import type { ModbusRetryPolicy } from './retry';
 import { mergeSpanAttributes, type ModbusSpanAttributes } from './span-attributes';
-import { createWriteDebouncer, type DebouncedWrite } from './write-debouncer';
+import { createWriteDebouncer, resolveWriteHold, type DebouncedWrite } from './write-debouncer';
 
 /** How long operations are collected before they reach the bus. */
 export interface BatchingDebounceOptions {
@@ -65,6 +70,52 @@ export interface BatchingDebounceOptions {
     readonly window: Duration.Input;
   };
 }
+
+/**
+ * The debounce windows that a batching client applies, as resolved values.
+ *
+ * A write entry always has `maxHold`. When the declaration omitted it, it is
+ * four times the window, which is the limit the write debouncer applies.
+ */
+export interface BatchingDebounceWindows {
+  /** The write window and the hold limit. Omitted when writes are not debounced. */
+  readonly writes?: {
+    readonly window: Duration.Duration;
+    readonly maxHold: Duration.Duration;
+  };
+  /** The read window. Omitted when reads are not debounced. */
+  readonly reads?: {
+    readonly window: Duration.Duration;
+  };
+}
+
+/**
+ * Resolves and freezes the windows that a client reports.
+ *
+ * The debouncers read their timing when they are built. A copy keeps the
+ * reported values equal to those timings, even if the caller later changes the
+ * options object that it passed.
+ */
+const resolveDebounceWindows = (
+  options: BatchingDebounceOptions | undefined,
+): BatchingDebounceWindows | undefined => {
+  if (options === undefined) return undefined;
+  const hold =
+    options.writes === undefined
+      ? undefined
+      : resolveWriteHold(options.writes.window, options.writes.maxHold);
+  return Object.freeze({
+    ...(hold && {
+      writes: Object.freeze({
+        window: Duration.millis(hold.windowMs),
+        maxHold: Duration.millis(hold.maxHoldMs),
+      }),
+    }),
+    ...(options.reads && {
+      reads: Object.freeze({ window: Duration.fromInputUnsafe(options.reads.window) }),
+    }),
+  });
+};
 
 /** Options for {@link makeBatchingClient}. */
 export interface BatchingClientOptions {
@@ -148,6 +199,18 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
 
   /** The cache this client filters against, or `undefined` when `cache` is `false`. */
   readonly cache: RegisterCache | undefined;
+
+  /**
+   * The debounce windows this client applies, or `undefined` when its
+   * declaration had no `debounce` option.
+   *
+   * The values are resolved and frozen when the client is built. An omitted
+   * `maxHold` shows as four times the write window.
+   *
+   * A caller that recovers an existing client with `batchingClient` did not
+   * choose these windows. Compare them with the windows that the caller expects.
+   */
+  readonly debounce: BatchingDebounceWindows | undefined;
 
   /**
    * Runs an action when the calling scope closes, while the bus is still open
@@ -370,6 +433,7 @@ export const makeBatchingClient = (options: {
     return {
       unitId,
       cache,
+      debounce: resolveDebounceWindows(options.debounce),
       write: writes.write,
       writeNow: writes.writeNow,
       writeAll: writes.writeAll,
@@ -397,7 +461,10 @@ export interface BatchingRegistryDeps {
 /** The batching half of a transport's API. */
 export interface BatchingRegistry {
   /**
-   * Declares the batching client for a unit. Fails if the unit already has one.
+   * Declares the batching client for a unit.
+   *
+   * Fails with `ModbusUnitAlreadyDeclaredError` if the unit already has a
+   * completed declaration or a declaration in progress.
    *
    * The declaration belongs to the registry's transport scope, not to the
    * calling fiber. Construction therefore continues if the caller is
@@ -408,7 +475,7 @@ export interface BatchingRegistry {
   withBatchingClient(
     unitId: number,
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
-  ): Effect.Effect<BatchingModbusClient, ModbusError>;
+  ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError>;
   /** The batching client for a unit. Fails if nothing has declared one. */
   batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
   /** Disables raw holding-register writes once a batching client exists for the unit. */
@@ -523,7 +590,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
     const message =
       `Unit ${unitId} already has a batching client. One unit has one batch, so a unit ` +
       `is declared once. Use batchingClient(${unitId}) to reach the existing one.`;
-    return new ModbusInvalidArgumentError({ cause: new Error(message), message });
+    return new ModbusUnitAlreadyDeclaredError({ cause: new Error(message), message, unitId });
   };
 
   const notDeclaredError = (unitId: number) => {
@@ -537,7 +604,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
     withBatchingClient: (
       unitId: number,
       options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
-    ): Effect.Effect<BatchingModbusClient, ModbusError> =>
+    ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* watchScope;

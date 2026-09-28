@@ -1,10 +1,24 @@
 import { expect, test } from 'bun:test';
 
-import { Deferred, Effect, Exit, Fiber, Layer, Scope, SubscriptionRef, Tracer } from 'effect';
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Scope,
+  SubscriptionRef,
+  Tracer,
+} from 'effect';
 
 import { createBatchingRegistry, makeBatchingClient } from '../src/batching-client';
 import { ConnectionState } from '../src/connection';
-import { ModbusConnectionClosedError, ModbusTimeoutError } from '../src/errors';
+import {
+  ModbusConnectionClosedError,
+  ModbusTimeoutError,
+  ModbusUnitAlreadyDeclaredError,
+} from '../src/errors';
 import type { SlaveDeviceDefinitions } from '../src/mocks';
 import { createRegisterCache } from '../src/register-cache';
 import { RetryPolicies } from '../src/retry';
@@ -368,10 +382,136 @@ test('a unit is declared once, and the lookup returns that client', async () => 
 
   expect(result).toEqual({
     same: true,
-    identical: 'ModbusInvalidArgumentError',
-    different: 'ModbusInvalidArgumentError',
+    identical: 'ModbusUnitAlreadyDeclaredError',
+    different: 'ModbusUnitAlreadyDeclaredError',
     undeclared: 'ModbusInvalidArgumentError',
   });
+});
+
+test('a second declaration fails with its own error, and the caller recovers the client', async () => {
+  const debounce = { writes: { window: '50 millis', maxHold: '200 millis' } } as const;
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const declared = yield* transport.withBatchingClient(3, { debounce });
+
+      const failure = yield* Effect.flip(transport.withBatchingClient(3));
+      // The tag lets a caller recover the declaration without also catching a
+      // bad address or quantity, which share `ModbusInvalidArgumentError`.
+      const recovered = yield* transport
+        .withBatchingClient(3)
+        .pipe(
+          Effect.catchTag('ModbusUnitAlreadyDeclaredError', (error) =>
+            transport.batchingClient(error.unitId),
+          ),
+        );
+
+      return {
+        isError: failure instanceof ModbusUnitAlreadyDeclaredError,
+        tag: failure._tag,
+        unitId: failure instanceof ModbusUnitAlreadyDeclaredError ? failure.unitId : undefined,
+        same: recovered === declared,
+        writes: recovered.debounce?.writes && {
+          window: Duration.toMillis(recovered.debounce.writes.window),
+          maxHold: Duration.toMillis(recovered.debounce.writes.maxHold),
+        },
+        undebounced: (yield* transport.withBatchingClient(4)).debounce,
+      };
+    }),
+  );
+
+  expect(result).toEqual({
+    isError: true,
+    tag: 'ModbusUnitAlreadyDeclaredError',
+    unitId: 3,
+    same: true,
+    writes: { window: 50, maxHold: 200 },
+    undebounced: undefined,
+  });
+});
+
+/** A window that a caller can change after it passes the options. */
+interface ChangeableWindow {
+  window: Duration.Input;
+}
+
+test('a client reports the resolved windows, and later changes to the options do not reach it', async () => {
+  const result = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const writes: ChangeableWindow = { window: '100 millis' };
+      const reads: ChangeableWindow = { window: '20 millis' };
+      const options = { debounce: { writes, reads } };
+      const client = yield* transport.withBatchingClient(3, options);
+      // The debouncers read their timing at construction, so the report must
+      // not follow a later change to the object that the caller passed.
+      options.debounce.writes.window = '5 seconds';
+      options.debounce.reads.window = '5 seconds';
+
+      const reported = client.debounce;
+      return {
+        writeWindow: reported?.writes && Duration.toMillis(reported.writes.window),
+        // An omitted `maxHold` is four times the window in the write debouncer.
+        maxHold: reported?.writes && Duration.toMillis(reported.writes.maxHold),
+        readWindow: reported?.reads && Duration.toMillis(reported.reads.window),
+        frozen: Object.isFrozen(reported) && Object.isFrozen(reported?.writes),
+      };
+    }),
+  );
+
+  expect(result).toEqual({ writeWindow: 100, maxHold: 400, readWindow: 20, frozen: true });
+});
+
+test('a declaration during a declaration in progress fails with its own error and recovers', async () => {
+  const result = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const scope = yield* Effect.scope;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const registry = createBatchingRegistry({
+          withClient: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return raw;
+            }),
+          connectionState: transport.connectionState,
+          scope,
+        });
+
+        const first = yield* Effect.forkChild(registry.withBatchingClient(3));
+        yield* Deferred.await(started);
+        // The first declaration has not completed, so the unit is declared but
+        // has no client yet. The second declaration must still fail, and the
+        // recovery must wait for the first client.
+        const failure = yield* Effect.flip(registry.withBatchingClient(3));
+        const recovering = yield* Effect.forkChild(
+          registry
+            .withBatchingClient(3)
+            .pipe(
+              Effect.catchTag('ModbusUnitAlreadyDeclaredError', (error) =>
+                registry.batchingClient(error.unitId),
+              ),
+            ),
+        );
+        yield* Deferred.succeed(release, undefined);
+        const [declared, recovered] = yield* Effect.all(
+          [Fiber.join(first), Fiber.join(recovering)],
+          { concurrency: 'unbounded' },
+        );
+        return {
+          tag: failure._tag,
+          unitId: failure instanceof ModbusUnitAlreadyDeclaredError ? failure.unitId : undefined,
+          same: declared === recovered,
+        };
+      }),
+    ),
+  );
+
+  expect(result).toEqual({ tag: 'ModbusUnitAlreadyDeclaredError', unitId: 3, same: true });
 });
 
 test('the cache suppresses a write the device already agrees with', async () => {

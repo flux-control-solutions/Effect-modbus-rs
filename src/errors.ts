@@ -142,6 +142,41 @@ export class ModbusCircuitOpenError extends Data.TaggedError('ModbusCircuitOpenE
 }> {}
 
 /**
+ * Error indicating that a unit already has a batching client on this transport.
+ *
+ * This is a **local** error. `modbus-rs` never returns it. The transport
+ * raises it from `withBatchingClient` when the unit has a completed
+ * declaration or a declaration in progress.
+ *
+ * The declaration belongs to the transport scope, not to the caller. It stays
+ * after its caller is interrupted, and after the owner that made it closes.
+ * Catch this error to recover the existing client with `batchingClient(unitId)`.
+ *
+ * This error is not a member of {@link ModbusError}. It can occur only when a
+ * caller declares a unit. It never occurs on the bus, so retry policies do not
+ * apply to it.
+ *
+ * @example
+ * ```ts
+ * const client = yield* transport.withBatchingClient(3).pipe(
+ *   Effect.catchTag('ModbusUnitAlreadyDeclaredError', (error) =>
+ *     transport.batchingClient(error.unitId),
+ *   ),
+ * );
+ * ```
+ */
+export class ModbusUnitAlreadyDeclaredError extends Data.TaggedError(
+  'ModbusUnitAlreadyDeclaredError',
+)<{
+  /** A descriptive error. */
+  readonly cause: Error;
+  /** Human-readable explanation of the error. */
+  readonly message: string;
+  /** The unit that already has a batching client. */
+  readonly unitId: number;
+}> {}
+
+/**
  * Union of all typed Modbus errors emitted by this library.
  *
  * Handle with {@linkcode Effect.catchTags}:

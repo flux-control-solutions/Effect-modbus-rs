@@ -19,6 +19,7 @@ import {
   ModbusTimeoutError,
   toModbusError,
   type ModbusError,
+  type ModbusUnitAlreadyDeclaredError,
 } from './errors';
 import {
   createEffectModbusClient,
@@ -232,8 +233,12 @@ export interface TransportServiceApi {
    * A unit is declared once, because every option here is a fact about the unit
    * rather than about a caller: one unit holds one batch, one belief about the
    * device, and one window. Declaring a unit twice fails with
-   * `ModbusInvalidArgumentError`. Use {@link batchingClient} to reach a client
-   * another part of the program declared.
+   * `ModbusUnitAlreadyDeclaredError`. Use {@link batchingClient} to reach a
+   * client another part of the program declared.
+   *
+   * The declaration lasts as long as the transport. A new owner that starts over
+   * a transport that stays open finds the unit declared. It can catch
+   * `ModbusUnitAlreadyDeclaredError` and use {@link batchingClient} instead.
    *
    * Nothing is debounced unless `debounce` asks for it, matching the rest of
    * this package: default timing stays predictable.
@@ -244,7 +249,7 @@ export interface TransportServiceApi {
   withBatchingClient(
     unitId: number,
     options?: BatchingClientOptions & { readonly retry?: ModbusRetryPolicy },
-  ): Effect.Effect<BatchingModbusClient, ModbusError>;
+  ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError>;
   /**
    * The {@link BatchingModbusClient} declared for a unit.
    *
