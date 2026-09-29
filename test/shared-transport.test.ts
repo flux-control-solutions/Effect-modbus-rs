@@ -275,7 +275,7 @@ test('explicit close runs batching shutdown actions before closing the handle', 
     const batched = yield* api.withBatchingClient(1, { cache: false });
     yield* Scope.provide(batched.onShutdown(batched.writeNow({ address: 0, value: 0 })), scope);
 
-    const exit = yield* Effect.exit(Scope.provide(api.close(), scope));
+    const exit = yield* Effect.exit(api.close(scope));
 
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(held).toBe(0);

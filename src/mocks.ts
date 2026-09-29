@@ -541,10 +541,9 @@ export const createMockTransport = (devices: SlaveDeviceDefinitions) => {
             reconnectOnce,
             SubscriptionRef.set(connectionState, ConnectionState.Connected()),
           ),
-        close: () =>
+        close: (scope: Scope.Closeable) =>
           Effect.gen(function* () {
             if (closed) return;
-            const scope = yield* Effect.scope;
             yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
           }),
         hasPendingRequests: () => false,
