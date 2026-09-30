@@ -220,8 +220,13 @@ export interface TransportServiceApi {
    * while the reconnect was running.
    */
   reconnect(): Effect.Effect<void, ModbusError>;
-  /** Closes the transport and its scope immediately. */
-  close(): Effect.Effect<void, ModbusError, Scope.Scope>;
+  /**
+   * Closes `scope`, then closes the transport.
+   *
+   * Pass the scope that holds the work to finish first, such as
+   * `onShutdown` writes. The transport closes even if a finalizer fails.
+   */
+  close(scope: Scope.Closeable): Effect.Effect<void, ModbusError>;
   /**
    * Declares the {@link BatchingModbusClient} for a unit.
    *
@@ -635,9 +640,8 @@ export function createTransportScoped<
         yield* SubscriptionRef.set(connectionState, ConnectionState.Connected());
       }),
 
-      close: Effect.fnUntraced(function* () {
+      close: Effect.fnUntraced(function* (scope: Scope.Closeable) {
         if (closed) return;
-        const scope = yield* Effect.scope;
         yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
       }),
 
