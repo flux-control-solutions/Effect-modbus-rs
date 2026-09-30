@@ -13,10 +13,10 @@ The API can change before version 1.0.
 ## Install
 
 ```sh
-bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.109
+bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.118
 ```
 
-The current package requires Effect `^4.0.0-rc.109` as a peer dependency.
+The current package requires Effect `^4.0.0-rc.118` as a peer dependency.
 It depends on `modbus-rs@0.16.1`.
 The published package exports JavaScript and TypeScript declarations from `dist/`.
 
@@ -284,7 +284,8 @@ Pass a `RegisterCache` instance to supply a custom cache.
 `client.onShutdown(action)` registers a finalizer in the calling scope.
 Use an immediate write method for an action that must run before transport cleanup.
 Close the caller scope while the transport remains open.
-An explicit earlier `transport.close()` can prevent the action from reaching the device.
+Call `transport.close(callerScope)` to finalize the caller scope before closing the connection.
+Closing a different scope first can prevent the action from reaching the device.
 
 An unhandled action failure is logged and raised as a defect.
 Other finalizers still run.
@@ -454,7 +455,8 @@ A late successful connection remains usable.
 `requestTimeoutMs` limits requests through binding options.
 It does not limit connection acquisition.
 `setRequestTimeout(ms)` and `clearRequestTimeout()` require an open transport.
-`transport.close()` finalizes the transport scope; later use cannot reopen that closed transport.
+`transport.close(scope)` finalizes the supplied caller scope, then closes the transport even if a finalizer fails.
+Later use cannot reopen that closed transport.
 
 ### Upstream retry options
 
