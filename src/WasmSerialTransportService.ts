@@ -12,7 +12,7 @@ import {
 } from './WasmRtuTransportService';
 
 /**
- * Abstract browser (WASM) serial Modbus transport service tag.
+ * Abstract browser serial Modbus transport service tag.
  *
  * Represents a Web Serial-based Modbus transport backed by either ASCII or RTU
  * framing. Use this tag when you need a browser serial transport but don't care
@@ -30,7 +30,8 @@ import {
  * Layer.provide(WasmSerialTransportService.fromRtu({ port, baudRate: 9600 }))
  * ```
  *
- * @see requestSerialPort — Obtains the `port` handle both providers need (must be called from a user gesture).
+ * Obtain the serial port handle with {@link requestSerialPort}. Call it from a
+ * browser user-gesture handler because the browser may require transient activation.
  */
 export class WasmSerialTransportService extends Context.Service<
   WasmSerialTransportService,
@@ -39,6 +40,9 @@ export class WasmSerialTransportService extends Context.Service<
   /**
    * Creates a {@link Layer} providing {@link WasmSerialTransportService}
    * backed by an ASCII transport.
+   *
+   * @param options - Serial connection and resilience options.
+   * @returns A layer that provides the ASCII transport through the abstract service tag.
    */
   static fromAscii(
     options: WasmAsciiTransportOpenOptions & TransportResilienceOptions,
@@ -51,6 +55,9 @@ export class WasmSerialTransportService extends Context.Service<
   /**
    * Creates a {@link Layer} providing {@link WasmSerialTransportService}
    * backed by an RTU transport.
+   *
+   * @param options - Serial connection and resilience options.
+   * @returns A layer that provides the RTU transport through the abstract service tag.
    */
   static fromRtu(
     options: WasmRtuTransportOpenOptions & TransportResilienceOptions,

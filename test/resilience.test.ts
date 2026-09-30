@@ -9,6 +9,8 @@ import { createRetryPolicy, retryModbus, RetryPolicies } from '../src/retry';
 import { createTransportScoped } from '../src/shared-transport';
 import { TcpTransportService } from '../src/TcpTransportService';
 
+/** Tests retry policy layering, supervised reconnection, circuit states, and scoped cleanup. */
+
 const fast = createRetryPolicy({ maxRetries: 3, baseDelay: '1 millis', maxDelay: '4 millis' });
 const timeout = () =>
   new ModbusTimeoutError({ cause: new Error('timeout'), message: 'no response' });

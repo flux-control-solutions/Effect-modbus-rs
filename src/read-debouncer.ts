@@ -1,19 +1,6 @@
 /**
- * @fileoverview Collects register reads that arrive separately into one span.
- *
- * `planReads` merges the addresses a caller holds at one moment. A caller with an
- * accessor per parameter never holds two addresses at the same moment, so a
- * planner alone would force every such caller to be rewritten around a batch API.
- *
- * This module collects the addresses on time instead, so a caller keeps its
- * per-parameter accessors and still gets one transaction per span.
- *
- * The read debouncer is deliberately simpler than the write debouncer. There is
- * no supersede rule, because a second request for an address is not a newer
- * value, it is a second reader. There is no cache, because this package records
- * only what it wrote. There is no ceiling on the hold, because the window does
- * not restart: it opens on the first arrival of a batch and expires on time,
- * which a stream of arrivals can never push out.
+ * @fileoverview Collects concurrent register reads and plans them into spans.
+ * The first request starts a fixed collection window; later requests do not restart it.
  *
  * @module
  */
@@ -33,10 +20,9 @@ export interface ReadDebouncerOptions {
   /**
    * How long addresses are collected before the spans are read.
    *
-   * The window opens on the first arrival and does not restart, so it bounds the
-   * latency a reader pays. One transaction is the unit to compare it against:
-   * a window far shorter than a transaction collects nothing, and a window much
-   * longer than one delays every reader for a batch it did not need.
+   * The first arrival starts the window. Later arrivals do not restart it.
+   * Compare the window with measured transaction time when selecting a value.
+   * Device response time adds to the collection delay.
    *
    * A window of zero disables the debouncer: every read is issued on its own,
    * with no timer and no batch.
@@ -62,8 +48,8 @@ export interface ReadDebouncer {
   /**
    * Adds an address to the batch and reads immediately, rather than waiting.
    *
-   * Every reader already collected is answered by the same transaction, so no
-   * reader waits longer because of this call.
+   * The flush includes readers already collected. Its plan can require several
+   * transactions, and their results are delivered to the waiting readers.
    */
   readNow(address: number): Effect.Effect<number, ModbusError>;
 
@@ -129,7 +115,7 @@ interface TimerState {
  * When the scope closes, readers still waiting are interrupted.
  *
  * @param options - The window, the planner limits, and the callback that reads.
- * @returns The debouncer.
+ * @returns The scoped debouncer. Waiting readers are interrupted when its scope closes.
  *
  * @example
  * const debouncer = yield* createReadDebouncer({

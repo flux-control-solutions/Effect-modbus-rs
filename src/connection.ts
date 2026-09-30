@@ -1,3 +1,4 @@
+/** Models transport connection state and supervised reconnection with a circuit guard. */
 import { Data, Duration, Effect, Result, type Scope, SubscriptionRef } from 'effect';
 
 import { ModbusCircuitOpenError, type ModbusError } from './errors';
@@ -12,7 +13,7 @@ import {
  * Live connection state of a transport.
  *
  * Owned by the transport and published through
- * {@link TransportServiceApi.connectionState}, so an application can show link
+ * `transport.connectionState`, so an application can show link
  * status without inferring it from failed reads.
  *
  * - `Disconnected` — never opened, or closed. Operations open it lazily.
@@ -81,7 +82,10 @@ const defaultTriggers: ReadonlyArray<ModbusErrorTag> = [
   'ModbusTransportError',
 ];
 
-/** Applies defaults to {@link ReconnectOptions}. */
+/** Applies defaults to reconnection options.
+ * @param options - Optional policy, reset interval, and trigger tags.
+ * @returns Resolved policy, reset duration, and failure predicate.
+ */
 export const resolveReconnect = (options: ReconnectOptions): ResolvedReconnect => {
   const triggerTags = options.triggerOn ?? defaultTriggers;
   return {

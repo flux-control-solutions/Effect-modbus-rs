@@ -6,17 +6,15 @@ import {
   type EffectModbusClient,
 } from '@flux-control/effect-modbus-rs';
 /**
- * Wires up a small vanilla-DOM UI (see ../index.html) to effect-modbus-rs's
- * browser transport services, so this can be run in a real browser for manual
- * testing or as a starting point for a consumer's own app.
+ * Connects the demo UI to the package's browser transports for manual testing.
  *
  * The connection is kept open across multiple button clicks (connect once,
  * read many times, disconnect explicitly) by manually managing an Effect
- * `Scope` instead of using `Effect.scoped` — see `connectWs`/`connectSerial`.
+ * `Scope` instead of using `Effect.scoped` — see `connectWs` and `connectSerial`.
  */
 import { Context, Effect, Exit, Layer, Scope } from 'effect';
 
-/** Returns the required DOM element after checking its concrete runtime type. */
+/** Looks up a required DOM element and checks its runtime type. */
 const $ = <T extends HTMLElement>(id: string, constructor: { new (): T }): T => {
   const element = document.getElementById(id);
   if (!(element instanceof constructor)) {
@@ -41,7 +39,7 @@ const quantityEl = $('quantity', HTMLInputElement);
 const statusEl = $('status', HTMLSpanElement);
 const logEl = $('log', HTMLDivElement);
 
-/** Prepends a timestamped status message to the on-page connection log. */
+/** Adds a timestamped message to the start of the connection log. */
 const log = (msg: string) => {
   const time = new Date().toLocaleTimeString();
   logEl.textContent = `[${time}] ${msg}\n${logEl.textContent}`;
@@ -82,12 +80,13 @@ const connectWs = async (unitId: number) => {
 };
 
 /**
- * Requests a Web Serial port while the click gesture is active, then builds
- * the selected RTU or ASCII transport in a manually managed scope.
+ * Requests a Web Serial port from the connect-click flow, then builds the
+ * selected RTU or ASCII transport in a manually managed scope. The helper
+ * dynamically imports the browser binding before it requests the port.
  */
 const connectSerial = async (unitId: number) => {
-  // Must run inside this click handler — Web Serial's requestPort() requires a
-  // user gesture. `connect()` below is itself the click handler.
+  // Keep the request in the connect-click flow because Web Serial may require
+  // transient user activation. The helper imports its binding before requesting.
   const port = await Effect.runPromise(requestSerialPort());
   const baudRate = Number(baudRateEl.value);
 

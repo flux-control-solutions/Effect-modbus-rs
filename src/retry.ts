@@ -1,3 +1,4 @@
+/** Defines opt-in Modbus retry schedules and an Effect retry combinator. */
 import { Duration, Effect, Random, Schedule } from 'effect';
 
 import type { ModbusError } from './errors';

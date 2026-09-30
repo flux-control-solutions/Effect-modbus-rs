@@ -1,3 +1,4 @@
+/** Defines typed Modbus failures and converts binding errors to the public error union. */
 import { Data } from 'effect';
 import { getModbusErrorCode, ModbusErrorCode } from 'modbus-rs';
 
@@ -24,8 +25,7 @@ export class ModbusExceptionError extends Data.TaggedError('ModbusExceptionError
  *
  * Mapped from {@link ModbusErrorCode.TIMEOUT} via `modbus-rs`.
  * Adjust timeouts via `setRequestTimeout` on the transport, or configure
- * with {@link RtuTransportOptions.requestTimeoutMs | requestTimeoutMs} /
- * {@link RtuTransportOptions.responseTimeoutMs | responseTimeoutMs}.
+ * with `requestTimeoutMs` or `responseTimeoutMs`, where the binding supports them.
  *
  * The transport also raises this error locally when an operation waits for an
  * open or reconnect longer than the `connectTimeout` transport option.
@@ -104,9 +104,8 @@ export class ModbusInternalError extends Data.TaggedError('ModbusInternalError')
  * connection was established or after it was closed.
  *
  * This is a **local** error — it is never returned by `modbus-rs`.
- * It is thrown by the transport service when `setRequestTimeout`,
- * `clearRequestTimeout`, or `withClient` is called before a
- * successful connection.
+ * Timeout setters require an open connection. Client acquisition opens the
+ * connection lazily, but fails after the transport scope has closed.
  *
  * Connect by calling `withClient(unitId)` on the transport service.
  * The connection is established lazily on the first call.
@@ -126,11 +125,10 @@ export class ModbusNotConnectedError extends Data.TaggedError('ModbusNotConnecte
  * so the request was refused without touching the wire.
  *
  * This is a **local** error — it is never returned by `modbus-rs`. It is raised
- * by the transport when its connection state is `Reconnecting` or `Down`,
- * which keeps a dead device from being hammered by every caller at once.
+ * by the transport when supervision is enabled and its state is `Reconnecting`
+ * or `Down`. Refused operations do not send a request to the device.
  *
- * Retryable by default: a policy with enough budget rides out the outage
- * cheaply, since each refused attempt costs nothing on the bus.
+ * Retry policies retry this error by default within their configured budgets.
  *
  * @see ConnectionState — The transport state that produces this error.
  */
@@ -177,9 +175,10 @@ export class ModbusUnitAlreadyDeclaredError extends Data.TaggedError(
 }> {}
 
 /**
- * Union of all typed Modbus errors emitted by this library.
+ * Union of typed operation and connection errors.
+ * Declaration errors are separate from this union.
  *
- * Handle with {@linkcode Effect.catchTags}:
+ * Handle with `Effect.catchTags`:
  *
  * ```ts
  * Effect.catchTags(client.readHoldingRegisters({ address: 0, quantity: 10 }), {
@@ -189,7 +188,8 @@ export class ModbusUnitAlreadyDeclaredError extends Data.TaggedError(
  * })
  * ```
  *
- * Each variant maps to a specific {@link ModbusErrorCode} from `modbus-rs`.
+ * Binding failures map from {@link ModbusErrorCode}. Local guards can also
+ * produce errors in this union.
  *
  * @see ModbusErrorCode — The upstream error code enum driving this mapping.
  */

@@ -11,7 +11,7 @@ import type { TransportResilienceOptions, TransportServiceApi } from './shared-t
  *
  * The transport connection is opened lazily on the first call to
  * `withClient(unitId)` and automatically closed when the consuming
- * {@link Effect.Scope | Scope} finalizes.
+ * scope finalizes.
  *
  * Clients are created per `unitId` via {@link WasmWsTransport.createClient} and
  * cached, so repeated requests for the same unit ID reuse the same client.
@@ -25,8 +25,10 @@ export class WasmWsTransportService extends Context.Service<
   TransportServiceApi
 >()('WasmWsTransportService') {
   /**
-   * Scoped constructor effect for the service. v4 does not auto-generate a
-   * layer from this, so {@link WasmWsTransportService.make} builds one explicitly.
+   * Builds the scoped transport service effect. The transport opens on first use
+   * and its connection closes when the consuming scope ends.
+   *
+   * @returns An effect that provides the service for the lifetime of its scope.
    */
   static readonly makeScoped = createTransportScoped<
     WasmWsTransportOptions,
@@ -46,6 +48,7 @@ export class WasmWsTransportService extends Context.Service<
    * Creates a {@link Layer} providing a live {@link WasmWsTransportService}.
    *
    * @param options - Connection and resilience options for the transport.
+   * @returns A layer that provides the scoped service.
    */
   static readonly make = (
     options: WasmWsTransportOptions & TransportResilienceOptions,
@@ -55,12 +58,13 @@ export class WasmWsTransportService extends Context.Service<
    * Creates a {@link Layer} providing an in-memory mock
    * {@link WasmWsTransportService} for testing or development.
    *
-   * Accepts an array of {@link SlaveDeviceDefinition} describing the
+   * Accepts an array of {@link SlaveDeviceDefinitions} describing the
    * simulated Modbus slaves and their register/coil maps.
    *
    * @param devices - Slave device definitions for the mock.
    * @returns A function that takes {@link WasmWsTransportOptions} and
-   *          returns a scoped {@link Layer} providing the mock service.
+   *          returns a scoped {@link Layer} providing the mock service. The mock
+   *          uses device definitions and fault hooks instead of network I/O.
    *
    * @see makeMockTransport — The underlying mock factory.
    */

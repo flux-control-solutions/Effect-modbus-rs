@@ -24,6 +24,8 @@ import { createRegisterCache } from '../src/register-cache';
 import { RetryPolicies } from '../src/retry';
 import { RtuTransportService } from '../src/RtuTransportService';
 
+/** Tests batching client declaration, caching, debouncing, tracing, and shutdown behavior. */
+
 const devices: SlaveDeviceDefinitions = [
   {
     unitId: 3,

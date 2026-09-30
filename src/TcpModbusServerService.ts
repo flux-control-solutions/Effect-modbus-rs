@@ -1,3 +1,4 @@
+/** Defines a scoped layer for a Modbus TCP server. */
 import { Effect, Layer } from 'effect';
 import type { ServerHandlers, TcpServerOptions } from 'modbus-rs';
 
@@ -13,7 +14,7 @@ import { toModbusError } from './errors';
  *
  * @param options - Server bind options (host, port, unit ID).
  * @param handlers - Callback functions that handle incoming Modbus requests.
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that starts the server; bind failures enter the `ModbusError` channel. Scope finalization shuts it down, and shutdown failures are ignored.
  *
  * @example
  * ```ts

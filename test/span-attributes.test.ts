@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 
 import { mergeSpanAttributes } from '../src/span-attributes';
 
+/** Tests how span attributes from callers are merged. */
+
 test('a single caller keeps each span attribute scalar unchanged', () => {
   expect(mergeSpanAttributes([{ attempts: 2, active: false, point: 'Supply' }])).toEqual({
     attempts: 2,

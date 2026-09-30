@@ -11,6 +11,8 @@ import {
   type WritePlanStep,
 } from '../src/register-plan';
 
+/** Tests register read and write planning, bounds, and generated invariants. */
+
 /**
  * Seeded generator, so a failing property prints a case that reproduces.
  *

@@ -20,7 +20,8 @@ import { toModbusError } from './errors';
  * @param options - WebSocket gateway URL and unit ID.
  * @param handlers - Callback functions that handle incoming Modbus requests
  *   (same {@link ServerHandlers} shape as the native TCP/serial servers).
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that binds the server and runs its request loop within the
+ *   layer scope. Binding errors fail with {@link ModbusError}; loop errors are logged.
  *
  * @example
  * ```ts

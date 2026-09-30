@@ -14,12 +14,14 @@ import { WasmRtuTransportService } from '../src/WasmRtuTransportService';
 import { WasmSerialTransportService } from '../src/WasmSerialTransportService';
 import { WasmWsTransportService } from '../src/WasmWsTransportService';
 
+/** Checks mock transport option types and retry behavior for abstract serial services. */
+
 // ---------------------------------------------------------------------------
 // Each transport tag declares the options of its own `makeMockTransport`. The
 // eight declarations are independent, and all eight bodies call the same
 // factory. Thus one tag can declare fewer options than the factory accepts,
-// and only the type declaration shows the difference. The runtime tests cannot
-// find this fault, because the options operate correctly (issue #14).
+// and only the type declaration shows the difference. Runtime tests cannot
+// detect this mismatch because the options still work at runtime.
 //
 // These assertions are that test. `bun run typecheck` (`tsc --noEmit`) enforces
 // them. Each assertion is a generic constraint, because a type alias that
@@ -65,8 +67,7 @@ type _WasmWs = AssertKeysOf<
   MockResilienceKeys
 >;
 
-// The two abstract serial tags. These two were the fault in issue #14: a test
-// that keeps the framing abstract had no way to name a hook or a policy.
+// The two abstract serial tags also expose the fault and retry options.
 type _Serial = AssertKeysOf<
   MockOptionsOf<typeof SerialTransportService.makeMockTransport>,
   MockResilienceKeys
@@ -82,8 +83,8 @@ test('every makeMockTransport accepts the resilience options and the fault hooks
 });
 
 // ---------------------------------------------------------------------------
-// The two abstract tags, through the surface that issue #14 unblocked: a
-// `fault` hook that drives a `retry` policy. `resilience.test.ts` holds the
+// The two abstract tags use a `fault` hook to exercise a `retry` policy.
+// `resilience.test.ts` holds the
 // full policy coverage through `TcpTransportService`. These two tests show
 // only that the abstract tags reach the same behavior.
 // ---------------------------------------------------------------------------
