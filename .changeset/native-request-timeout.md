@@ -1,5 +1,5 @@
 ---
-'@flux-control/effect-modbus-rs': minor
+'@flux-control/effect-modbus-rs': patch
 ---
 
 Make the request time limit of the native RTU, ASCII, and TCP transports work, and keep one silent unit from stopping the other units on a bus.
