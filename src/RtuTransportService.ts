@@ -2,6 +2,7 @@ import { Context, Layer } from 'effect';
 import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
 
 import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { resolveSerialPortPath } from './serial-port-path';
 import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
@@ -46,11 +47,17 @@ export class RtuTransportService extends Context.Service<
     AsyncRtuTransport
   >(
     'AsyncRtuTransport',
-    (transportConstructor, options: RtuTransportOpenOptions) => {
+    async (transportConstructor, options: RtuTransportOpenOptions) => {
+      const portPath = await resolveSerialPortPath(options.portPath);
       // SAFETY: The constructor is read from the AsyncRtuTransport export named above.
-      return (transportConstructor as typeof AsyncRtuTransport).open(options);
+      return (transportConstructor as typeof AsyncRtuTransport).open({ ...options, portPath });
     },
     'RtuTransportService',
+    {
+      nativeTimeout: {
+        requestTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+      },
+    },
   );
 
   /**

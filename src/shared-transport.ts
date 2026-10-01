@@ -1,4 +1,14 @@
-import { Deferred, Duration, Effect, Exit, Option, Ref, Scope, SubscriptionRef } from 'effect';
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Ref,
+  Scope,
+  Semaphore,
+  SubscriptionRef,
+} from 'effect';
 import type { AsyncAsciiTransport, AsyncRtuTransport, AsyncTcpTransport } from 'modbus-rs';
 import type { WasmAsciiTransport, WasmRtuTransport, WasmWsTransport } from 'modbus-rs/web';
 
@@ -26,6 +36,7 @@ import {
   withResilience,
   type AnyModbusClient,
   type EffectModbusClient,
+  type NativeCallWrapper,
 } from './modbus-client';
 import type { ModbusRetryPolicy } from './retry';
 
@@ -361,6 +372,23 @@ export function createTransportScoped<
   config?: {
     /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
     moduleSpecifier?: 'modbus-rs' | 'modbus-rs/web';
+    /**
+     * Request time limit handling for a native `modbus-rs` 0.16.1 transport.
+     *
+     * The serial `responseTimeoutMs` open option does not limit a request.
+     * A request to a unit that does not answer then waits forever, and every
+     * later request on the transport waits behind it. Only `setRequestTimeout`
+     * limits a request, so the transport applies the time limit with it after
+     * each open.
+     *
+     * A request timeout closes the native handle for every unit on it, but
+     * its clients still report a connection. The transport therefore
+     * reconnects the handle before the next attempt.
+     */
+    nativeTimeout?: {
+      /** Reads the request time limit, in milliseconds, from the open options. */
+      readonly requestTimeoutMs: (options: TOptions) => number | undefined;
+    };
   },
 ) {
   return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
@@ -374,6 +402,21 @@ export function createTransportScoped<
     Reflect.deleteProperty(openOptions, 'retry');
     Reflect.deleteProperty(openOptions, 'reconnect');
     Reflect.deleteProperty(openOptions, 'connectTimeout');
+    const nativeTimeout = config?.nativeTimeout;
+    const requestTimeoutMs = nativeTimeout?.requestTimeoutMs(options);
+    // The native time limit starts when a request enters the native queue, not
+    // when it is sent. A request that waits behind other requests therefore
+    // has less time for its own response, and it can time out after the device
+    // answered. One request at a time gives each request its full time limit.
+    // An RTU bus sends one request at a time anyway.
+    const nativeLock = requestTimeoutMs === undefined ? undefined : yield* Semaphore.make(1);
+    // The native call is not interruptible. An interrupted caller would leave
+    // its request in the native queue, where it would hold the next request.
+    // The time limit bounds the wait.
+    const aroundNative: NativeCallWrapper | undefined =
+      nativeLock === undefined
+        ? undefined
+        : (call) => nativeLock.withPermits(1)(Effect.uninterruptible(call));
     const TC = yield* Effect.promise(() =>
       loadTransportConstructor(transportKey, config?.moduleSpecifier ?? 'modbus-rs'),
     );
@@ -382,6 +425,7 @@ export function createTransportScoped<
 
     const opening = yield* makeInFlight<TTransport>();
     const reconnecting = yield* makeInFlight<void>();
+    const restoring = yield* makeInFlight<void>();
     const connectionState = yield* SubscriptionRef.make<ConnectionState>(
       ConnectionState.Disconnected(),
     );
@@ -394,6 +438,14 @@ export function createTransportScoped<
     const clientSet = new Map<number, TClient>();
 
     let closed = false;
+
+    /**
+     * Set when a request timed out. `modbus-rs` then closes the native handle
+     * for every unit on it, but the clients still report a connection. The
+     * next attempt reconnects the handle first, so one silent unit does not
+     * fail the requests to the other units.
+     */
+    let restoreBeforeNext = false;
 
     const transportClosed = () =>
       new ModbusNotConnectedError({
@@ -441,6 +493,7 @@ export function createTransportScoped<
           ? closeOrphan(t)
           : Effect.andThen(
               Effect.sync(() => {
+                if (requestTimeoutMs !== undefined) t.setRequestTimeout(requestTimeoutMs);
                 transport = t;
               }),
               SubscriptionRef.set(connectionState, ConnectionState.Connected()),
@@ -478,6 +531,9 @@ export function createTransportScoped<
 
     const notConnectedMsg = 'Transport is not connected. Call withClient() first.';
 
+    const withNativeLock = <A>(effect: Effect.Effect<A, ModbusError>) =>
+      nativeLock === undefined ? effect : nativeLock.withPermits(1)(effect);
+
     /**
      * Reconnects one handle. Concurrent callers share one native reconnect,
      * and each caller waits at most the connect limit.
@@ -486,11 +542,21 @@ export function createTransportScoped<
       limitConnect(
         singleFlight(
           reconnecting,
-          Effect.tryPromise({
-            try: () => t.reconnect(),
-            catch: (cause) =>
-              toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
-          }).pipe(
+          // A reconnect while a request is in flight leaves the old native
+          // reader active. That reader can take the response to a later request.
+          withNativeLock(
+            Effect.tryPromise({
+              try: () => t.reconnect(),
+              catch: (cause) =>
+                toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
+            }),
+          ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                // Every completed reconnect replaces a handle that a timeout closed.
+                restoreBeforeNext = false;
+              }),
+            ),
             Effect.tap(() =>
               closed
                 ? // A reconnect that lands after the scope finalizer has closed
@@ -523,7 +589,13 @@ export function createTransportScoped<
      * ends up starting the supervisor.
      */
     const report = (error: ModbusError): Effect.Effect<void> => {
-      if (closed || !resolvedReconnect.triggers(error)) return Effect.void;
+      if (closed) return Effect.void;
+      if (nativeTimeout && error._tag === 'ModbusTimeoutError') restoreBeforeNext = true;
+      // A request queued behind the timed-out request fails with a closed
+      // connection. The next attempt restores the handle, so the supervisor
+      // does not open the circuit for the healthy units.
+      if (restoreBeforeNext && error._tag === 'ModbusConnectionClosedError') return Effect.void;
+      if (!resolvedReconnect.triggers(error)) return Effect.void;
       if (!supervised) {
         return SubscriptionRef.update(connectionState, (current) =>
           ConnectionState.$is('Connected')(current)
@@ -540,10 +612,38 @@ export function createTransportScoped<
       );
     };
 
+    /**
+     * Reconnects the native handle after a request timeout, before the next
+     * attempt. Concurrent attempts share one reconnect with the supervisor.
+     */
+    const restoreAfterTimeout = Effect.suspend(() => {
+      if (!restoreBeforeNext || closed) return Effect.void;
+      return limitConnect(
+        singleFlight(
+          restoring,
+          // Check again in the shared work. An attempt that saw the flag before
+          // another attempt restored the handle must not reconnect again. A
+          // reconnect while a request is in flight leaves the old native reader
+          // active, and that reader can take the response of the next request.
+          Effect.suspend(() => {
+            const t = transport;
+            if (!restoreBeforeNext || closed || !t) return Effect.void;
+            return Effect.andThen(
+              Effect.logDebug(`${serviceName}: reconnecting after a request timeout`),
+              reconnectTransport(t),
+            );
+          }),
+        ),
+      );
+    });
+
     const resilience = {
       // Without a supervisor there is no breaker: nothing else would ever
       // close the circuit again.
-      guard: supervised ? guardCircuit(connectionState) : Effect.void,
+      guard: Effect.andThen(
+        supervised ? guardCircuit(connectionState) : Effect.void,
+        restoreAfterTimeout,
+      ),
       onSuccess: supervised
         ? undefined
         : SubscriptionRef.update(connectionState, (current) =>
@@ -563,7 +663,7 @@ export function createTransportScoped<
         });
         clientSet.set(unitId, client);
       }
-      return createEffectModbusClient(client);
+      return createEffectModbusClient(client, aroundNative);
     });
 
     const makeClient = Effect.fnUntraced(function* (

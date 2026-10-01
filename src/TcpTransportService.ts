@@ -51,6 +51,7 @@ export class TcpTransportService extends Context.Service<
       return (transportConstructor as typeof AsyncTcpTransport).connect(options);
     },
     'TcpTransportService',
+    { nativeTimeout: { requestTimeoutMs: (options) => options.requestTimeoutMs } },
   );
 
   /**

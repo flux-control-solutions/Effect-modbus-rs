@@ -209,6 +209,7 @@ export { TcpTransportService } from './src/TcpTransportService';
 export type { TcpTransportOpenOptions } from './src/TcpTransportService';
 export { RtuTransportService } from './src/RtuTransportService';
 export type { RtuTransportOpenOptions } from './src/RtuTransportService';
+export { MAX_SERIAL_PORT_PATH, resolveSerialPortPath } from './src/serial-port-path';
 export { serialRtuServerLayer, serialAsciiServerLayer } from './src/SerialModbusServerService';
 export { tcpServerLayer } from './src/TcpModbusServerService';
 export { tcpGatewayLayer } from './src/TcpGatewayService';

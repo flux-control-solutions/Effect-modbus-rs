@@ -6,6 +6,7 @@ import type {
 } from 'modbus-rs';
 
 import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { resolveSerialPortPath } from './serial-port-path';
 import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
@@ -50,11 +51,17 @@ export class AsciiTransportService extends Context.Service<
     AsyncAsciiTransport
   >(
     'AsyncAsciiTransport',
-    (transportConstructor, options: AsciiTransportOpenOptions) => {
+    async (transportConstructor, options: AsciiTransportOpenOptions) => {
+      const portPath = await resolveSerialPortPath(options.portPath);
       // SAFETY: The constructor is read from the AsyncAsciiTransport export named above.
-      return (transportConstructor as typeof AsyncAsciiTransport).open(options);
+      return (transportConstructor as typeof AsyncAsciiTransport).open({ ...options, portPath });
     },
     'AsciiTransportService',
+    {
+      nativeTimeout: {
+        requestTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+      },
+    },
   );
 
   /**

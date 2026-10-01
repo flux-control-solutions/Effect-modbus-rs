@@ -32,6 +32,13 @@ export type WasmModbusClient = WasmSerialModbusClient | WasmWsModbusClient;
 /** Any client this package knows how to wrap into an {@link EffectModbusClient}. */
 export type AnyModbusClient = NativeModbusClient | WasmModbusClient;
 
+/** Wraps one native call. A transport uses it to control when a request reaches the native queue. */
+export type NativeCallWrapper = <T>(
+  call: Effect.Effect<T, ModbusError>,
+) => Effect.Effect<T, ModbusError>;
+
+const identityWrapper: NativeCallWrapper = (call) => call;
+
 /** Wraps a Promise-returning call in `Effect.tryPromise`, routing errors through {@link toModbusError}. */
 const wrap = <T>(try_: () => Promise<T>): Effect.Effect<T, ModbusError> =>
   Effect.tryPromise({
@@ -237,23 +244,29 @@ export interface ModbusOperations {
  * @see AsyncSerialModbusClient — Upstream native serial client API.
  * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
-export const createEffectModbusClient = (client: AnyModbusClient): ModbusOperations => ({
-  readHoldingRegisters: (opts) => wrap(() => client.readHoldingRegisters(opts)),
-  readInputRegisters: (opts) => wrap(() => client.readInputRegisters(opts)),
-  writeSingleRegister: (opts) => wrap(() => client.writeSingleRegister(opts)),
-  writeMultipleRegisters: (opts) => wrap(() => client.writeMultipleRegisters(opts)),
-  readWriteMultipleRegisters: (opts) => wrap(() => client.readWriteMultipleRegisters(opts)),
-  readCoils: (opts) => wrap(() => client.readCoils(opts)),
-  writeSingleCoil: (opts) => wrap(() => client.writeSingleCoil(opts)),
-  writeMultipleCoils: (opts) => wrap(() => client.writeMultipleCoils(opts)),
-  readDiscreteInputs: (opts) => wrap(() => client.readDiscreteInputs(opts)),
-  readFifoQueue: (opts) => wrap(() => client.readFifoQueue(opts)),
-  readFileRecord: (opts) => wrap(() => client.readFileRecord(opts)),
-  writeFileRecord: (opts) => wrap(() => client.writeFileRecord(opts)),
-  readExceptionStatus: () => wrap(() => client.readExceptionStatus()),
-  diagnostics: (opts) => wrap(() => client.diagnostics(opts)),
-  readDeviceIdentification: (opts) => wrap(() => client.readDeviceIdentification(opts)),
-});
+export const createEffectModbusClient = (
+  client: AnyModbusClient,
+  around: NativeCallWrapper = identityWrapper,
+): ModbusOperations => {
+  const call = <T>(try_: () => Promise<T>) => around(wrap(try_));
+  return {
+    readHoldingRegisters: (opts) => call(() => client.readHoldingRegisters(opts)),
+    readInputRegisters: (opts) => call(() => client.readInputRegisters(opts)),
+    writeSingleRegister: (opts) => call(() => client.writeSingleRegister(opts)),
+    writeMultipleRegisters: (opts) => call(() => client.writeMultipleRegisters(opts)),
+    readWriteMultipleRegisters: (opts) => call(() => client.readWriteMultipleRegisters(opts)),
+    readCoils: (opts) => call(() => client.readCoils(opts)),
+    writeSingleCoil: (opts) => call(() => client.writeSingleCoil(opts)),
+    writeMultipleCoils: (opts) => call(() => client.writeMultipleCoils(opts)),
+    readDiscreteInputs: (opts) => call(() => client.readDiscreteInputs(opts)),
+    readFifoQueue: (opts) => call(() => client.readFifoQueue(opts)),
+    readFileRecord: (opts) => call(() => client.readFileRecord(opts)),
+    writeFileRecord: (opts) => call(() => client.writeFileRecord(opts)),
+    readExceptionStatus: () => call(() => client.readExceptionStatus()),
+    diagnostics: (opts) => call(() => client.diagnostics(opts)),
+    readDeviceIdentification: (opts) => call(() => client.readDeviceIdentification(opts)),
+  };
+};
 
 /**
  * Transport-owned resilience applied to every operation of a client.
