@@ -8,7 +8,7 @@ In `modbus-rs` 0.16.1, the serial `responseTimeoutMs` open option does not limit
 
 - The transport applies `responseTimeoutMs` (serial) or `requestTimeoutMs` (TCP) with `setRequestTimeout` after each open.
 - A request timeout closes the native handle for every unit. The next attempt now reconnects the handle before it is sent. A request that fails behind the timeout with a closed connection does not start the reconnect supervisor.
-- The native time limit starts when a request enters the native queue. When a time limit is set, the transport now sends one native request at a time, so each request gets its full time limit. A native call is not interrupted, and a reconnect waits until the request in flight ends.
+- On a serial transport, the native time limit starts when a request enters the native queue. When a time limit is set, the RTU and ASCII transports now send one native request at a time, so each request gets its full time limit. A native call is not interrupted, and a reconnect waits until the request in flight ends. The TCP transport sends each request at once, so it keeps concurrent requests on one connection.
 - `modbus-rs` refuses serial port paths longer than 64 characters. The native serial transports now replace a longer path with its link target. When the target is also too long, the open fails with `ModbusInvalidArgumentError` and a message that names the limit. `resolveSerialPortPath` and `MAX_SERIAL_PORT_PATH` are exported.
 
 The WASM transports do not change.

@@ -388,6 +388,16 @@ export function createTransportScoped<
     nativeTimeout?: {
       /** Reads the request time limit, in milliseconds, from the open options. */
       readonly requestTimeoutMs: (options: TOptions) => number | undefined;
+      /**
+       * Sends one native request at a time when a time limit is set.
+       *
+       * A serial transport queues requests and sends them one by one, but the
+       * time limit of each request starts when it enters the queue. A queued
+       * request therefore has less time for its own response. A TCP transport
+       * sends each request at once, so it does not need this, and it keeps
+       * concurrent requests on one connection.
+       */
+      readonly serializeRequests: boolean;
     };
   },
 ) {
@@ -404,12 +414,15 @@ export function createTransportScoped<
     Reflect.deleteProperty(openOptions, 'connectTimeout');
     const nativeTimeout = config?.nativeTimeout;
     const requestTimeoutMs = nativeTimeout?.requestTimeoutMs(options);
-    // The native time limit starts when a request enters the native queue, not
-    // when it is sent. A request that waits behind other requests therefore
-    // has less time for its own response, and it can time out after the device
-    // answered. One request at a time gives each request its full time limit.
-    // An RTU bus sends one request at a time anyway.
-    const nativeLock = requestTimeoutMs === undefined ? undefined : yield* Semaphore.make(1);
+    // On a serial transport, the native time limit starts when a request enters
+    // the native queue, not when it is sent. A request that waits behind other
+    // requests has less time for its own response, and it can time out after
+    // the device answered. One request at a time gives each request its full
+    // time limit. A serial bus sends one request at a time anyway.
+    const nativeLock =
+      requestTimeoutMs === undefined || !nativeTimeout?.serializeRequests
+        ? undefined
+        : yield* Semaphore.make(1);
     // The native call is not interruptible. An interrupted caller would leave
     // its request in the native queue, where it would hold the next request.
     // The time limit bounds the wait.

@@ -52,6 +52,7 @@ const makeFake = (config?: {
   clientFor?: (unitId: number) => AsyncSerialModbusClient;
   onReconnect?: () => void;
   openOptions?: { readonly responseTimeoutMs?: number };
+  serializeRequests?: boolean;
   resilience?: TransportResilienceOptions;
 }) => {
   const requestTimeouts: Array<number> = [];
@@ -88,7 +89,12 @@ const makeFake = (config?: {
     'AsyncRtuTransport',
     (_constructor, options) => open(options),
     'FakeTransport',
-    { nativeTimeout: { requestTimeoutMs: (options) => options.responseTimeoutMs } },
+    {
+      nativeTimeout: {
+        requestTimeoutMs: (options) => options.responseTimeoutMs,
+        serializeRequests: config?.serializeRequests ?? true,
+      },
+    },
   );
 
   return {
@@ -686,6 +692,49 @@ test('a reconnect waits until the native request in flight ends', async () => {
       yield* api.reconnect();
       yield* Fiber.join(read);
       expect(events).toEqual(['read start', 'read end', 'reconnect']);
+    }),
+  );
+});
+
+test('a transport that does not serialize keeps concurrent native requests with a time limit', async () => {
+  const probe = makeOverlapProbe(10);
+  const fake = makeFake({
+    client: probe.client,
+    openOptions: { responseTimeoutMs: 250 },
+    serializeRequests: false,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const clients = yield* Effect.all([1, 2, 3].map((unitId) => api.withClient(unitId)));
+      yield* Effect.all(
+        clients.map((client) => client.readHoldingRegisters(oneRegister)),
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(3);
+      expect(fake.calls.requestTimeouts).toEqual([250]);
+    }),
+  );
+});
+
+test('a transport that does not serialize still restores the handle after a timeout', async () => {
+  const bus = makeSilentUnitBus(2);
+  const fake = makeFake({
+    clientFor: bus.clientFor,
+    onReconnect: bus.onReconnect,
+    openOptions: { responseTimeoutMs: 250 },
+    serializeRequests: false,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const healthy = yield* api.withClient(1);
+      const silent = yield* api.withClient(2);
+      expect(failureTag(yield* Effect.exit(silent.readHoldingRegisters(oneRegister)))).toBe(
+        'ModbusTimeoutError',
+      );
+      expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      expect(fake.calls.reconnect).toBe(1);
     }),
   );
 });

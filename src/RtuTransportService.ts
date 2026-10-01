@@ -56,6 +56,7 @@ export class RtuTransportService extends Context.Service<
     {
       nativeTimeout: {
         requestTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+        serializeRequests: true,
       },
     },
   );

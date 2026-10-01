@@ -60,6 +60,7 @@ export class AsciiTransportService extends Context.Service<
     {
       nativeTimeout: {
         requestTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+        serializeRequests: true,
       },
     },
   );
