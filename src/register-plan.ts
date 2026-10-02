@@ -1,16 +1,6 @@
 /**
- * @fileoverview Pure planners that turn a set of register addresses into the
- * smallest set of Modbus transactions that covers them.
- *
- * A caller that derives each register independently — one fiber per output, one
- * accessor per parameter — naturally produces one transaction per register. On a
- * half-duplex multi-drop bus that is the dominant cost: every transaction is a
- * turnaround, and the registers a caller wants are usually neighbours.
- *
- * These functions hold no state, run no I/O, and return no `Effect`. They are the
- * bottom layer of the batching stack and are usable on their own — a caller that
- * already owns its scheduling can plan the transactions here and issue them with
- * a plain {@link EffectModbusClient}.
+ * @fileoverview Pure functions that plan register reads and writes as Modbus transactions.
+ * They do not perform I/O or return Effects.
  *
  * @module
  */

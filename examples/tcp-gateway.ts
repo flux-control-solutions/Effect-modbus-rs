@@ -2,12 +2,8 @@
  * TCP Modbus gateway example.
  *
  * Starts a Modbus TCP gateway that forwards incoming requests to
- * downstream Modbus servers based on unit ID routing. Each unit ID
- * range is mapped to a downstream server via the gateway config.
- *
- * This example configures two downstream servers:
- * - Unit 1 → 192.168.1.10:502
- * - Unit 2 → 192.168.1.20:502
+ * downstream Modbus servers based on unit ID routing. Each configured
+ * unit ID maps to a downstream server through the gateway configuration.
  *
  * @example bun run examples/tcp-gateway.ts
  */

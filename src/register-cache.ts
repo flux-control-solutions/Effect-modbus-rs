@@ -1,11 +1,5 @@
 /**
- * @fileoverview A record of what each device already holds, used to drop writes
- * that would change nothing.
- *
- * A caller that recomputes an output on every cycle proposes the same value most
- * of the time. In steady state roughly four out of five proposals are a repeat of
- * what the register already holds, and on a half-duplex bus each one costs a
- * turnaround that carries no information.
+ * @fileoverview Tracks acknowledged register values to suppress unchanged writes.
  *
  * @module
  */

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Caller-supplied span attributes, and the rule for merging them.
+ * @fileoverview Defines caller span attributes and merges values from batched callers.
  *
  * @module
  */

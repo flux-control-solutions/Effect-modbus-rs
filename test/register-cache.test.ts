@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 
 import { createRegisterCache } from '../src/register-cache';
 
+/** Tests register cache filtering, validation, invalidation, and stale observations. */
+
 test('the cache suppresses nothing until it has seen a write land', () => {
   const cache = createRegisterCache();
 

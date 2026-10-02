@@ -22,7 +22,8 @@ import { toModbusError } from './errors';
  * @param options - Serial port, baud rate, unit ID, etc.
  * @param handlers - Callback functions that handle incoming Modbus requests
  *   (same {@link ServerHandlers} shape as the native TCP/serial servers).
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that binds the server and runs its request loop within the
+ *   layer scope. Binding errors fail with {@link ModbusError}; loop errors are logged.
  *
  * @example
  * ```ts
@@ -87,7 +88,8 @@ export const wasmSerialRtuServerLayer = (
  *
  * @param options - Serial port, baud rate, unit ID, etc.
  * @param handlers - Callback functions that handle incoming Modbus requests.
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that binds the server and runs its request loop within the
+ *   layer scope. Binding errors fail with {@link ModbusError}; loop errors are logged.
  *
  * @see WasmSerialServerOptions — Options accepted by the upstream WASM serial server.
  * @see ServerHandlers — Interface for request handler callbacks.

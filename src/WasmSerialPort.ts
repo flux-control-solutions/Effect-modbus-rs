@@ -9,10 +9,10 @@ import { toModbusError } from './errors';
  * {@link WasmSerialTransportService.fromRtu} / `.fromAscii` (or
  * `WasmRtuTransportService.make` / `WasmAsciiTransportService.make` directly).
  *
- * **Must be called synchronously from within a user-gesture event handler**
- * (e.g. a `click` listener) — this is a hard Web Serial API / browser security
- * constraint (`navigator.serial.requestPort()` semantics), not a library-imposed
- * restriction. Calling it outside a gesture will reject.
+ * Call this from a browser user-gesture handler, such as a click handler, because
+ * the Web Serial API may require transient user activation to show its chooser.
+ * The helper loads the browser binding before requesting the port, so it does not
+ * itself call the browser API synchronously in the handler.
  *
  * @example
  * ```ts
@@ -25,6 +25,8 @@ import { toModbusError } from './errors';
  * });
  * ```
  *
+ * @returns An effect that succeeds with the selected opaque port handle or fails
+ *   with {@link ModbusError} when the browser request or binding fails.
  * @see WasmSerialPortHandle — Opaque handle returned by `modbus-rs`'s WASM bindings.
  */
 export const requestSerialPort = (): Effect.Effect<WasmSerialPortHandle, ModbusError> =>

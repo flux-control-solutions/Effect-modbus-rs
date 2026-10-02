@@ -1,22 +1,6 @@
 /**
- * @fileoverview Coalesces register writes that arrive separately into one batch.
- *
- * `planWrites` packs the writes a caller holds at one moment. A caller that
- * derives each register independently — one fiber per output, each settling at
- * its own pace — never holds two values at the same moment, so a planner alone
- * never sees a run longer than one. Batching those would need a collection point
- * upstream that the caller does not have.
- *
- * This module is that collection point, and it collects on time rather than on
- * structure. A write is held for `window`, each new arrival restarts the window,
- * and `maxHold` caps the total hold so a register that updates without a pause
- * still reaches the wire.
- *
- * Callers still await their own write. Each caller gets its own `Deferred`,
- * completed with the exit of the flush that carried its value, so a write that
- * fails still fails for the caller that issued it. That keeps "the effect
- * succeeded" meaning "the value reached the device", which is the invariant a
- * caller uses to decide whether it may report an actuation.
+ * @fileoverview Coalesces register writes by address and flushes them after a debounce window.
+ * New arrivals restart the window; `maxHold` limits the total delay.
  *
  * @module
  */
@@ -72,8 +56,8 @@ export interface WriteDebouncer {
   /**
    * Holds a write for the window, then issues it with whatever else arrived.
    *
-   * Succeeds when the value reached the device, and fails with the error of the
-   * flush that carried it.
+   * Completes with the flush result for its address. A later write can supersede
+   * its value, and a downstream cache can suppress the physical write.
    */
   write(write: RegisterWrite, attributes?: ModbusSpanAttributes): Effect.Effect<void, ModbusError>;
 
@@ -95,8 +79,8 @@ export interface WriteDebouncer {
    *
    * A caller that already holds every value does not need a collection point,
    * but it still must not go around the batch: a write held for one of these
-   * addresses would otherwise reach the device after the newer value. The whole
-   * group succeeds or fails together.
+   * addresses would otherwise reach the device after the newer value. The result
+   * covers the flush, but separate bus transactions are not atomic.
    *
    * With a window of zero the group is issued at once, so a caller of this
    * method gets packed transactions with no debouncer at all.
@@ -138,33 +122,6 @@ interface TimerState {
 }
 
 /**
- * Creates a write debouncer bound to the current scope.
- *
- * The flush runs in that scope, not in the caller's. A caller interrupted while
- * waiting — an output recomputed before its write landed — must not take the
- * pending batch down with it, and a caller must not have to carry a `Scope` to
- * issue a write.
- *
- * When the scope closes, callers still waiting are interrupted and the batch is
- * discarded. Their writes never reached the device, and reporting success for
- * them would break the invariant the `Deferred` exists to hold.
- *
- * @param options - The window, the ceiling, and the callback that issues a batch.
- * @returns The debouncer.
- *
- * @example
- * const debouncer = yield* createWriteDebouncer({
- *   window: '250 millis',
- *   maxHold: '1 second',
- *   flush: (batch) => issue(batch),
- * });
- * // Two callers that never meet, one transaction:
- * yield* Effect.all([
- *   debouncer.write({ address: 2000, value: 10 }),
- *   debouncer.write({ address: 2001, value: 20 }),
- * ], { concurrency: 'unbounded' });
- */
-/**
  * Resolves the window and the hold limit that a write debouncer applies.
  *
  * The batching client reports these values, so both use this one rule.
@@ -180,6 +137,15 @@ export const resolveWriteHold = (window: Duration.Input, maxHold: Duration.Input
   return { windowMs, maxHoldMs };
 };
 
+/**
+ * Creates a write debouncer bound to the current scope.
+ *
+ * Waiting callers do not control the flush fiber. Closing the scope discards
+ * pending writes and interrupts their waiters.
+ *
+ * @param options - The collection window, hold limit, and flush callback.
+ * @returns The debouncer, which requires the current scope.
+ */
 export const createWriteDebouncer = (
   options: WriteDebouncerOptions,
 ): Effect.Effect<WriteDebouncer, never, Scope.Scope> =>

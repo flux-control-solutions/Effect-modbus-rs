@@ -17,6 +17,8 @@ import {
   type ModbusRetryPolicy,
 } from '../src/retry';
 
+/** Tests retry delays, error selection, attempt limits, and preset overrides. */
+
 const timeout = () => new ModbusTimeoutError({ cause: new Error('timeout'), message: 'timeout' });
 const transportError = () => new ModbusTransportError({ cause: new Error('crc'), message: 'crc' });
 const connectionClosed = () =>

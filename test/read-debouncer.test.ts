@@ -6,6 +6,8 @@ import { ModbusTimeoutError, type ModbusError } from '../src/errors';
 import { createReadDebouncer, type ReadDebouncer } from '../src/read-debouncer';
 import type { ReadSpan } from '../src/register-plan';
 
+/** Tests read collection windows, planning, response validation, and scoped interruption. */
+
 /**
  * A device whose register `n` holds `n * 10`, recording every span it is asked
  * for.

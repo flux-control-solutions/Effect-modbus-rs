@@ -48,7 +48,8 @@ Package tests and type checks do not check that application. Verify browser chan
 - After declaring a batching client, preserve the guards on raw FC06, FC16, and FC23 operations for that unit.
 - Preserve raw reads, coils, and other operations outside register-write batching.
 - Keep debounce windows opt-in. A zero window must bypass the timer.
-- Use direct planning for `writeAll` and `readAll`, without a collection window.
+- Keep grouped operations on the debouncer path. With a positive window, `writeAll` and `readAll` collect before issuing.
+- Use `writeAllNow` and `readAllNow` to flush grouped operations immediately.
 - Keep one write cache per transport. Create the cache and its connection watcher only when batching is first requested.
 - Invalidate a unit's cache after a failed write. Invalidate all cached writes when the connection leaves `Connected`.
 - Compare cached values using their wire encoding.

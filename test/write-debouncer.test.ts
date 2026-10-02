@@ -9,6 +9,8 @@ import {
   type WriteDebouncer,
 } from '../src/write-debouncer';
 
+/** Tests write collection, ordering, failure delivery, and scoped interruption. */
+
 /** Records every batch handed to the flush, and what each one wrote. */
 const makeRecorder = (fail?: () => boolean) => {
   const batches: Array<ReadonlyArray<DebouncedWrite>> = [];

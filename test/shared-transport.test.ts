@@ -6,6 +6,8 @@ import type { AsyncSerialModbusClient } from 'modbus-rs';
 import { RetryPolicies } from '../src/retry';
 import { createTransportScoped, type TransportResilienceOptions } from '../src/shared-transport';
 
+/** Tests shared transport acquisition, reconnect coordination, timeouts, and teardown. */
+
 interface FakeOptions {
   readonly label: string;
 }

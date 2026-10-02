@@ -7,6 +7,8 @@ import type { RtuTransportOpenOptions } from '../src/RtuTransportService';
 import type { UpstreamRetryOptionKey } from '../src/shared-transport';
 import type { TcpTransportOpenOptions } from '../src/TcpTransportService';
 
+/** Uses compile-time assertions to verify upstream retry options stay hidden. */
+
 // ---------------------------------------------------------------------------
 // The retry knobs are withheld with `Omit`, which fails open: if upstream
 // renames or drops one of these keys, the `Omit` silently stops removing
