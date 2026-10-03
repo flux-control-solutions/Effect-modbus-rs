@@ -10,10 +10,9 @@ import { WasmSerialTransportService } from '../src/WasmSerialTransportService';
 import { WasmWsTransportService } from '../src/WasmWsTransportService';
 
 /**
- * `makeMockTransport` is fully transport-agnostic (see mocks.test.ts for the exhaustive
- * native-side coverage) — these tests just confirm the new WASM `Effect.Service`/`Context.Tag`
- * wiring (and `createTransportScoped`'s new `config` threading) works end to end, without
- * needing a real (currently broken upstream) `modbus-rs-wasm` build.
+ * Checks browser transport service layers with in-memory devices.
+ * These tests do not load browser bindings or test browser permission behavior.
+ * See mocks.test.ts for shared mock operation coverage.
  */
 
 const device = {

@@ -1,3 +1,4 @@
+/** Defines in-memory Modbus device schemas and mock transports for deterministic tests. */
 import { Effect, Exit, Schema, Scope, SubscriptionRef } from 'effect';
 import {
   CoilState,
@@ -166,7 +167,7 @@ const buildRegisters = (defs: readonly RegisterDefinition[]) => {
  * @param label - Human-readable label for the address space (e.g. "Coil", "HoldingRegister").
  * @param address - The starting address that is out of range.
  * @param quantity - Optional quantity that, together with `address`, exceeds the range.
- * @returns A `ModbusInvalidArgumentError` effect.
+ * @returns A `ModbusInvalidArgumentError` value.
  */
 const failOutOfRange = (label: string, address: number, quantity?: number) =>
   new ModbusInvalidArgumentError({
@@ -185,10 +186,9 @@ const failOutOfRange = (label: string, address: number, quantity?: number) =>
  * Creates an {@link EffectModbusClient} backed by an in-memory
  * {@link MockDeviceState} map.
  *
- * All Modbus function codes are simulated against the provided state,
- * returning configured default values for reads and mutating state
- * for writes. Out-of-range addresses produce a
- * {@link ModbusInvalidArgumentError}.
+ * Supported operations read defaults or update the in-memory state.
+ * FIFO and file-record operations fail with `ModbusInvalidArgumentError`.
+ * Reads above the configured range also fail with that error.
  *
  * @param state - The mutable device state to read from and write to.
  * @param unitId - The Modbus unit ID this client represents (used for logging).
@@ -355,8 +355,8 @@ const makeMockModbusClient = (state: MockDeviceState, unitId: number): ModbusOpe
  * {@link ModbusInvalidArgumentError}.
  *
  * @param devices - Array of slave device definitions to simulate.
- * @returns A transport factory function that returns a scoped Effect
- *          providing the mock transport.
+ * @returns A factory that accepts transport and fault options and returns the mock transport Effect.
+ * @throws A schema decode error when `devices` does not match the device-definition schema.
  */
 export const createMockTransport = (devices: SlaveDeviceDefinitions) => {
   const deviceDefs = Schema.decodeUnknownSync(SlaveDeviceDefinitions)(devices);
@@ -541,10 +541,9 @@ export const createMockTransport = (devices: SlaveDeviceDefinitions) => {
             reconnectOnce,
             SubscriptionRef.set(connectionState, ConnectionState.Connected()),
           ),
-        close: () =>
+        close: (scope: Scope.Closeable) =>
           Effect.gen(function* () {
             if (closed) return;
-            const scope = yield* Effect.scope;
             yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
           }),
         hasPendingRequests: () => false,

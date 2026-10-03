@@ -1,3 +1,4 @@
+/** Adapts native and WASM Modbus clients to typed Effect operations and transport resilience. */
 import { Effect } from 'effect';
 import type {
   ReadRegistersOptions,
@@ -105,10 +106,10 @@ export interface ModbusOperations {
   writeMultipleRegisters(opts: WriteMultipleRegistersOptions): Effect.Effect<void, ModbusError>;
 
   /**
-   * Atomic read-write of multiple registers (FC23).
+   * Writes and reads multiple registers within one request (FC23).
    *
-   * Performs a write operation and a read operation atomically within
-   * a single Modbus transaction.
+   * The device performs the write before the read. This does not make separate
+   * application operations atomic.
    *
    * @param opts - Separate read and write addresses/quantities/values.
    * @returns An Effect resolving to the read register values.
@@ -123,7 +124,7 @@ export interface ModbusOperations {
    * Reads coils (digital outputs) from the Modbus device (FC01).
    *
    * @param opts - Starting address, quantity, and optional `AbortSignal`.
-   * @returns An Effect resolving to an array of boolean coil states.
+   * @returns An Effect resolving to `CoilState` values.
    *
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
@@ -132,7 +133,7 @@ export interface ModbusOperations {
   /**
    * Writes a single coil (digital output) (FC05).
    *
-   * @param opts - Coil address, boolean value, and optional `AbortSignal`.
+   * @param opts - Coil address, `CoilState` value, and optional `AbortSignal`.
    * @returns An Effect that completes when the write is acknowledged.
    *
    * @see WriteSingleCoilOptions — Options shape from `modbus-rs`.
@@ -142,7 +143,7 @@ export interface ModbusOperations {
   /**
    * Writes multiple consecutive coils (FC15).
    *
-   * @param opts - Starting address, array of boolean values, and optional `AbortSignal`.
+   * @param opts - Starting address, array of `CoilState` values, and optional `AbortSignal`.
    * @returns An Effect that completes when the write is acknowledged.
    *
    * @see WriteMultipleCoilsOptions — Options shape from `modbus-rs`.
@@ -153,7 +154,7 @@ export interface ModbusOperations {
    * Reads discrete inputs (digital inputs) from the Modbus device (FC02).
    *
    * @param opts - Starting address, quantity, and optional `AbortSignal`.
-   * @returns An Effect resolving to an array of boolean input states.
+   * @returns An Effect resolving to `CoilState` values.
    *
    * @see ReadBitsOptions — Options shape from `modbus-rs`.
    */
@@ -238,8 +239,7 @@ export interface ModbusOperations {
  * transport-specific reshaping is needed.
  *
  * @param client - The upstream `modbus-rs` or `modbus-rs/web` client instance.
- * @returns An `EffectModbusClient` that can be used within Effect
- *          workflows.
+ * @returns A client whose methods return typed Effects.
  *
  * @see AsyncSerialModbusClient — Upstream native serial client API.
  * @see AsyncTcpModbusClient — Upstream native TCP client API.

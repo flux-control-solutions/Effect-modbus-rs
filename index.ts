@@ -1,144 +1,86 @@
 /**
  * # @flux-control/effect-modbus-rs
  *
- * Type-safe Modbus communication via Effect-TS, wrapping the `modbus-rs`
- * npm bindings (Rust `napi-rs` under the hood).
+ * Provides typed Effect services for native and browser Modbus transports and servers.
+ * Transport services use `Context.Service` and scoped layers. They open on first
+ * client access and close when the provided scope ends.
  *
- * ## Transport services
+ * Build the package with `bun run build` before using package imports. The build
+ * creates `dist/`, which the package export map uses.
  *
- * - {@link SerialTransportService} — Abstract serial transport (ASCII or RTU).
- * - {@link RtuTransportService} — Serial RTU transport (RS-232/485).
- * - {@link AsciiTransportService} — Serial ASCII transport.
- * - {@link TcpTransportService} — TCP/IP transport (Modbus/TCP).
+ * Native transports: {@link SerialTransportService}, {@link RtuTransportService},
+ * {@link AsciiTransportService}, and {@link TcpTransportService}. Browser
+ * transports: {@link WasmSerialTransportService}, {@link WasmRtuTransportService},
+ * {@link WasmAsciiTransportService}, and {@link WasmWsTransportService}.
+ * Call {@link requestSerialPort} from a user-gesture handler to request a Web Serial port.
  *
- * ## Browser (WASM) transport services
+ * Server layers include {@link serialRtuServerLayer}, {@link serialAsciiServerLayer},
+ * {@link tcpServerLayer}, and {@link tcpGatewayLayer}. Browser server layers are
+ * experimental upstream surfaces.
  *
- * - {@link WasmSerialTransportService} — Abstract Web Serial transport (ASCII or RTU).
- * - {@link WasmRtuTransportService} — Web Serial RTU transport.
- * - {@link WasmAsciiTransportService} — Web Serial ASCII transport.
- * - {@link WasmWsTransportService} — TCP-over-WebSocket transport (Modbus/TCP via a WS gateway).
- * - {@link requestSerialPort} — Requests a Web Serial port handle (user-gesture gated).
+ * ## Raw operations and result types
  *
- * ## Server layers
+ * `transport.withClient(unitId)` returns a typed client. Register reads return
+ * `Uint16Array`; coil and discrete-input reads return `CoilState[]`. Operations
+ * fail with a variant of {@link ModbusError}. Use `Effect.catchTags` to handle
+ * specific variants. The union has eight variants, including
+ * {@link ModbusCircuitOpenError}. The batching declaration error is separate.
  *
- * Run a server layer with {@link Layer.launch} and execute with a runtime:
+ * ## Register batching
  *
- * ```ts
- * Layer.launch(tcpServerLayer({ host: "0.0.0.0", port: 502, unitId: 1 }, handlers)).pipe(Effect.runPromise)
- * ```
- *
- * - {@link serialRtuServerLayer} — Serial RTU server.
- * - {@link serialAsciiServerLayer} — Serial ASCII server.
- * - {@link tcpServerLayer} — TCP server.
- * - {@link tcpGatewayLayer} — TCP gateway.
- * - {@link wasmWsServerLayer} — Browser WS-gateway server (experimental upstream surface).
- * - {@link wasmSerialRtuServerLayer} / {@link wasmSerialAsciiServerLayer} — Browser Web Serial servers (experimental).
- *
- * ## Transaction batching
- *
- * A caller that derives each register independently produces one transaction per
- * register, which is the dominant cost on a half-duplex bus. Three pieces bring
- * that count down, and each one is usable without the others.
- *
- * {@link planWrites} and {@link planReads} pack neighbouring addresses into the
- * fewest transactions that cover them. They hold no state and run no I/O:
+ * {@link planWrites} and {@link planReads} plan the supplied registers without
+ * state or I/O. For example:
  *
  * ```ts
  * planWrites([{ address: 2000, value: 10 }, { address: 2001, value: 20 }]);
- * // [{ kind: "multiple", address: 2000, values: Uint16Array [10, 20] }]
+ * // One multiple-register write step for addresses 2000 and 2001.
  * ```
  *
- * A planner only packs what a caller holds at one moment, and a caller with one
- * fiber per register never holds two values at once. {@link createWriteDebouncer}
- * and {@link createReadDebouncer} are the collection point that gives a planner
- * something to pack, holding an operation for a window so the ones that arrive
- * near it travel with it. Each caller still awaits its own operation.
+ * {@link createWriteDebouncer} and {@link createReadDebouncer} collect separate
+ * calls only when configured with positive windows. Without a window, calls are
+ * not debounced. `writeAll` and `readAll` also collect when their windows are
+ * positive. Their `Now` variants flush the pending group immediately.
+ * Grouping does not make separate application operations atomic. A pending
+ * write can be superseded, and the cache can suppress a write based on its
+ * recorded value. Therefore, each call is not guaranteed to produce a separate
+ * device write. The cache records acknowledged writes from this process; it
+ * does not answer reads.
  *
- * {@link createRegisterCache} drops a write whose value the device already holds.
- * It records only what this process wrote, so it never answers a read.
- *
- * `transport.withBatchingClient(unitId, options)` puts the three together. It is
- * the sibling of `withClient`, not a replacement for it: `withClient` issues the
- * transaction a caller names, and a batching client decides the transactions for
- * a caller that names registers instead.
+ * `withBatchingClient` combines planning, optional collection, and optional
+ * caching. It is separate from `withClient`, which exposes raw Modbus operations.
+ * Once a batching client exists for a unit, raw FC06, FC16, and FC23 operations
+ * for that unit fail. Raw reads, coil operations, and other operations remain
+ * available. A batching client does not extend {@link ModbusOperations}.
  *
  * ```ts
- * const client = yield* transport.withClient(3);            // exact read
- * yield* client.readHoldingRegisters({ address: 2000, quantity: 2 });
+ * const raw = yield* transport.withClient(3);
+ * const registers = yield* raw.readHoldingRegisters({ address: 2000, quantity: 2 });
+ * // registers is Uint16Array.
  *
- * const batched = yield* transport.withBatchingClient(3, {  // decides the transactions
- *   debounce: { writes: { window: "250 millis", maxHold: "1 second" } },
+ * const batch = yield* transport.withBatchingClient(3, {
+ *   debounce: { writes: { window: '250 millis', maxHold: '1 second' } },
  * });
- * yield* batched.write({ address: 2000, value: 512 });
- * yield* batched.readAll([0x0000, 0x0001, 0x0020]);
+ * yield* batch.write({ address: 2000, value: 512 });
+ * yield* batch.readAll([0, 1, 32]);
  * ```
  *
- * A {@link BatchingModbusClient} deliberately does not extend
- * {@link ModbusOperations}: a raw write on the same object would go around the
- * cache and around the batch. Once a batching client exists for a unit, raw
- * FC06, FC16, and FC23 operations on that unit fail. The raw client remains
- * available for exact reads, coils, and other non-register-write operations.
+ * ## Retry and reconnection
  *
- * Nothing is debounced unless `debounce` asks for it, matching the rest of this
- * package. `writeAll` and `readAll` still plan, so a caller that holds a group of
- * registers gets packed transactions with no window at all.
- *
- * ## Errors
- *
- * All Modbus operations fail with a {@link ModbusError} discriminated union.
- * Use `Effect.catchTags` to handle specific variants:
+ * Retry and reconnection are opt-in. A transport retry policy applies to its
+ * clients. Client and operation overrides replace that policy. For example:
  *
  * ```ts
- * Effect.catchTags(effect, {
- *   ModbusTimeoutError: ...,
- *   ModbusTransportError: ...,
- * })
- * ```
- *
- * ## Resilience
- *
- * Nothing retries or reconnects implicitly — a transport behaves exactly as it
- * always has until a policy is attached, so timing stays predictable by
- * default. Resilience is configured on the **transport**, which owns it for
- * every client derived from it:
- *
- * ```ts
- * TcpTransportService.make({
- *   host, port,
- *   retry: RetryPolicies.tcp(),      // applied to every operation
- *   reconnect: {},                   // supervised reconnect + circuit breaker
- * })
- * ```
- *
- * Policies are error-aware: transient failures (timeouts, framing errors, a
- * busy device) back off exponentially with jitter (on by default), while
- * deterministic ones (illegal address, invalid argument) fail immediately.
- *
- * Override per client — one bus, several device types — or per operation.
- * Both replace the policy rather than composing with it:
- *
- * ```ts
+ * TcpTransportService.make({ host, port, retry: RetryPolicies.tcp(), reconnect: {} });
  * const meter = yield* transport.withClient(1, { retry: RetryPolicies.serial() });
  * yield* meter.withRetry(RetryPolicies.none()).writeSingleCoil({ address: 0, value });
  * ```
  *
- * With `reconnect` enabled, the transport runs one supervised reconnect for the
- * whole application and refuses operations with {@link ModbusCircuitOpenError}
- * while the link is down, instead of letting every caller queue requests onto a
- * dead bus. Watch {@link ConnectionState} via `transport.connectionState`.
- *
- * {@link retryModbus} remains for retrying a compound operation — a
- * read-modify-write driven as a unit — over a `RetryPolicies.none()` client.
- * Note that it **wraps** rather than replaces: unlike the two overrides above,
- * it is piped around an effect the client has already wrapped in its own retry,
- * so over a policied client the two nest and attempt counts multiply.
- *
- * Resilience lives at this layer and only at this layer. `modbus-rs`'s own
- * transport-level `retryAttempts` / `retryDelayMs` / `retryBackoffStrategy` are
- * **not accepted** by any transport constructor here: they retry beneath the
- * Effect boundary where neither the policy, the circuit breaker, nor the logs
- * can see them, and they reconnect inline, racing the supervisor fiber that
- * owns reconnection. See {@link UpstreamRetryOptionKey}.
+ * A configured reconnect supervisor owns reconnection for the transport and
+ * guards operations while the connection is down. Watch {@link ConnectionState}
+ * through `transport.connectionState`. {@link retryModbus} wraps an Effect; use
+ * it with a `RetryPolicies.none()` client for a compound operation. It does not
+ * replace a client's policy. Upstream transport retry options are excluded;
+ * see {@link UpstreamRetryOptionKey}.
  *
  * @module @flux-control/effect-modbus-rs
  */

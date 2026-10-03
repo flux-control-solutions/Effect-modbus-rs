@@ -1,18 +1,13 @@
 /**
- * Diagnostic page (see ../export-check.html) for an upstream `modbus-rs` bug:
- * the WASM build's `.d.ts` declares `ModbusErrorCode` as an export, but the
- * generated JS never exports it. Types pass, runtime fails.
+ * Checks runtime exports and named-import linking for browser package builds.
+ * The probes compare module declarations with the exports available at runtime.
  *
- * This exists because the bug is invisible to every check this repo normally
- * runs — the root `tsc`/`bun test` resolve `modbus-rs` under the default (napi)
- * condition, where the export genuinely exists, and the browser `.d.ts` lies
- * about the browser build. Only a real bundler resolving the `browser`
- * condition sees it.
+ * Browser bundling can resolve different package conditions from tests and
+ * type checks. This page probes the browser-resolved modules directly.
  *
- * Every probe below uses `import()` inside a try/catch. A static
- * `import { ModbusErrorCode } from 'modbus-rs'` at the top of this file would
- * fail at module-link time and render nothing at all — which is precisely the
- * failure being demonstrated, so it has to be quarantined to be observable.
+ * Dynamic imports run inside try/catch blocks. A static
+ * `import { ModbusErrorCode } from 'modbus-rs'` at the top of this file can fail
+ * during module linking before the page can render the result.
  */
 
 /** Result produced by one runtime-export or named-import diagnostic probe. */

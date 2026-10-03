@@ -1,3 +1,4 @@
+/** Exposes one serial transport tag that can use RTU, ASCII, or mock framing. */
 import { Context, Layer } from 'effect';
 
 import { AsciiTransportService, type AsciiTransportOpenOptions } from './AsciiTransportService';
@@ -31,6 +32,9 @@ export class SerialTransportService extends Context.Service<
   /**
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an ASCII transport.
+   *
+   * @param options - ASCII transport and optional resilience settings.
+   * @returns A layer that opens the transport on first use and closes it when its scope ends.
    */
   static fromAscii(
     options: AsciiTransportOpenOptions & TransportResilienceOptions,
@@ -43,6 +47,9 @@ export class SerialTransportService extends Context.Service<
   /**
    * Creates a {@link Layer} providing {@link SerialTransportService}
    * backed by an RTU transport.
+   *
+   * @param options - RTU transport and optional resilience settings.
+   * @returns A layer that opens the transport on first use and closes it when its scope ends.
    */
   static fromRtu(
     options: RtuTransportOpenOptions & TransportResilienceOptions,
@@ -64,8 +71,7 @@ export class SerialTransportService extends Context.Service<
    * `fault`, and `reconnectFault`.
    *
    * @param devices - The slave device definitions for the mock.
-   * @returns A function that takes the mock options and gives a scoped
-   *          {@link Layer} that provides the mock service.
+   * @returns A factory that accepts either framing's transport options, resilience settings, and mock-fault settings, then provides a scoped mock layer.
    * @see MockFaultOptions — The `fault` hook and the `reconnectFault` hook.
    * @see makeMockTransport — The mock factory that this method uses.
    */

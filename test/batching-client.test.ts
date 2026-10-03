@@ -24,6 +24,8 @@ import { createRegisterCache } from '../src/register-cache';
 import { RetryPolicies } from '../src/retry';
 import { RtuTransportService } from '../src/RtuTransportService';
 
+/** Tests batching client declaration, caching, debouncing, tracing, and shutdown behavior. */
+
 const devices: SlaveDeviceDefinitions = [
   {
     unitId: 3,
@@ -877,7 +879,7 @@ test('mock clients and batching acquisition fail after explicit close', async ()
         const batched = yield* transport.withBatchingClient(3, { cache: false });
         const closeScope = yield* Scope.make();
 
-        yield* Scope.provide(transport.close(), closeScope);
+        yield* transport.close(closeScope);
 
         return yield* Effect.all({
           read: Effect.result(raw.readHoldingRegisters({ address: 0, quantity: 1 })),

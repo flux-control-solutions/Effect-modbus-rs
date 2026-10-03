@@ -6,6 +6,8 @@ import type { AsyncSerialModbusClient } from 'modbus-rs';
 import { RetryPolicies } from '../src/retry';
 import { createTransportScoped, type TransportResilienceOptions } from '../src/shared-transport';
 
+/** Tests shared transport acquisition, reconnect coordination, timeouts, and teardown. */
+
 interface FakeOptions {
   readonly label: string;
   readonly responseTimeoutMs?: number;
@@ -295,12 +297,37 @@ test('explicit close runs batching shutdown actions before closing the handle', 
     const batched = yield* api.withBatchingClient(1, { cache: false });
     yield* Scope.provide(batched.onShutdown(batched.writeNow({ address: 0, value: 0 })), scope);
 
-    const exit = yield* Effect.exit(Scope.provide(api.close(), scope));
+    const exit = yield* Effect.exit(api.close(scope));
 
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(held).toBe(0);
     expect(events).toEqual(['write', 'close']);
   }).pipe(Effect.runPromise);
+});
+
+test('explicit close closes the handle when a shutdown action fails', async () => {
+  const fake = makeFake({
+    client: makeClient(async () => {
+      throw new Error('device unreachable');
+    }),
+  });
+
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      // The work scope does not own the transport. Only close can close the handle here.
+      const work = yield* Scope.make();
+      const batched = yield* api.withBatchingClient(1, { cache: false });
+      yield* Scope.provide(batched.onShutdown(batched.writeNow({ address: 0, value: 0 })), work);
+
+      const exit = yield* Effect.exit(api.close(work));
+
+      // onShutdown raises the failure as a defect, so close reports it.
+      expect(Exit.hasDies(exit)).toBe(true);
+      expect(fake.calls.close).toBe(1);
+      expect(failureTag(yield* Effect.exit(api.withClient(1)))).toBe('ModbusNotConnectedError');
+    }),
+  );
 });
 
 const failureTag = <A>(exit: Exit.Exit<A, { readonly _tag: string }>) =>

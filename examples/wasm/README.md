@@ -1,24 +1,25 @@
 # @flux-control/effect-modbus-rs — Browser (WASM) example
 
-A small, real Vite app exercising this package's browser transport services
-(`WasmWsTransportService`, `WasmRtuTransportService`, `WasmAsciiTransportService`,
-`requestSerialPort`) in an actual browser — for a consumer to try, or for manual
-testing during development. It intentionally does **not** use Bun/vite-via-Bun —
-this subdirectory is its own standalone npm project (see the root `AGENTS.md`
-for why the rest of the repo is Bun-only; a real browser bundler is the whole
-point here).
+A Vite application for manual testing of browser Modbus transports.
+It uses `WasmWsTransportService`, `WasmRtuTransportService`,
+`WasmAsciiTransportService`, and `requestSerialPort`.
+This directory is a separate npm project.
 
 ## Setup
 
+Build the package from its root before installing the example:
+
 ```sh
+bun run build
 cd examples/wasm
 npm install
 npm run dev
 ```
 
-Then open the printed `http://localhost:5173` URL in a browser. Pick a mode
-(WebSocket gateway or Web Serial), fill in connection details, and click
-**Connect**.
+Open the development server URL in a browser.
+Select WebSocket gateway or Web Serial mode.
+Enter connection details.
+Click **Connect**.
 
 - **TCP over WebSocket gateway** needs a running WS-to-TCP proxy such as
   [`modbus-gateway`](https://github.com/Raghava-Ch/modbus-gateway) bridging to
@@ -37,11 +38,9 @@ from the upstream module directly.
 `/export-check.html` remains available to inspect the browser-facing exports at
 runtime when upgrading `modbus-rs`.
 
-## Server-side (not demonstrated here)
+## Browser servers
 
-This package also wraps `modbus-rs`'s experimental browser server bindings
-(`wasmWsServerLayer`, `wasmSerialRtuServerLayer`, `wasmSerialAsciiServerLayer`)
-— see the root `README.md`'s "Browser server (experimental)" section. Not
-included in this app since running a simulated Modbus _server_ isn't the
-typical browser-app use case, but the same `import { wasmWsServerLayer } from
-"@flux-control/effect-modbus-rs"` pattern applies.
+The package also exposes experimental `wasmWsServerLayer`,
+`wasmSerialRtuServerLayer`, and `wasmSerialAsciiServerLayer` factories.
+This application does not demonstrate those servers.
+See [Servers and gateway](../../README.md#servers-and-gateway) for lifecycle and port-handle requirements.

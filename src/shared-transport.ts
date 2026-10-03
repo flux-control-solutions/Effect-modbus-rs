@@ -1,3 +1,4 @@
+/** Provides scoped lifecycle, lazy connection, client caching, and optional transport resilience. */
 import {
   Deferred,
   Duration,
@@ -66,7 +67,7 @@ export interface TransportResilienceOptions {
    * host that does not answer waits until the operating system stops it, which
    * takes about 2 minutes on Linux with default settings.
    *
-   * The limit applies to each caller that waits for an open or reconnect.
+   * The limit applies independently to each caller that waits for an open or reconnect.
    * When it expires, that caller fails with {@link ModbusTimeoutError}.
    *
    * The native connect cannot be cancelled, so it continues. Later callers wait
@@ -201,6 +202,7 @@ export interface TransportServiceApi {
    *
    * @param unitId - Modbus unit ID to address.
    * @param options - Per-client policy replacing the transport default.
+   * @returns An Effect that succeeds with the client or fails with a Modbus error.
    */
   withClient(
     unitId: number,
@@ -218,9 +220,15 @@ export interface TransportServiceApi {
    * ```
    */
   readonly connectionState: SubscriptionRef.SubscriptionRef<ConnectionState>;
-  /** Sets a request timeout (ms) on the underlying transport. Fails if not connected. */
+  /**
+   * Sets the request timeout in milliseconds on the underlying transport.
+   * @param timeoutMs - Request timeout in milliseconds.
+   * @returns An Effect that completes after the timeout is set, or fails if the transport is not connected.
+   */
   setRequestTimeout(timeoutMs: number): Effect.Effect<void, ModbusError>;
-  /** Clears the request timeout. Fails if not connected. */
+  /** Clears the request timeout.
+   * @returns An Effect that completes after the timeout is cleared, or fails if the transport is not connected.
+   */
   clearRequestTimeout(): Effect.Effect<void, ModbusError>;
   /**
    * Reconnects the transport. Opens lazily if no prior connection exists.
@@ -229,10 +237,19 @@ export interface TransportServiceApi {
    * flight join it rather than starting another, and all of them observe its
    * result. Fails with `ModbusNotConnectedError` if the transport was closed
    * while the reconnect was running.
+   * @returns An Effect that completes when the transport is open or reconnected, or fails on connection error.
    */
   reconnect(): Effect.Effect<void, ModbusError>;
-  /** Closes the transport and its scope immediately. */
-  close(): Effect.Effect<void, ModbusError, Scope.Scope>;
+  /**
+   * Closes `scope`, then closes the transport.
+   *
+   * Pass the scope that holds the work to finish first, such as
+   * `onShutdown` writes. The transport closes even if a finalizer fails.
+   *
+   * @param scope - Caller scope to finalize before closing the connection.
+   * @returns An Effect that finalizes the caller scope and attempts transport closure.
+   */
+  close(scope: Scope.Closeable): Effect.Effect<void, ModbusError>;
   /**
    * Declares the {@link BatchingModbusClient} for a unit.
    *
@@ -256,6 +273,7 @@ export interface TransportServiceApi {
    *
    * @param unitId - Modbus unit ID to address.
    * @param options - The cache, the windows, and the planner limits.
+   * @returns An Effect that succeeds with the client or fails with a Modbus or declaration error.
    */
   withBatchingClient(
     unitId: number,
@@ -269,6 +287,7 @@ export interface TransportServiceApi {
    * which fiber ran first.
    *
    * @param unitId - Modbus unit ID to address.
+   * @returns An Effect that succeeds with the declared client, or fails if no declaration exists.
    */
   batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
   /**
@@ -348,7 +367,7 @@ const loadTransportConstructor = async (
  * lifecycle, client caching, timeouts, and reconnection.
  *
  * The transport is opened lazily on the first `withClient()` call and
- * automatically closed when the consuming {@link Effect.Scope | Scope}
+ * automatically closed when the consuming scope
  * finalizes via `Effect.addFinalizer`.
  *
  * @typeParam TOptions - Transport options (e.g. `RtuTransportOptions`).
@@ -359,7 +378,7 @@ const loadTransportConstructor = async (
  *   returning a promise for the opened transport.
  * @param serviceName - Logical name used in log messages and the finalizer guard.
  * @param config - Optional module specifier override for browser WASM transports.
- * @returns An `Effect` that produces a {@link TransportServiceApi}.
+ * @returns A scoped service constructor that produces a {@link TransportServiceApi}.
  */
 export function createTransportScoped<
   TOptions,
@@ -748,9 +767,8 @@ export function createTransportScoped<
         yield* SubscriptionRef.set(connectionState, ConnectionState.Connected());
       }),
 
-      close: Effect.fnUntraced(function* () {
+      close: Effect.fnUntraced(function* (scope: Scope.Closeable) {
         if (closed) return;
-        const scope = yield* Effect.scope;
         yield* Scope.close(scope, Exit.void).pipe(Effect.onExit(() => closeTransport));
       }),
 

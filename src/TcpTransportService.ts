@@ -1,3 +1,4 @@
+/** Provides scoped TCP Modbus transport layers and an in-memory mock layer. */
 import { Context, Layer } from 'effect';
 import type { AsyncTcpModbusClient, AsyncTcpTransport, TcpTransportOptions } from 'modbus-rs';
 
@@ -22,7 +23,7 @@ export type TcpTransportOpenOptions = WithoutUpstreamRetry<TcpTransportOptions>;
  *
  * The transport connection is opened lazily on the first call to
  * `withClient(unitId)` and automatically closed when the consuming
- * {@link Effect.Scope | Scope} finalizes.
+ * scope finalizes.
  *
  * Clients are created per `unitId` via
  * {@link AsyncTcpTransport.createClient} and cached, so repeated
@@ -63,7 +64,8 @@ export class TcpTransportService extends Context.Service<
   /**
    * Creates a {@link Layer} providing a live {@link TcpTransportService}.
    *
-   * @param options - Connection and resilience options for the TCP transport.
+   * @param options - TCP connection options and optional retry, reconnect, and connect-timeout settings.
+   * @returns A layer whose scope opens the connection on first use and closes it on finalization.
    */
   static readonly make = (
     options: TcpTransportOpenOptions & TransportResilienceOptions,
@@ -74,12 +76,11 @@ export class TcpTransportService extends Context.Service<
    * Creates a {@link Layer} providing an in-memory mock
    * {@link TcpTransportService} for testing or development.
    *
-   * Accepts an array of {@link SlaveDeviceDefinition} describing the
+   * Accepts an array of {@link SlaveDeviceDefinition} values describing the
    * simulated Modbus slaves and their register/coil maps.
    *
    * @param devices - Slave device definitions for the mock.
-   * @returns A function that takes {@link TcpTransportOpenOptions} and
-   *          returns a scoped {@link Layer} providing the mock service.
+   * @returns A factory that accepts transport, resilience, and mock-fault options and returns a layer for the mock service.
    *
    * @see makeMockTransport — The underlying mock factory.
    */

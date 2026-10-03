@@ -1,3 +1,4 @@
+/** Defines scoped RTU and ASCII Modbus serial server layers. */
 import { Effect, Layer } from 'effect';
 import type { SerialServerOptions, ServerHandlers } from 'modbus-rs';
 
@@ -9,7 +10,7 @@ import { toModbusError } from './errors';
  *
  * @param options - Serial port options (path, baud rate, unit ID, etc.).
  * @param handlers - Callback functions that handle incoming Modbus requests.
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that starts the server; bind failures enter the `ModbusError` channel. Scope finalization shuts it down, and shutdown failures are ignored.
  *
  * @example
  * ```ts
@@ -61,7 +62,7 @@ export const serialRtuServerLayer = (
  *
  * @param options - Serial port options (path, baud rate, unit ID, etc.).
  * @param handlers - Callback functions that handle incoming Modbus requests.
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that starts the server; bind failures enter the `ModbusError` channel. Scope finalization shuts it down, and shutdown failures are ignored.
  *
  * @example
  * ```ts

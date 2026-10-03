@@ -1,12 +1,5 @@
 /**
- * @fileoverview A client that decides the transactions, rather than issuing the
- * ones a caller names.
- *
- * `withClient` returns an {@link EffectModbusClient}: it issues exactly the
- * transaction asked for, and it is the right client when a caller knows what the
- * bus should carry. This module is its sibling for the other case — a caller with
- * one accessor per register, which knows what it wants to read and write but not
- * what that ought to cost.
+ * @fileoverview Batching clients collect and plan register operations for a unit.
  *
  * @module
  */
@@ -139,13 +132,29 @@ export interface BatchingClientOptions {
 
 /** Reads over one register space. */
 export interface BatchingRegisterReader {
-  /** Collects an address for the read window, then returns its value. */
+  /**
+   * Collects an address for the read window, then returns its value.
+   * @param address - Register address.
+   * @returns The register value, or a Modbus error.
+   */
   read(address: number): Effect.Effect<number, ModbusError>;
-  /** Adds an address to the batch and reads immediately, answering every reader in it. */
+  /**
+   * Adds an address and flushes collected reads immediately.
+   * @param address - Register address.
+   * @returns The register value, or a Modbus error.
+   */
   readNow(address: number): Effect.Effect<number, ModbusError>;
-  /** Reads a group as one reader, planned into spans, in the order asked for. */
+  /**
+   * Collects a group as one reader and returns values in the requested order.
+   * @param addresses - Register addresses, in result order.
+   * @returns Register values in the requested order, or a Modbus error.
+   */
   readAll(addresses: ReadonlyArray<number>): Effect.Effect<ReadonlyArray<number>, ModbusError>;
-  /** Adds a group to the batch and reads immediately. */
+  /**
+   * Adds a group and flushes collected reads immediately.
+   * @param addresses - Register addresses, in result order.
+   * @returns Register values in the requested order, or a Modbus error.
+   */
   readAllNow(addresses: ReadonlyArray<number>): Effect.Effect<ReadonlyArray<number>, ModbusError>;
 }
 
@@ -170,19 +179,43 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
   /** The unit this client addresses. */
   readonly unitId: number;
 
-  /** Holds a write for the write window, then issues it with whatever else arrived. */
+  /**
+   * Holds a write for the write window, then issues it with other pending writes.
+   * Completion means the carrying batch succeeded; a cache can suppress its bus write.
+   * @param write - Register address and value.
+   * @param attributes - Optional span attributes for this caller.
+   * @returns Completion after the carrying batch succeeds, or its Modbus error.
+   */
   write(write: RegisterWrite, attributes?: ModbusSpanAttributes): Effect.Effect<void, ModbusError>;
-  /** Adds a write to the batch and issues it immediately, newest value winning. */
+  /**
+   * Adds a write and flushes pending writes immediately. The newest value wins.
+   * Completion means the carrying batch succeeded; a cache can suppress its bus write.
+   * @param write - Register address and value.
+   * @param attributes - Optional span attributes for this caller.
+   * @returns Completion after the carrying batch succeeds, or its Modbus error.
+   */
   writeNow(
     write: RegisterWrite,
     attributes?: ModbusSpanAttributes,
   ): Effect.Effect<void, ModbusError>;
-  /** Holds a group of writes as one caller. The group succeeds or fails together. */
+  /**
+   * Submits the group to the write debouncer as one caller.
+   * Completion reports its flush result; cache filtering can suppress physical writes.
+   * @param writes - Register writes.
+   * @param attributes - Optional span attributes for this caller.
+   * @returns Completion after the carrying batch succeeds, or its Modbus error.
+   */
   writeAll(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
   ): Effect.Effect<void, ModbusError>;
-  /** Adds a group of writes to the batch and issues it immediately. */
+  /**
+   * Adds a group of writes and flushes pending writes immediately.
+   * Completion means the carrying batch succeeded; a cache can suppress bus writes.
+   * @param writes - Register writes.
+   * @param attributes - Optional span attributes for this caller.
+   * @returns Completion after the carrying batch succeeds, or its Modbus error.
+   */
   writeAllNow(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
@@ -213,17 +246,17 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
   readonly debounce: BatchingDebounceWindows | undefined;
 
   /**
-   * Runs an action when the calling scope closes, while the bus is still open
-   * and before this client is torn down.
+   * Registers an action for the calling scope's finalization.
+   * Keep the transport open until that scope closes.
    *
-   * A device's safe state is the device's own answer — zero volts for one, a
-   * stopped motor for another — so it is stated here, on the client that
-   * addresses it, rather than dispatched from one action over a set of units.
+   * The application selects the shutdown value. Use an immediate write method
+   * to avoid waiting for a collection window during cleanup.
    *
-   * A failure is logged and then raised as a defect. The other finalizers in the
-   * scope still run, so a device that cannot be reached does not cost the rest of
-   * the bus its turn. Wrap the action in `Effect.ignoreLogged` to accept the
-   * failure instead.
+   * An unhandled failure is logged and raised as a defect. Other finalizers
+   * still run. Wrap the action in `Effect.ignoreLogged` to accept its failure.
+   *
+   * @param action - Shutdown action to run before client teardown.
+   * @returns An effect that registers the action in the calling scope.
    *
    * @example
    * const damper = yield* transport.withBatchingClient(3);
@@ -239,7 +272,7 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
  * normally meets it. Call it directly to drive a client this package did not
  * hand out, such as another adapter implementing `EffectModbusClient`, or a stub.
  *
- * @param options - The unit, the Effect-wrapped client, and the policies.
+ * @param options - Unit, client, cache or `undefined`, debounce windows, and planner limits.
  * @returns The batching client, bound to the current scope.
  */
 export const makeBatchingClient = (options: {
@@ -496,8 +529,8 @@ export interface BatchingRegistry {
  * `withBatchingClient` declares. `batchingClient` looks up, and waits for a
  * declaration already under way rather than depending on which fiber ran first.
  *
- * @param deps - The transport's raw client factory, link state, and scope.
- * @returns The batching methods, ready to spread onto a transport API.
+ * @param deps - Raw client factory, link state, and transport scope.
+ * @returns Registry methods for declaring and retrieving per-unit clients.
  */
 export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegistry => {
   const clientScope = Scope.forkUnsafe(deps.scope);

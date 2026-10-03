@@ -1,3 +1,4 @@
+/** Defines a scoped layer for a Modbus TCP gateway. */
 import { Effect, Layer } from 'effect';
 import type { GatewayBindOptions, GatewayConfig } from 'modbus-rs';
 
@@ -15,7 +16,7 @@ import { toModbusError } from './errors';
  * @param options - Gateway bind options (host, port).
  * @param gatewayConfig - Routing configuration with downstream server
  *   definitions and a unit-ID-to-channel route table.
- * @returns A `Layer` that fails with {@link ModbusError} on bind failure.
+ * @returns A layer that starts the gateway; bind failures enter the `ModbusError` channel. Scope finalization shuts it down, and shutdown failures are ignored.
  *
  * @example
  * ```ts

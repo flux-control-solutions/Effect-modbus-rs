@@ -6,6 +6,8 @@ import { CoilState } from 'modbus-rs';
 import { ModbusInvalidArgumentError } from '../src/errors';
 import { RtuTransportService } from '../src/RtuTransportService';
 
+/** Tests mock RTU register and coil operations, defaults, and invalid requests. */
+
 const device = {
   unitId: 1,
   coils: [
