@@ -4,6 +4,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Option,
   Ref,
   Scope,
@@ -221,13 +222,15 @@ export interface TransportServiceApi {
    */
   readonly connectionState: SubscriptionRef.SubscriptionRef<ConnectionState>;
   /**
-   * Sets the request timeout in milliseconds on the underlying transport.
+   * Sets native response and admission limits in milliseconds.
    * @param timeoutMs - Request timeout in milliseconds.
    * @returns An Effect that completes after the timeout is set, or fails if the transport is not connected.
    */
   setRequestTimeout(timeoutMs: number): Effect.Effect<void, ModbusError>;
-  /** Clears the request timeout.
-   * @returns An Effect that completes after the timeout is cleared, or fails if the transport is not connected.
+  /**
+   * Clears native response and admission limits. Fails if not connected.
+   * Interruption of an unbounded serial call closes its handle. Later operations reopen it lazily.
+   * @returns An Effect that completes after the limits are cleared, or fails if the transport is not connected.
    */
   clearRequestTimeout(): Effect.Effect<void, ModbusError>;
   /**
@@ -391,33 +394,10 @@ export function createTransportScoped<
   config?: {
     /** Which `modbus-rs` conditional export to import from. Defaults to `"modbus-rs"` (native). */
     moduleSpecifier?: 'modbus-rs' | 'modbus-rs/web';
-    /**
-     * Request time limit handling for a native `modbus-rs` 0.16.1 transport.
-     *
-     * The serial `responseTimeoutMs` open option does not limit a request.
-     * A request to a unit that does not answer then waits forever, and every
-     * later request on the transport waits behind it. Only `setRequestTimeout`
-     * limits a request, so the transport applies the time limit with it after
-     * each open.
-     *
-     * A request timeout closes the native handle for every unit on it, but
-     * its clients still report a connection. The transport therefore
-     * reconnects the handle before the next attempt.
-     */
-    nativeTimeout?: {
-      /** Reads the request time limit, in milliseconds, from the open options. */
-      readonly requestTimeoutMs: (options: TOptions) => number | undefined;
-      /**
-       * Sends one native request at a time when a time limit is set.
-       *
-       * A serial transport queues requests and sends them one by one, but the
-       * time limit of each request starts when it enters the queue. A queued
-       * request therefore has less time for its own response. A TCP transport
-       * sends each request at once, so it does not need this, and it keeps
-       * concurrent requests on one connection.
-       */
-      readonly serializeRequests: boolean;
-    };
+    /** Keeps serial calls and reconnects outside an in-flight native call. TCP and WASM do not use it. */
+    serializeRequests?: boolean;
+    /** Reads the initial serial response limit. Native 0.16.2 defaults to 1000 ms. */
+    responseTimeoutMs?: (options: TOptions) => number | undefined;
   },
 ) {
   return Effect.fnUntraced(function* (options: TOptions & TransportResilienceOptions) {
@@ -431,24 +411,31 @@ export function createTransportScoped<
     Reflect.deleteProperty(openOptions, 'retry');
     Reflect.deleteProperty(openOptions, 'reconnect');
     Reflect.deleteProperty(openOptions, 'connectTimeout');
-    const nativeTimeout = config?.nativeTimeout;
-    const requestTimeoutMs = nativeTimeout?.requestTimeoutMs(options);
-    // On a serial transport, the native time limit starts when a request enters
-    // the native queue, not when it is sent. A request that waits behind other
-    // requests has less time for its own response, and it can time out after
-    // the device answered. One request at a time gives each request its full
-    // time limit. A serial bus sends one request at a time anyway.
-    const nativeLock =
-      requestTimeoutMs === undefined || !nativeTimeout?.serializeRequests
-        ? undefined
-        : yield* Semaphore.make(1);
-    // The native call is not interruptible. An interrupted caller would leave
-    // its request in the native queue, where it would hold the next request.
-    // The time limit bounds the wait.
+    const nativeLock = config?.serializeRequests ? yield* Semaphore.make(1) : undefined;
+    let nativeLimit: number | undefined = config?.responseTimeoutMs?.(options) ?? 1000;
+    let requestLimitOverride: number | null | undefined;
+    // Native serial aborts can leave a late response for the next request in 0.16.2.
+    // Drain bounded calls before interruption. Unbounded calls keep their permit in shared work.
     const aroundNative: NativeCallWrapper | undefined =
       nativeLock === undefined
         ? undefined
-        : (call) => nativeLock.withPermits(1)(Effect.uninterruptible(call));
+        : (call) =>
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                yield* restore(nativeLock.take(1));
+                const work = call.pipe(Effect.ensuring(nativeLock.release(1)));
+                if (nativeLimit !== undefined) return yield* work;
+                const worker = yield* Effect.forkDetach(Effect.exit(work));
+                const exit = yield* restore(Fiber.join(worker)).pipe(
+                  Effect.onInterrupt(
+                    () =>
+                      // A disabled response limit cannot bound drain time. Close the handle instead of aborting its reader.
+                      invalidateNative,
+                  ),
+                );
+                return yield* exit;
+              }),
+            );
     const TC = yield* Effect.promise(() =>
       loadTransportConstructor(transportKey, config?.moduleSpecifier ?? 'modbus-rs'),
     );
@@ -457,7 +444,6 @@ export function createTransportScoped<
 
     const opening = yield* makeInFlight<TTransport>();
     const reconnecting = yield* makeInFlight<void>();
-    const restoring = yield* makeInFlight<void>();
     const connectionState = yield* SubscriptionRef.make<ConnectionState>(
       ConnectionState.Disconnected(),
     );
@@ -468,16 +454,19 @@ export function createTransportScoped<
     const serviceScope = yield* Effect.scope;
 
     const clientSet = new Map<number, TClient>();
+    const touchedUnits = new Set<number>();
 
     let closed = false;
 
-    /**
-     * Set when a request timed out. `modbus-rs` then closes the native handle
-     * for every unit on it, but the clients still report a connection. The
-     * next attempt reconnects the handle first, so one silent unit does not
-     * fail the requests to the other units.
-     */
-    let restoreBeforeNext = false;
+    const invalidateNative = Effect.suspend(() => {
+      const current = transport;
+      transport = null;
+      clientSet.clear();
+      return Effect.andThen(
+        SubscriptionRef.set(connectionState, ConnectionState.Disconnected()),
+        current === null ? Effect.void : Effect.ignore(Effect.tryPromise(() => current.close())),
+      );
+    });
 
     const transportClosed = () =>
       new ModbusNotConnectedError({
@@ -525,7 +514,9 @@ export function createTransportScoped<
           ? closeOrphan(t)
           : Effect.andThen(
               Effect.sync(() => {
-                if (requestTimeoutMs !== undefined) t.setRequestTimeout(requestTimeoutMs);
+                if (requestLimitOverride === null) t.clearRequestTimeout();
+                else if (requestLimitOverride !== undefined)
+                  t.setRequestTimeout(requestLimitOverride);
                 transport = t;
               }),
               SubscriptionRef.set(connectionState, ConnectionState.Connected()),
@@ -574,8 +565,7 @@ export function createTransportScoped<
       limitConnect(
         singleFlight(
           reconnecting,
-          // A reconnect while a request is in flight leaves the old native
-          // reader active. That reader can take the response to a later request.
+          // Reconnect waits for the serial attempt and its failure report to finish.
           withNativeLock(
             Effect.tryPromise({
               try: () => t.reconnect(),
@@ -583,12 +573,6 @@ export function createTransportScoped<
                 toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
             }),
           ).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                // Every completed reconnect replaces a handle that a timeout closed.
-                restoreBeforeNext = false;
-              }),
-            ),
             Effect.tap(() =>
               closed
                 ? // A reconnect that lands after the scope finalizer has closed
@@ -622,11 +606,6 @@ export function createTransportScoped<
      */
     const report = (error: ModbusError): Effect.Effect<void> => {
       if (closed) return Effect.void;
-      if (nativeTimeout && error._tag === 'ModbusTimeoutError') restoreBeforeNext = true;
-      // A request queued behind the timed-out request fails with a closed
-      // connection. The next attempt restores the handle, so the supervisor
-      // does not open the circuit for the healthy units.
-      if (restoreBeforeNext && error._tag === 'ModbusConnectionClosedError') return Effect.void;
       if (!resolvedReconnect.triggers(error)) return Effect.void;
       if (!supervised) {
         return SubscriptionRef.update(connectionState, (current) =>
@@ -644,38 +623,13 @@ export function createTransportScoped<
       );
     };
 
-    /**
-     * Reconnects the native handle after a request timeout, before the next
-     * attempt. Concurrent attempts share one reconnect with the supervisor.
-     */
-    const restoreAfterTimeout = Effect.suspend(() => {
-      if (!restoreBeforeNext || closed) return Effect.void;
-      return limitConnect(
-        singleFlight(
-          restoring,
-          // Check again in the shared work. An attempt that saw the flag before
-          // another attempt restored the handle must not reconnect again. A
-          // reconnect while a request is in flight leaves the old native reader
-          // active, and that reader can take the response of the next request.
-          Effect.suspend(() => {
-            const t = transport;
-            if (!restoreBeforeNext || closed || !t) return Effect.void;
-            return Effect.andThen(
-              Effect.logDebug(`${serviceName}: reconnecting after a request timeout`),
-              reconnectTransport(t),
-            );
-          }),
-        ),
-      );
-    });
-
     const resilience = {
       // Without a supervisor there is no breaker: nothing else would ever
       // close the circuit again.
-      guard: Effect.andThen(
-        supervised ? guardCircuit(connectionState) : Effect.void,
-        restoreAfterTimeout,
-      ),
+      guard: supervised
+        ? Effect.suspend(() => (transport === null ? Effect.void : guardCircuit(connectionState)))
+        : Effect.void,
+      aroundAttempt: aroundNative,
       onSuccess: supervised
         ? undefined
         : SubscriptionRef.update(connectionState, (current) =>
@@ -684,7 +638,7 @@ export function createTransportScoped<
       report,
     };
 
-    const makeOperations = Effect.fnUntraced(function* (unitId: number) {
+    const resolveClient = Effect.fnUntraced(function* (unitId: number) {
       const t = yield* ensureOpen();
       let client = clientSet.get(unitId);
       if (!client) {
@@ -694,8 +648,14 @@ export function createTransportScoped<
             toModbusError(cause instanceof Error ? cause : new Error(String(cause))),
         });
         clientSet.set(unitId, client);
+        touchedUnits.add(unitId);
       }
-      return createEffectModbusClient(client, aroundNative);
+      return client;
+    });
+
+    const makeOperations = Effect.fnUntraced(function* (unitId: number) {
+      yield* withNativeLock(resolveClient(unitId));
+      return createEffectModbusClient(resolveClient(unitId));
     });
 
     const makeClient = Effect.fnUntraced(function* (
@@ -740,6 +700,8 @@ export function createTransportScoped<
           });
         }
         t.setRequestTimeout(timeoutMs);
+        nativeLimit = timeoutMs;
+        requestLimitOverride = timeoutMs;
       }),
 
       clearRequestTimeout: Effect.fnUntraced(function* () {
@@ -751,6 +713,8 @@ export function createTransportScoped<
           });
         }
         t.clearRequestTimeout();
+        nativeLimit = undefined;
+        requestLimitOverride = null;
       }),
 
       reconnect: Effect.fnUntraced(function* () {
@@ -776,7 +740,7 @@ export function createTransportScoped<
       batchingClient: batching.batchingClient,
 
       get touchedUnits() {
-        return new Set(clientSet.keys());
+        return new Set(touchedUnits);
       },
 
       hasPendingRequests: () => {

@@ -245,26 +245,29 @@ export interface ModbusOperations {
  * @see AsyncTcpModbusClient — Upstream native TCP client API.
  */
 export const createEffectModbusClient = (
-  client: AnyModbusClient,
+  client: AnyModbusClient | Effect.Effect<AnyModbusClient, ModbusError>,
   around: NativeCallWrapper = identityWrapper,
 ): ModbusOperations => {
-  const call = <T>(try_: () => Promise<T>) => around(wrap(try_));
+  const resolve = Effect.isEffect(client) ? client : Effect.succeed(client);
+  const call = <T>(try_: (current: AnyModbusClient) => Promise<T>) =>
+    around(Effect.flatMap(resolve, (current) => wrap(() => try_(current))));
   return {
-    readHoldingRegisters: (opts) => call(() => client.readHoldingRegisters(opts)),
-    readInputRegisters: (opts) => call(() => client.readInputRegisters(opts)),
-    writeSingleRegister: (opts) => call(() => client.writeSingleRegister(opts)),
-    writeMultipleRegisters: (opts) => call(() => client.writeMultipleRegisters(opts)),
-    readWriteMultipleRegisters: (opts) => call(() => client.readWriteMultipleRegisters(opts)),
-    readCoils: (opts) => call(() => client.readCoils(opts)),
-    writeSingleCoil: (opts) => call(() => client.writeSingleCoil(opts)),
-    writeMultipleCoils: (opts) => call(() => client.writeMultipleCoils(opts)),
-    readDiscreteInputs: (opts) => call(() => client.readDiscreteInputs(opts)),
-    readFifoQueue: (opts) => call(() => client.readFifoQueue(opts)),
-    readFileRecord: (opts) => call(() => client.readFileRecord(opts)),
-    writeFileRecord: (opts) => call(() => client.writeFileRecord(opts)),
-    readExceptionStatus: () => call(() => client.readExceptionStatus()),
-    diagnostics: (opts) => call(() => client.diagnostics(opts)),
-    readDeviceIdentification: (opts) => call(() => client.readDeviceIdentification(opts)),
+    readHoldingRegisters: (opts) => call((current) => current.readHoldingRegisters(opts)),
+    readInputRegisters: (opts) => call((current) => current.readInputRegisters(opts)),
+    writeSingleRegister: (opts) => call((current) => current.writeSingleRegister(opts)),
+    writeMultipleRegisters: (opts) => call((current) => current.writeMultipleRegisters(opts)),
+    readWriteMultipleRegisters: (opts) =>
+      call((current) => current.readWriteMultipleRegisters(opts)),
+    readCoils: (opts) => call((current) => current.readCoils(opts)),
+    writeSingleCoil: (opts) => call((current) => current.writeSingleCoil(opts)),
+    writeMultipleCoils: (opts) => call((current) => current.writeMultipleCoils(opts)),
+    readDiscreteInputs: (opts) => call((current) => current.readDiscreteInputs(opts)),
+    readFifoQueue: (opts) => call((current) => current.readFifoQueue(opts)),
+    readFileRecord: (opts) => call((current) => current.readFileRecord(opts)),
+    writeFileRecord: (opts) => call((current) => current.writeFileRecord(opts)),
+    readExceptionStatus: () => call((current) => current.readExceptionStatus()),
+    diagnostics: (opts) => call((current) => current.diagnostics(opts)),
+    readDeviceIdentification: (opts) => call((current) => current.readDeviceIdentification(opts)),
   };
 };
 
@@ -276,6 +279,8 @@ export const createEffectModbusClient = (
  * reconnect serves every client derived from it.
  */
 export interface ClientResilience {
+  /** Protects the guard, native call, and failure report as one transport attempt. */
+  readonly aroundAttempt?: NativeCallWrapper;
   /** Refuses the operation while the transport's circuit is open. */
   readonly guard: Effect.Effect<void, ModbusError>;
   /** Records that an operation reached the device successfully. */
@@ -328,10 +333,11 @@ export const withResilience = (
   const run = <A>(
     operation: () => Effect.Effect<A, ModbusError>,
   ): Effect.Effect<A, ModbusError> => {
-    const attempt = Effect.andThen(resilience.guard, Effect.suspend(operation)).pipe(
+    const guarded = Effect.andThen(resilience.guard, Effect.suspend(operation)).pipe(
       Effect.tap(() => resilience.onSuccess ?? Effect.void),
       Effect.tapError((error) => resilience.report(error)),
     );
+    const attempt = resilience.aroundAttempt?.(guarded) ?? guarded;
     return resilience.policy ? retryModbus(resilience.policy)(attempt) : attempt;
   };
 

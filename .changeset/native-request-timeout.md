@@ -2,13 +2,15 @@
 '@flux-control/effect-modbus-rs': patch
 ---
 
-Make the request time limit of the native RTU, ASCII, and TCP transports work, and keep one silent unit from stopping the other units on a bus.
+Upgrade the native binding to `modbus-rs` 0.16.2 and preserve transport lifecycle behavior.
 
-In `modbus-rs` 0.16.1, the serial `responseTimeoutMs` open option does not limit a request. A request to a unit that does not answer waits forever, and every later request on the bus waits behind it. These changes work around the binding:
+The binding now applies serial response limits and keeps healthy units usable after an isolated timeout.
+The services remove the automatic timeout setter and the reconnect-after-timeout flag.
 
-- The transport applies `responseTimeoutMs` (serial) or `requestTimeoutMs` (TCP) with `setRequestTimeout` after each open.
-- A request timeout closes the native handle for every unit. The next attempt now reconnects the handle before it is sent. A request that fails behind the timeout with a closed connection does not start the reconnect supervisor.
-- On a serial transport, the native time limit starts when a request enters the native queue. When a time limit is set, the RTU and ASCII transports now send one native request at a time, so each request gets its full time limit. A native call is not interrupted, and a reconnect waits until the request in flight ends. The TCP transport sends each request at once, so it keeps concurrent requests on one connection.
-- `modbus-rs` refuses serial port paths longer than 64 characters. The native serial transports now replace a longer path with its link target. When the target is also too long, the open fails with `ModbusInvalidArgumentError` and a message that names the limit. `resolveSerialPortPath` and `MAX_SERIAL_PORT_PATH` are exported.
+- Preserve separate response and admission options. When the response option is absent, use the request option as its fallback.
+- Keep the serial drain lock while native aborts can leave late replies. Protect failure reporting inside the same attempt.
+- Track runtime limit changes. When an unbounded serial call is interrupted, close its handle and reopen lazily on later use.
+- Resolve clients from the current handle after a replacement. Preserve touched units and invalidate batching caches through connection state changes.
+- Set `MAX_SERIAL_PORT_PATH` to 128. Longer stable links use scoped aliases that follow device re-enumeration.
 
-The WASM transports do not change.
+TCP requests remain concurrent. The WASM service code does not change.

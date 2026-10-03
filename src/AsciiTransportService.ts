@@ -1,5 +1,5 @@
 /** Provides scoped ASCII Modbus transport layers and an in-memory mock layer. */
-import { Context, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type {
   AsyncAsciiTransport,
   AsyncSerialModbusClient,
@@ -7,7 +7,7 @@ import type {
 } from 'modbus-rs';
 
 import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
-import { resolveSerialPortPath } from './serial-port-path';
+import { serialPortPathScoped } from './serial-port-path';
 import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
@@ -46,25 +46,31 @@ export class AsciiTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link AsciiTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = createTransportScoped<
-    AsciiTransportOpenOptions,
-    AsyncSerialModbusClient,
-    AsyncAsciiTransport
-  >(
-    'AsyncAsciiTransport',
-    async (transportConstructor, options: AsciiTransportOpenOptions) => {
-      const portPath = await resolveSerialPortPath(options.portPath);
-      // SAFETY: The constructor is read from the AsyncAsciiTransport export named above.
-      return (transportConstructor as typeof AsyncAsciiTransport).open({ ...options, portPath });
-    },
-    'AsciiTransportService',
-    {
-      nativeTimeout: {
-        requestTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
-        serializeRequests: true,
+  static readonly makeScoped = Effect.fnUntraced(function* (
+    options: AsciiTransportOpenOptions & TransportResilienceOptions,
+  ) {
+    const portPath = yield* serialPortPathScoped(options.portPath);
+    return yield* createTransportScoped<
+      AsciiTransportOpenOptions,
+      AsyncSerialModbusClient,
+      AsyncAsciiTransport
+    >(
+      'AsyncAsciiTransport',
+      async (transportConstructor, options: AsciiTransportOpenOptions) => {
+        // SAFETY: The constructor is read from the AsyncAsciiTransport export named above.
+        return (transportConstructor as typeof AsyncAsciiTransport).open({
+          ...options,
+          portPath: await portPath(),
+          responseTimeoutMs: options.responseTimeoutMs ?? options.requestTimeoutMs,
+        });
       },
-    },
-  );
+      'AsciiTransportService',
+      {
+        serializeRequests: true,
+        responseTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+      },
+    )(options);
+  });
 
   /**
    * Creates a {@link Layer} providing a live {@link AsciiTransportService}.

@@ -92,10 +92,7 @@ const makeFake = (config?: {
     (_constructor, options) => open(options),
     'FakeTransport',
     {
-      nativeTimeout: {
-        requestTimeoutMs: (options) => options.responseTimeoutMs,
-        serializeRequests: config?.serializeRequests ?? true,
-      },
+      serializeRequests: config?.serializeRequests ?? true,
     },
   );
 
@@ -495,8 +492,7 @@ test('a supervised reconnect that exceeds the connect timeout publishes Down, th
 });
 
 /**
- * A bus fake that acts like `modbus-rs` 0.16.1: a request timeout closes the
- * native handle for every unit, and only a reconnect opens it again.
+ * A bus fake that acts like 0.16.2: a request timeout leaves the handle open.
  */
 const makeSilentUnitBus = (silentUnit: number, delays?: ReadonlyMap<number, number>) => {
   const reads: Array<number> = [];
@@ -507,7 +503,6 @@ const makeSilentUnitBus = (silentUnit: number, delays?: ReadonlyMap<number, numb
       if (!state.open) throw new Error('[MODBUS_CONNECTION_CLOSED] Connection closed');
       reads.push(unitId);
       if (unitId === silentUnit) {
-        state.open = false;
         throw new Error('[MODBUS_TIMEOUT] Request timed out');
       }
       return new Uint16Array([unitId]);
@@ -531,13 +526,16 @@ const supervisedReconnect: TransportResilienceOptions = {
 
 const oneRegister = { address: 0, quantity: 1 };
 
-test('a request time limit in the open options is applied with setRequestTimeout', async () => {
+test('the response time limit remains an open option instead of replacing the request budget', async () => {
   const fake = makeFake({ openOptions: { responseTimeoutMs: 250 } });
   await run(
     Effect.gen(function* () {
       const api = yield* fake.make();
       yield* api.withClient(1);
-      expect(fake.calls.requestTimeouts).toEqual([250]);
+      expect(fake.calls.requestTimeouts).toEqual([]);
+      expect(fake.openOptions).toEqual([{ label: 'test', responseTimeoutMs: 250 }]);
+      yield* api.setRequestTimeout(125);
+      expect(fake.calls.requestTimeouts).toEqual([125]);
     }),
   );
 });
@@ -566,17 +564,17 @@ test('a timeout of one unit does not fail the next request to another unit', asy
         'ModbusTimeoutError',
       );
       expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
-      expect(fake.calls.reconnect).toBe(1);
+      expect(fake.calls.reconnect).toBe(0);
 
       // The handle is open again, so the next read needs no reconnect.
       expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
-      expect(fake.calls.reconnect).toBe(1);
+      expect(fake.calls.reconnect).toBe(0);
       expect(bus.state.reads).toEqual([2, 1, 1]);
     }),
   );
 });
 
-test('a supervised transport restores the handle after each timeout and keeps the circuit closed', async () => {
+test('a supervised transport keeps the circuit closed after isolated timeouts', async () => {
   const bus = makeSilentUnitBus(2);
   const fake = makeFake({
     clientFor: bus.clientFor,
@@ -596,14 +594,13 @@ test('a supervised transport restores the handle after each timeout and keeps th
         expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
       }
       expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
-      expect(fake.calls.reconnect).toBe(3);
+      expect(fake.calls.reconnect).toBe(0);
     }),
   );
 });
 
-test('a request that meets the handle closed by a timeout does not open the circuit', async () => {
-  // The healthy read passes the guard first and reaches the handle after the timeout.
-  const bus = makeSilentUnitBus(2, new Map([[1, 30]]));
+test('a closed connection after a timeout still starts the reconnect supervisor', async () => {
+  const bus = makeSilentUnitBus(2);
   const fake = makeFake({
     clientFor: bus.clientFor,
     onReconnect: bus.onReconnect,
@@ -615,17 +612,12 @@ test('a request that meets the handle closed by a timeout does not open the circ
       const healthy = yield* api.withClient(1);
       const silent = yield* api.withClient(2);
 
-      const [queued, timedOut] = yield* Effect.all(
-        [
-          Effect.exit(healthy.readHoldingRegisters(oneRegister)),
-          Effect.exit(silent.readHoldingRegisters(oneRegister)),
-        ],
-        { concurrency: 'unbounded' },
-      );
+      const timedOut = yield* Effect.exit(silent.readHoldingRegisters(oneRegister));
       expect(failureTag(timedOut)).toBe('ModbusTimeoutError');
+      bus.state.open = false;
+      const queued = yield* Effect.exit(healthy.readHoldingRegisters(oneRegister));
       expect(failureTag(queued)).toBe('ModbusConnectionClosedError');
-      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
-
+      yield* Effect.sleep('20 millis');
       expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
       expect(fake.calls.reconnect).toBe(1);
     }),
@@ -663,7 +655,7 @@ test('with a request time limit, native requests reach the native queue one at a
   );
 });
 
-test('without a request time limit, native requests are not held back', async () => {
+test('serial calls stay serialized when no admission budget is configured', async () => {
   const probe = makeOverlapProbe(10);
   const fake = makeFake({ client: probe.client });
   await run(
@@ -674,7 +666,7 @@ test('without a request time limit, native requests are not held back', async ()
         clients.map((client) => client.readHoldingRegisters(oneRegister)),
         { concurrency: 'unbounded' },
       );
-      expect(probe.state.maxInFlight).toBe(3);
+      expect(probe.state.maxInFlight).toBe(1);
     }),
   );
 });
@@ -723,6 +715,53 @@ test('a reconnect waits until the native request in flight ends', async () => {
   );
 });
 
+test('an interrupted serial attempt reports a closed connection before releasing the lock', async () => {
+  let connected = false;
+  const client = makeClient(unusedClientMethod, async () => {
+    await sleep(30);
+    if (!connected) throw new Error('[MODBUS_CONNECTION_CLOSED] Connection closed');
+    return new Uint16Array([1]);
+  });
+  const fake = makeFake({
+    client,
+    resilience: supervisedReconnect,
+    onReconnect: () => {
+      connected = true;
+    },
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const modbus = yield* api.withClient(1);
+      const first = yield* Effect.forkChild(modbus.readHoldingRegisters(oneRegister));
+      yield* Effect.sleep('5 millis');
+      yield* Fiber.interrupt(first);
+      yield* Effect.sleep('20 millis');
+      expect(fake.calls.reconnect).toBe(1);
+      expect([...(yield* modbus.readHoldingRegisters(oneRegister))]).toEqual([1]);
+    }),
+  );
+});
+
+test('runtime admission-budget changes do not remove the serial drain lock', async () => {
+  const probe = makeOverlapProbe(30);
+  const fake = makeFake({ client: probe.client });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const modbus = yield* api.withClient(1);
+      yield* api.setRequestTimeout(100);
+      yield* api.clearRequestTimeout();
+      yield* Effect.all(
+        [modbus.readHoldingRegisters(oneRegister), modbus.readHoldingRegisters(oneRegister)],
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(1);
+      expect(probe.state.completed).toBe(2);
+    }),
+  );
+});
+
 test('a transport that does not serialize keeps concurrent native requests with a time limit', async () => {
   const probe = makeOverlapProbe(10);
   const fake = makeFake({
@@ -739,12 +778,12 @@ test('a transport that does not serialize keeps concurrent native requests with 
         { concurrency: 'unbounded' },
       );
       expect(probe.state.maxInFlight).toBe(3);
-      expect(fake.calls.requestTimeouts).toEqual([250]);
+      expect(fake.calls.requestTimeouts).toEqual([]);
     }),
   );
 });
 
-test('a transport that does not serialize still restores the handle after a timeout', async () => {
+test('a transport that does not serialize keeps healthy units usable after a timeout', async () => {
   const bus = makeSilentUnitBus(2);
   const fake = makeFake({
     clientFor: bus.clientFor,
@@ -761,7 +800,7 @@ test('a transport that does not serialize still restores the handle after a time
         'ModbusTimeoutError',
       );
       expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
-      expect(fake.calls.reconnect).toBe(1);
+      expect(fake.calls.reconnect).toBe(0);
     }),
   );
 });
