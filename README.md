@@ -17,7 +17,7 @@ bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.118
 ```
 
 The current package requires Effect `^4.0.0-rc.118` as a peer dependency.
-It depends on `modbus-rs@0.16.1`.
+It depends on `modbus-rs@0.16.2`.
 The published package exports JavaScript and TypeScript declarations from `dist/`.
 
 ## Quick start
@@ -457,6 +457,31 @@ It does not limit connection acquisition.
 `setRequestTimeout(ms)` and `clearRequestTimeout()` require an open transport.
 `transport.close(scope)` finalizes the supplied caller scope, then closes the transport even if a finalizer fails.
 Later use cannot reopen that closed transport.
+
+### Native request limits
+
+The native services use `modbus-rs` 0.16.2.
+`responseTimeoutMs` limits a device response. `requestTimeoutMs` limits admission to the native queue.
+If `responseTimeoutMs` is absent, the services use `requestTimeoutMs` as its fallback.
+The native default response limit is 1000 ms.
+The services do not replace the response option with an automatic `setRequestTimeout` call.
+An isolated request timeout does not cause an automatic reconnect.
+
+The native `setRequestTimeout` method changes both limits. `clearRequestTimeout` removes both limits.
+Serial calls retain one drain lock, including their guard and failure report.
+An Effect interruption waits for a bounded native call to finish.
+If a serial call has no response limit, interruption closes its handle instead of waiting indefinitely.
+Later operations open a new handle and preserve explicit runtime limit settings.
+An interrupted caller that is still waiting for the lock sends no request.
+
+A raw native serial `AbortSignal` can leave a late reply for the next unit in 0.16.2.
+Use Effect fiber interruption for serial cancellation while that binding behavior remains unresolved.
+TCP requests remain concurrent. The WASM service code does not change.
+
+Serial paths can contain up to 128 characters in this binding version.
+A longer stable link uses a short scoped alias to the configured path.
+The alias follows link changes during device re-enumeration. Scope close removes the alias.
+`resolveSerialPortPath` resolves one snapshot only. Do not cache its target across device re-enumeration.
 
 ### Upstream retry options
 

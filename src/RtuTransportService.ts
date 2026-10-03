@@ -1,8 +1,9 @@
 /** Provides scoped RTU Modbus transport layers and an in-memory mock layer. */
-import { Context, Layer } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import type { AsyncRtuTransport, AsyncSerialModbusClient, RtuTransportOptions } from 'modbus-rs';
 
 import { createMockTransport, type MockFaultOptions, type SlaveDeviceDefinitions } from './mocks';
+import { serialPortPathScoped } from './serial-port-path';
 import { createTransportScoped } from './shared-transport';
 import type {
   TransportResilienceOptions,
@@ -41,18 +42,31 @@ export class RtuTransportService extends Context.Service<
    * Scoped constructor effect for the service. v4 does not auto-generate a
    * layer from this, so {@link RtuTransportService.make} builds one explicitly.
    */
-  static readonly makeScoped = createTransportScoped<
-    RtuTransportOpenOptions,
-    AsyncSerialModbusClient,
-    AsyncRtuTransport
-  >(
-    'AsyncRtuTransport',
-    (transportConstructor, options: RtuTransportOpenOptions) => {
-      // SAFETY: The constructor is read from the AsyncRtuTransport export named above.
-      return (transportConstructor as typeof AsyncRtuTransport).open(options);
-    },
-    'RtuTransportService',
-  );
+  static readonly makeScoped = Effect.fnUntraced(function* (
+    options: RtuTransportOpenOptions & TransportResilienceOptions,
+  ) {
+    const portPath = yield* serialPortPathScoped(options.portPath);
+    return yield* createTransportScoped<
+      RtuTransportOpenOptions,
+      AsyncSerialModbusClient,
+      AsyncRtuTransport
+    >(
+      'AsyncRtuTransport',
+      async (transportConstructor, options: RtuTransportOpenOptions) => {
+        // SAFETY: The constructor is read from the AsyncRtuTransport export named above.
+        return (transportConstructor as typeof AsyncRtuTransport).open({
+          ...options,
+          portPath: await portPath(),
+          responseTimeoutMs: options.responseTimeoutMs ?? options.requestTimeoutMs,
+        });
+      },
+      'RtuTransportService',
+      {
+        serializeRequests: true,
+        responseTimeoutMs: (options) => options.responseTimeoutMs ?? options.requestTimeoutMs,
+      },
+    )(options);
+  });
 
   /**
    * Creates a {@link Layer} providing a live {@link RtuTransportService}.
