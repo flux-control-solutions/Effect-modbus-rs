@@ -10,6 +10,7 @@ import { createTransportScoped, type TransportResilienceOptions } from '../src/s
 
 interface FakeOptions {
   readonly label: string;
+  readonly responseTimeoutMs?: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -20,10 +21,11 @@ const unusedClientMethod = async (): Promise<never> => {
 
 const makeClient = (
   writeSingleRegister: AsyncSerialModbusClient['writeSingleRegister'] = unusedClientMethod,
+  readHoldingRegisters: AsyncSerialModbusClient['readHoldingRegisters'] = unusedClientMethod,
 ): AsyncSerialModbusClient => ({
   pendingRequests: false,
   isConnected: () => true,
-  readHoldingRegisters: unusedClientMethod,
+  readHoldingRegisters,
   readInputRegisters: unusedClientMethod,
   writeSingleRegister,
   writeMultipleRegisters: unusedClientMethod,
@@ -49,9 +51,14 @@ const makeFake = (config?: {
   reconnectDelayMs?: number;
   reconnectFails?: () => boolean;
   client?: AsyncSerialModbusClient;
+  clientFor?: (unitId: number) => AsyncSerialModbusClient;
+  onReconnect?: () => void;
+  openOptions?: { readonly responseTimeoutMs?: number };
+  serializeRequests?: boolean;
   resilience?: TransportResilienceOptions;
 }) => {
-  const calls = { open: 0, reconnect: 0, close: 0 };
+  const requestTimeouts: Array<number> = [];
+  const calls = { open: 0, reconnect: 0, close: 0, requestTimeouts };
   const openOptions: unknown[] = [];
   const client = config?.client ?? makeClient();
 
@@ -59,13 +66,16 @@ const makeFake = (config?: {
     close: async () => {
       calls.close += 1;
     },
-    createClient: (_opts: { unitId: number }) => client,
-    setRequestTimeout: (_ms: number) => {},
+    createClient: (opts: { unitId: number }) => config?.clientFor?.(opts.unitId) ?? client,
+    setRequestTimeout: (ms: number) => {
+      calls.requestTimeouts.push(ms);
+    },
     clearRequestTimeout: () => {},
     reconnect: async () => {
       calls.reconnect += 1;
       await sleep(config?.reconnectDelayMs ?? 0);
       if (config?.reconnectFails?.()) throw new Error('reconnect failed');
+      config?.onReconnect?.();
     },
     pendingRequests: false,
   };
@@ -81,9 +91,16 @@ const makeFake = (config?: {
     'AsyncRtuTransport',
     (_constructor, options) => open(options),
     'FakeTransport',
+    {
+      serializeRequests: config?.serializeRequests ?? true,
+    },
   );
 
-  return { calls, openOptions, make: () => make({ label: 'test', ...config?.resilience }) };
+  return {
+    calls,
+    openOptions,
+    make: () => make({ label: 'test', ...config?.openOptions, ...config?.resilience }),
+  };
 };
 
 const run = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
@@ -470,6 +487,320 @@ test('a supervised reconnect that exceeds the connect timeout publishes Down, th
       yield* Effect.sleep('100 millis');
       expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
       expect(fake.calls.reconnect).toBe(1);
+    }),
+  );
+});
+
+/**
+ * A bus fake that acts like 0.16.2: a request timeout leaves the handle open.
+ */
+const makeSilentUnitBus = (silentUnit: number, delays?: ReadonlyMap<number, number>) => {
+  const reads: Array<number> = [];
+  const state = { open: true, reads };
+  const clientFor = (unitId: number): AsyncSerialModbusClient =>
+    makeClient(unusedClientMethod, async () => {
+      await sleep(delays?.get(unitId) ?? 0);
+      if (!state.open) throw new Error('[MODBUS_CONNECTION_CLOSED] Connection closed');
+      reads.push(unitId);
+      if (unitId === silentUnit) {
+        throw new Error('[MODBUS_TIMEOUT] Request timed out');
+      }
+      return new Uint16Array([unitId]);
+    });
+  return {
+    state,
+    clientFor,
+    onReconnect: () => {
+      state.open = true;
+    },
+  };
+};
+
+const supervisedReconnect: TransportResilienceOptions = {
+  reconnect: {
+    triggerOn: ['ModbusConnectionClosedError'],
+    policy: RetryPolicies.none(),
+    resetAfter: '1 minute',
+  },
+};
+
+const oneRegister = { address: 0, quantity: 1 };
+
+test('the response time limit remains an open option instead of replacing the request budget', async () => {
+  const fake = makeFake({ openOptions: { responseTimeoutMs: 250 } });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      yield* api.withClient(1);
+      expect(fake.calls.requestTimeouts).toEqual([]);
+      expect(fake.openOptions).toEqual([{ label: 'test', responseTimeoutMs: 250 }]);
+      yield* api.setRequestTimeout(125);
+      expect(fake.calls.requestTimeouts).toEqual([125]);
+    }),
+  );
+});
+
+test('no request time limit is applied when the open options have none', async () => {
+  const fake = makeFake();
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      yield* api.withClient(1);
+      expect(fake.calls.requestTimeouts).toEqual([]);
+    }),
+  );
+});
+
+test('a timeout of one unit does not fail the next request to another unit', async () => {
+  const bus = makeSilentUnitBus(2);
+  const fake = makeFake({ clientFor: bus.clientFor, onReconnect: bus.onReconnect });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const healthy = yield* api.withClient(1);
+      const silent = yield* api.withClient(2);
+
+      expect(failureTag(yield* Effect.exit(silent.readHoldingRegisters(oneRegister)))).toBe(
+        'ModbusTimeoutError',
+      );
+      expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      expect(fake.calls.reconnect).toBe(0);
+
+      // The handle is open again, so the next read needs no reconnect.
+      expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      expect(fake.calls.reconnect).toBe(0);
+      expect(bus.state.reads).toEqual([2, 1, 1]);
+    }),
+  );
+});
+
+test('a supervised transport keeps the circuit closed after isolated timeouts', async () => {
+  const bus = makeSilentUnitBus(2);
+  const fake = makeFake({
+    clientFor: bus.clientFor,
+    onReconnect: bus.onReconnect,
+    resilience: supervisedReconnect,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const healthy = yield* api.withClient(1);
+      const silent = yield* api.withClient(2);
+
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        expect(failureTag(yield* Effect.exit(silent.readHoldingRegisters(oneRegister)))).toBe(
+          'ModbusTimeoutError',
+        );
+        expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      }
+      expect(SubscriptionRef.getUnsafe(api.connectionState)._tag).toBe('Connected');
+      expect(fake.calls.reconnect).toBe(0);
+    }),
+  );
+});
+
+test('a closed connection after a timeout still starts the reconnect supervisor', async () => {
+  const bus = makeSilentUnitBus(2);
+  const fake = makeFake({
+    clientFor: bus.clientFor,
+    onReconnect: bus.onReconnect,
+    resilience: supervisedReconnect,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const healthy = yield* api.withClient(1);
+      const silent = yield* api.withClient(2);
+
+      const timedOut = yield* Effect.exit(silent.readHoldingRegisters(oneRegister));
+      expect(failureTag(timedOut)).toBe('ModbusTimeoutError');
+      bus.state.open = false;
+      const queued = yield* Effect.exit(healthy.readHoldingRegisters(oneRegister));
+      expect(failureTag(queued)).toBe('ModbusConnectionClosedError');
+      yield* Effect.sleep('20 millis');
+      expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      expect(fake.calls.reconnect).toBe(1);
+    }),
+  );
+});
+
+/** A client that records how many native reads are in flight at the same time. */
+const makeOverlapProbe = (readMs: number) => {
+  const state = { inFlight: 0, maxInFlight: 0, completed: 0 };
+  const client = makeClient(unusedClientMethod, async () => {
+    state.inFlight += 1;
+    state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+    await sleep(readMs);
+    state.inFlight -= 1;
+    state.completed += 1;
+    return new Uint16Array([0]);
+  });
+  return { state, client };
+};
+
+test('with a request time limit, native requests reach the native queue one at a time', async () => {
+  const probe = makeOverlapProbe(10);
+  const fake = makeFake({ client: probe.client, openOptions: { responseTimeoutMs: 250 } });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const clients = yield* Effect.all([1, 2, 3].map((unitId) => api.withClient(unitId)));
+      yield* Effect.all(
+        clients.map((client) => client.readHoldingRegisters(oneRegister)),
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(1);
+      expect(probe.state.completed).toBe(3);
+    }),
+  );
+});
+
+test('serial calls stay serialized when no admission budget is configured', async () => {
+  const probe = makeOverlapProbe(10);
+  const fake = makeFake({ client: probe.client });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const clients = yield* Effect.all([1, 2, 3].map((unitId) => api.withClient(unitId)));
+      yield* Effect.all(
+        clients.map((client) => client.readHoldingRegisters(oneRegister)),
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(1);
+    }),
+  );
+});
+
+test('an interrupted caller keeps the next request out of the native queue until its request ends', async () => {
+  const probe = makeOverlapProbe(40);
+  const fake = makeFake({ client: probe.client, openOptions: { responseTimeoutMs: 250 } });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const client = yield* api.withClient(1);
+      const first = yield* Effect.forkChild(client.readHoldingRegisters(oneRegister));
+      yield* Effect.sleep('10 millis');
+      // Interruption waits for the native request, because it cannot be cancelled.
+      yield* Fiber.interrupt(first);
+      expect(probe.state.completed).toBe(1);
+      yield* client.readHoldingRegisters(oneRegister);
+      expect(probe.state.maxInFlight).toBe(1);
+    }),
+  );
+});
+
+test('a reconnect waits until the native request in flight ends', async () => {
+  const events: Array<string> = [];
+  const client = makeClient(unusedClientMethod, async () => {
+    events.push('read start');
+    await sleep(30);
+    events.push('read end');
+    return new Uint16Array([0]);
+  });
+  const fake = makeFake({
+    client,
+    openOptions: { responseTimeoutMs: 250 },
+    onReconnect: () => events.push('reconnect'),
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const modbus = yield* api.withClient(1);
+      const read = yield* Effect.forkChild(modbus.readHoldingRegisters(oneRegister));
+      yield* Effect.sleep('5 millis');
+      yield* api.reconnect();
+      yield* Fiber.join(read);
+      expect(events).toEqual(['read start', 'read end', 'reconnect']);
+    }),
+  );
+});
+
+test('an interrupted serial attempt reports a closed connection before releasing the lock', async () => {
+  let connected = false;
+  const client = makeClient(unusedClientMethod, async () => {
+    await sleep(30);
+    if (!connected) throw new Error('[MODBUS_CONNECTION_CLOSED] Connection closed');
+    return new Uint16Array([1]);
+  });
+  const fake = makeFake({
+    client,
+    resilience: supervisedReconnect,
+    onReconnect: () => {
+      connected = true;
+    },
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const modbus = yield* api.withClient(1);
+      const first = yield* Effect.forkChild(modbus.readHoldingRegisters(oneRegister));
+      yield* Effect.sleep('5 millis');
+      yield* Fiber.interrupt(first);
+      yield* Effect.sleep('20 millis');
+      expect(fake.calls.reconnect).toBe(1);
+      expect([...(yield* modbus.readHoldingRegisters(oneRegister))]).toEqual([1]);
+    }),
+  );
+});
+
+test('runtime admission-budget changes do not remove the serial drain lock', async () => {
+  const probe = makeOverlapProbe(30);
+  const fake = makeFake({ client: probe.client });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const modbus = yield* api.withClient(1);
+      yield* api.setRequestTimeout(100);
+      yield* api.clearRequestTimeout();
+      yield* Effect.all(
+        [modbus.readHoldingRegisters(oneRegister), modbus.readHoldingRegisters(oneRegister)],
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(1);
+      expect(probe.state.completed).toBe(2);
+    }),
+  );
+});
+
+test('a transport that does not serialize keeps concurrent native requests with a time limit', async () => {
+  const probe = makeOverlapProbe(10);
+  const fake = makeFake({
+    client: probe.client,
+    openOptions: { responseTimeoutMs: 250 },
+    serializeRequests: false,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const clients = yield* Effect.all([1, 2, 3].map((unitId) => api.withClient(unitId)));
+      yield* Effect.all(
+        clients.map((client) => client.readHoldingRegisters(oneRegister)),
+        { concurrency: 'unbounded' },
+      );
+      expect(probe.state.maxInFlight).toBe(3);
+      expect(fake.calls.requestTimeouts).toEqual([]);
+    }),
+  );
+});
+
+test('a transport that does not serialize keeps healthy units usable after a timeout', async () => {
+  const bus = makeSilentUnitBus(2);
+  const fake = makeFake({
+    clientFor: bus.clientFor,
+    onReconnect: bus.onReconnect,
+    openOptions: { responseTimeoutMs: 250 },
+    serializeRequests: false,
+  });
+  await run(
+    Effect.gen(function* () {
+      const api = yield* fake.make();
+      const healthy = yield* api.withClient(1);
+      const silent = yield* api.withClient(2);
+      expect(failureTag(yield* Effect.exit(silent.readHoldingRegisters(oneRegister)))).toBe(
+        'ModbusTimeoutError',
+      );
+      expect([...(yield* healthy.readHoldingRegisters(oneRegister))]).toEqual([1]);
+      expect(fake.calls.reconnect).toBe(0);
     }),
   );
 });

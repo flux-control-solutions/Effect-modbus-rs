@@ -5,7 +5,7 @@
     "": {
       "name": "@flux-control/effect-modbus-rs",
       "dependencies": {
-        "modbus-rs": "0.16.1",
+        "modbus-rs": "0.16.3",
       },
       "devDependencies": {
         "@changesets/cli": "^2.31.1",
@@ -302,19 +302,19 @@
 
     "micromatch": ["micromatch@4.0.8", "", { "dependencies": { "braces": "^3.0.3", "picomatch": "^2.3.1" } }, "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA=="],
 
-    "modbus-rs": ["modbus-rs@0.16.1", "", { "optionalDependencies": { "modbus-rs-darwin-arm64": "0.16.1", "modbus-rs-darwin-x64": "0.16.1", "modbus-rs-linux-arm64-gnu": "0.16.1", "modbus-rs-linux-x64-gnu": "0.16.1", "modbus-rs-wasm": "0.16.1", "modbus-rs-win32-x64-msvc": "0.16.0" } }, "sha512-4B0EPoAQCeLoj/0PKRrM0v9j9x7TmnPf2LfNUrvRblDxV4O1XzCIPm+ALEOeNJHei+iiAePLtjITnQOEgLVQ2w=="],
+    "modbus-rs": ["modbus-rs@0.16.3", "", { "optionalDependencies": { "modbus-rs-darwin-arm64": "0.16.3", "modbus-rs-darwin-x64": "0.16.3", "modbus-rs-linux-arm64-gnu": "0.16.3", "modbus-rs-linux-x64-gnu": "0.16.3", "modbus-rs-wasm": "0.16.3", "modbus-rs-win32-x64-msvc": "0.16.3" } }, "sha512-4wJ9wwB+yOLwmMsBoC+7kliURknDJ4LbOhnnBjljm7bVHZqEJ6blMRXNlXLPh3LYUB5mXN5KYEJHZx7YFZO6nw=="],
 
-    "modbus-rs-darwin-arm64": ["modbus-rs-darwin-arm64@0.16.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-HUNZxk4gfmIvl3qtuizhHpSvAG43f42Mpnjw7OLmffNnpH7QkYA2J9EFEhI8LhlaeUE33uboByY61W/1rDSEaA=="],
+    "modbus-rs-darwin-arm64": ["modbus-rs-darwin-arm64@0.16.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-kKdvpkQBXQpYTH3ILYNjhObYM9gnlVpfaaJRG8TnnQ4wGCh5bJ1yhy52KQtefF9g/bqGvPQZZEWxtKhBIL3/mA=="],
 
-    "modbus-rs-darwin-x64": ["modbus-rs-darwin-x64@0.16.1", "", { "os": "darwin", "cpu": "x64" }, "sha512-3LZwt2GSNQQ7qMPc4zl1f9r5Lt3yJZi8NaAVvcBCASv6fJqZWS8w/VVHsHix1TMl0UCfpVXrvm5vrZU1JKuo5A=="],
+    "modbus-rs-darwin-x64": ["modbus-rs-darwin-x64@0.16.3", "", { "os": "darwin", "cpu": "x64" }, "sha512-SFM8VIDmgsKbWyf9wAxjCmoANpDh/z04ir9ZcNTNHaHDge+wPzFr96QtucDx4nTcExIlsYB2fl4gsxAdLoA/nw=="],
 
-    "modbus-rs-linux-arm64-gnu": ["modbus-rs-linux-arm64-gnu@0.16.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-F2tg71/yQeNQ0ssglkt1q6LjTe4jQwL8jL9o08bYeNWoOhjlCiXrPK1rchMGpkkNVbu1KNs/jn6Mw8ZZLMpUNA=="],
+    "modbus-rs-linux-arm64-gnu": ["modbus-rs-linux-arm64-gnu@0.16.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-rmZeosgm1RF3l28cWtING/8DpXj3bnoFPqNPf0uiQ0Qn/GD2YohFauZcLCJ8CTbhHJGgfJUJHp3ldIVezwPcGg=="],
 
-    "modbus-rs-linux-x64-gnu": ["modbus-rs-linux-x64-gnu@0.16.1", "", { "os": "linux", "cpu": "x64" }, "sha512-ZGwpLQf8SUPLOhGIhVx7mGD2brBGjlQ7oejzCcEw06wrGE5TvCEVVrfesBoUt3qrg3YJrFS3CirSV420WR1npA=="],
+    "modbus-rs-linux-x64-gnu": ["modbus-rs-linux-x64-gnu@0.16.3", "", { "os": "linux", "cpu": "x64" }, "sha512-9MMlLq+bMX10hvVlR7PT+sSIe3pCPDyTTviT738G/tMi/d71T6jyabJy5qOurl1kjgULKFdEWX8WdVkF1TAeNg=="],
 
-    "modbus-rs-wasm": ["modbus-rs-wasm@0.16.1", "", {}, "sha512-TSiFHg61o3c7u8My7gGMA4bm8tJfI4jZt95SXsZvr8iTs2+FjVCAlIbMMyxp1rMc+lK37kivJG9bzI6E9PftLw=="],
+    "modbus-rs-wasm": ["modbus-rs-wasm@0.16.3", "", {}, "sha512-PjJG4SSu+bgj2K+PXGjfSdNlOpQp6diW4fatfQp1EYgnV9XYKJ9ukG5JXLtWgAQ6MuyRHSQO9+QTauSO2UPIwg=="],
 
-    "modbus-rs-win32-x64-msvc": ["modbus-rs-win32-x64-msvc@0.16.0", "", { "os": "win32", "cpu": "x64" }, "sha512-FnvS9Gu6ogvMFlqclyZenXlskai8OmoYq8krSoGwyCv/jtA9zpKKKwEH0JUGNSyMc/p5MHVCpjPyodNfz7fstA=="],
+    "modbus-rs-win32-x64-msvc": ["modbus-rs-win32-x64-msvc@0.16.3", "", { "os": "win32", "cpu": "x64" }, "sha512-7W2w8SYFCuteiPyBvBRuv7Ms4Nx0NH6jX7kBp+sE01DvsL8gWc/UFB8gGFRmoUQN0iKjKucaVWQ2lGu8H0Z+2A=="],
 
     "mri": ["mri@1.2.0", "", {}, "sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA=="],
 

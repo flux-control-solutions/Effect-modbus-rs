@@ -49,7 +49,10 @@ export class TcpTransportService extends Context.Service<
     'AsyncTcpTransport',
     (transportConstructor, options: TcpTransportOpenOptions) => {
       // SAFETY: The constructor is read from the AsyncTcpTransport export named above.
-      return (transportConstructor as typeof AsyncTcpTransport).connect(options);
+      return (transportConstructor as typeof AsyncTcpTransport).connect({
+        ...options,
+        responseTimeoutMs: options.responseTimeoutMs ?? options.requestTimeoutMs,
+      });
     },
     'TcpTransportService',
   );
