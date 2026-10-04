@@ -17,7 +17,7 @@ bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.118
 ```
 
 The current package requires Effect `^4.0.0-rc.118` as a peer dependency.
-It depends on `modbus-rs@0.16.2`.
+It depends on `modbus-rs@0.16.3`.
 The published package exports JavaScript and TypeScript declarations from `dist/`.
 
 ## Quick start
@@ -460,7 +460,7 @@ Later use cannot reopen that closed transport.
 
 ### Native request limits
 
-The native services use `modbus-rs` 0.16.2.
+The native services use `modbus-rs` 0.16.3.
 `responseTimeoutMs` limits a device response. `requestTimeoutMs` limits admission to the native queue.
 If `responseTimeoutMs` is absent, the services use `requestTimeoutMs` as its fallback.
 The native default response limit is 1000 ms.
@@ -474,8 +474,9 @@ If a serial call has no response limit, interruption closes its handle instead o
 Later operations open a new handle and preserve explicit runtime limit settings.
 An interrupted caller that is still waiting for the lock sends no request.
 
-A raw native serial `AbortSignal` can leave a late reply for the next unit in 0.16.2.
-Use Effect fiber interruption for serial cancellation while that binding behavior remains unresolved.
+The 0.16.3 binding drains a cancelled serial response before it sends the next request.
+This fixes the follow-up checksum error reproduced with a raw native `AbortSignal` in 0.16.2.
+Use Effect fiber interruption to cancel service operations.
 TCP requests remain concurrent. The WASM service code does not change.
 
 Serial paths can contain up to 128 characters in this binding version.

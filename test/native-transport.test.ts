@@ -75,6 +75,38 @@ const readOne = { address: 0, quantity: 1 };
 const serialTest = test.skipIf(Bun.which('socat') === null);
 
 serialTest(
+  'a raw native abort drains its reply before a healthy unit read',
+  async () => {
+    const device = await bus(100);
+    const { AsyncRtuTransport } = await import('modbus-rs');
+    const transport = await AsyncRtuTransport.open({
+      portPath: device.path,
+      baudRate: 115200,
+      responseTimeoutMs: 300,
+    });
+    closers.push(() => transport.close());
+    transport.setRequestTimeout(300);
+    const first = transport.createClient({ unitId: 1 });
+    const next = transport.createClient({ unitId: 3 });
+    expect([...(await first.readHoldingRegisters(readOne))]).toEqual([1]);
+
+    const controller = new AbortController();
+    const before = device.requests.length;
+    const cancelled = first.readHoldingRegisters({ ...readOne, signal: controller.signal }).then(
+      () => 'completed',
+      (error: Error) => error.message,
+    );
+    // Synchronize the abort with wire transmission so the late reply is still pending.
+    while (device.requests.length === before) await Bun.sleep(1);
+    await Bun.sleep(20);
+    controller.abort();
+    expect(await cancelled).toContain('aborted');
+    expect([...(await next.readHoldingRegisters(readOne))]).toEqual([3]);
+  },
+  5000,
+);
+
+serialTest(
   'a cleared native time limit cannot prevent interruption and scope close',
   async () => {
     const device = await bus();

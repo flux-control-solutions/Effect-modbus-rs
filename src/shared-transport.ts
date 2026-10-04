@@ -414,7 +414,7 @@ export function createTransportScoped<
     const nativeLock = config?.serializeRequests ? yield* Semaphore.make(1) : undefined;
     let nativeLimit: number | undefined = config?.responseTimeoutMs?.(options) ?? 1000;
     let requestLimitOverride: number | null | undefined;
-    // Native serial aborts can leave a late response for the next request in 0.16.2.
+    // Effect interruption must retain serial ownership until the native response drains.
     // Drain bounded calls before interruption. Unbounded calls keep their permit in shared work.
     const aroundNative: NativeCallWrapper | undefined =
       nativeLock === undefined
