@@ -14,7 +14,9 @@ export const MAX_SERIAL_PORT_PATH = 128;
  * @param portPath - The configured serial port path.
  * @returns The configured path, or the target of a long path.
  * @throws An error with the `MODBUS_INVALID_ARGUMENT` code when the path and
- *   its target are both too long.
+ *   its target are both too long. The same error occurs when a long link has
+ *   no target, for example while its device is unplugged. Retry policies do
+ *   not retry this error. A later open succeeds after the device returns.
  */
 export const resolveSerialPortPath = async (portPath: string): Promise<string> => {
   if (portPath.length <= MAX_SERIAL_PORT_PATH) return portPath;
