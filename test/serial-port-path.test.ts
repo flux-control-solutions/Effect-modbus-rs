@@ -21,7 +21,7 @@ import {
   serialPortPathScoped,
 } from '../src/serial-port-path';
 
-const root = mkdtempSync(join(tmpdir(), 'serial-path-'));
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'serial-path-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 /** Makes a path of the given length below `dir`. */
