@@ -13,10 +13,10 @@ The API can change before version 1.0.
 ## Install
 
 ```sh
-bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.118
+bun add @flux-control/effect-modbus-rs effect@^4.0.3
 ```
 
-The current package requires Effect `^4.0.0-rc.118` as a peer dependency.
+The current package requires Effect `^4.0.3` as a peer dependency.
 It depends on `modbus-rs@0.16.3`.
 The published package exports JavaScript and TypeScript declarations from `dist/`.
 
