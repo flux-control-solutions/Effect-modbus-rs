@@ -13,18 +13,18 @@ The API can change before version 1.0.
 ## Install
 
 ```sh
-bun add @flux-control/effect-modbus-rs effect@4.0.0-rc.118
+bun add @flux-control/effect-modbus-rs effect@^4.0.3
 ```
 
-The current package requires Effect `^4.0.0-rc.118` as a peer dependency.
+The current package requires Effect `^4.0.3` as a peer dependency.
 It depends on `modbus-rs@0.16.3`.
 The published package exports JavaScript and TypeScript declarations from `dist/`.
 
 ## Quick start
 
 ```ts
-import { Console, Effect } from 'effect';
 import { TcpTransportService } from '@flux-control/effect-modbus-rs';
+import { Console, Effect } from 'effect';
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
@@ -66,8 +66,8 @@ For native serial connections, provide `RtuTransportService.make` or `AsciiTrans
 Its `fromRtu(options)` and `fromAscii(options)` methods provide that tag.
 
 ```ts
-import { Console, Effect } from 'effect';
 import { SerialTransportService } from '@flux-control/effect-modbus-rs';
+import { Console, Effect } from 'effect';
 
 const program = Effect.gen(function* () {
   const transport = yield* SerialTransportService;
@@ -95,8 +95,8 @@ It does not call the browser permission API synchronously in the handler.
 Permission behavior depends on browser support and transient user activation.
 
 ```ts
-import { Console, Effect } from 'effect';
 import { requestSerialPort, WasmRtuTransportService } from '@flux-control/effect-modbus-rs';
+import { Console, Effect } from 'effect';
 
 const connectButton = document.querySelector<HTMLButtonElement>('#connect');
 
@@ -157,8 +157,8 @@ Use `withBatchingClient` to collect register operations, plan contiguous transac
 Batching does not cover coils, diagnostics, or file records.
 
 ```ts
-import { Console, Effect } from 'effect';
 import { TcpTransportService } from '@flux-control/effect-modbus-rs';
+import { Console, Effect } from 'effect';
 
 const program = Effect.gen(function* () {
   const transport = yield* TcpTransportService;
@@ -519,8 +519,8 @@ Options include the transport's connection settings, resilience settings, and mo
 The abstract serial tags accept either framing's connection settings.
 
 ```ts
-import { Console, Effect } from 'effect';
 import { TcpTransportService } from '@flux-control/effect-modbus-rs';
+import { Console, Effect } from 'effect';
 
 const layer = TcpTransportService.makeMockTransport([
   {

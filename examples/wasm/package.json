@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@flux-control/effect-modbus-rs": "file:../..",
-    "effect": "^4.0.0-rc.118",
+    "effect": "^4.0.3",
     "modbus-rs": "0.16.1"
   },
   "devDependencies": {
