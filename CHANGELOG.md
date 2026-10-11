@@ -1,5 +1,11 @@
 # @flux-control/effect-modbus-rs
 
+## 0.9.0
+
+### Minor Changes
+
+- 3d5e488: Move to `effect` 4.0.3. The `effect` peer dependency is now `^4.0.3`. The `effect` 4.0.0 release candidates are no longer supported.
+
 ## 0.8.1
 
 ### Patch Changes
