@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: status
-        uses: changesets/action/pr-status@v1.9.0
+        uses: changesets/action/pr-status@v2.1.2
 
   comment:
     needs: status
@@ -28,6 +28,6 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - uses: changesets/action/pr-comment@v1.9.0
+      - uses: changesets/action/pr-comment@v2.1.2
         with:
           body: ${{ needs.status.outputs.comment-body }}
