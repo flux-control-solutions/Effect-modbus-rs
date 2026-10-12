@@ -47,7 +47,7 @@
     "@effect/language-service": "0.87.4",
     "@effect/platform-bun": "4.0.3",
     "@oxlint/plugins": "1.87.0",
-    "@types/bun": "latest",
+    "@types/bun": "^1.4.3",
     "effect": "4.0.3",
     "fallow": "^3.33.1",
     "husky": "^9.1.7",
