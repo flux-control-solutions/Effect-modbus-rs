@@ -661,6 +661,12 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
   // Units with coil batching, declared or under construction.
   const coilUnits = new Set<number>();
   let shared: { readonly registers: RegisterCache; readonly coils: CoilCache } | undefined;
+  // Caches a caller supplied, with the unit each one serves on this transport.
+  const supplied = new Set<{
+    readonly cache: RegisterCache | CoilCache;
+    readonly unitId: number;
+  }>();
+  let watchingLink = false;
   let closed = false;
   let watchingScope = false;
 
@@ -698,29 +704,57 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
    */
   const sharedCaches = Effect.fnUntraced(function* () {
     if (shared) return shared;
-    const caches = { registers: createRegisterCache(), coils: createCoilCache() };
-    shared = caches;
-    yield* Effect.forkIn(
-      Stream.runForEach(SubscriptionRef.changes(deps.connectionState), (state) =>
-        Effect.sync(() => {
-          if (ConnectionState.$is('Connected')(state)) return;
-          caches.registers.invalidate();
-          caches.coils.invalidate();
-        }),
+    shared = { registers: createRegisterCache(), coils: createCoilCache() };
+    yield* watchLink;
+    return shared;
+  });
+
+  /**
+   * Starts the fiber that invalidates every cache on this transport when the
+   * link leaves `Connected`. A supplied cache can also serve other transports,
+   * so the watcher invalidates only the units it serves here.
+   */
+  const watchLink = Effect.suspend(() => {
+    if (watchingLink) return Effect.void;
+    watchingLink = true;
+    return Effect.asVoid(
+      Effect.forkIn(
+        Stream.runForEach(SubscriptionRef.changes(deps.connectionState), (state) =>
+          Effect.sync(() => {
+            if (ConnectionState.$is('Connected')(state)) return;
+            shared?.registers.invalidate();
+            shared?.coils.invalidate();
+            for (const entry of supplied) entry.cache.invalidate(entry.unitId);
+          }),
+        ),
+        clientScope,
       ),
-      clientScope,
     );
-    return caches;
+  });
+
+  /** Registers a supplied cache with the link watcher, and returns it. */
+  const watchSupplied = Effect.fnUntraced(function* <C extends RegisterCache | CoilCache>(
+    cache: C,
+    unitId: number,
+  ) {
+    supplied.add({ cache, unitId });
+    yield* watchLink;
+    return cache;
   });
 
   /** Resolves the coil settings of a declaration, or `undefined` without coil batching. */
-  const resolveCoils = Effect.fnUntraced(function* (coils: BatchingClientOptions['coils']) {
+  const resolveCoils = Effect.fnUntraced(function* (
+    unitId: number,
+    coils: BatchingClientOptions['coils'],
+  ) {
     if (coils === undefined || coils === false) return undefined;
     const settings = coils === true ? {} : coils;
     if (settings.cache === false) return { cache: undefined, plan: settings.plan };
-    const injected =
-      settings.cache === undefined || settings.cache === true ? undefined : settings.cache;
-    return { cache: injected ?? (yield* sharedCaches()).coils, plan: settings.plan };
+    const cache =
+      settings.cache === undefined || settings.cache === true
+        ? (yield* sharedCaches()).coils
+        : yield* watchSupplied(settings.cache, unitId);
+    return { cache, plan: settings.plan };
   });
 
   const writeLockFor = (unitId: number) => {
@@ -819,8 +853,13 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
             Effect.gen(function* () {
               const raw = yield* deps.withClient(unitId, { retry: options?.retry });
               let cache: RegisterCache | undefined;
-              if (options?.cache !== false) cache = injected ?? (yield* sharedCaches()).registers;
-              const coils = yield* resolveCoils(options?.coils);
+              if (options?.cache !== false) {
+                cache =
+                  injected === undefined
+                    ? (yield* sharedCaches()).registers
+                    : yield* watchSupplied(injected, unitId);
+              }
+              const coils = yield* resolveCoils(unitId, options?.coils);
 
               // Bound to the transport's scope, not the caller's: the client is
               // shared by every caller on this unit, so no one may end it.

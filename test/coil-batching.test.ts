@@ -211,8 +211,39 @@ test('a gap the cache does not know is read back before the FC15 write', async (
 
   expect(states).toEqual([true, true, true, true]);
   const writes = attributesOf(capture.spans, 'modbus.write');
-  expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
+  // One FC15 write and one FC01 gap read. The write covers all four coils.
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(2);
   expect(writes[0]!.get('modbus.gap_read_count')).toBe(1);
+  expect(writes[0]!.get('modbus.coil_count')).toBe(4);
+});
+
+test('gap reads stay within the coil read limit', async () => {
+  const capture = makeSpanCapture();
+
+  const states = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        coils: {
+          cache: false,
+          plan: { writes: { maxGap: 3 }, reads: { maxCoilsPerRead: 2 } },
+        },
+      });
+      // Coil 2 is ON on the device. The write must not turn it OFF.
+      yield* batched.coils!.writeAllNow([
+        { address: 0, value: true },
+        { address: 4, value: true },
+      ]);
+      return yield* rawCoils(0, 5);
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  expect(states).toEqual([true, false, true, false, true]);
+  // The gaps 1 to 3 need two reads of at most two coils each.
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes[0]!.get('modbus.gap_read_count')).toBe(2);
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(3);
+  expect(writes[0]!.get('modbus.coil_count')).toBe(5);
 });
 
 test('the filtered coil plan keeps a run whole when the cache knows the gaps', async () => {

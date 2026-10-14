@@ -13,6 +13,7 @@ import {
 } from 'effect';
 
 import { createBatchingRegistry, makeBatchingClient } from '../src/batching-client';
+import { createCoilCache } from '../src/coil-cache';
 import { ConnectionState } from '../src/connection';
 import {
   ModbusConnectionClosedError,
@@ -1335,4 +1336,36 @@ test('flagged writes to the same address count as one register', async () => {
   expect(writes[0]!.get('modbus.register_count')).toBe(1);
   expect(writes[0]!.get('modbus.suppressed_count')).toBe(1);
   expect(writes[0]!.get('modbus.bypassed_count')).toBe(0);
+});
+
+test('a lost link invalidates supplied register and coil caches', async () => {
+  const sizes = await run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transport = yield* RtuTransportService;
+        const raw = yield* transport.withClient(3);
+        const connectionState = yield* SubscriptionRef.make<ConnectionState>(
+          ConnectionState.Connected(),
+        );
+        const registry = createBatchingRegistry({
+          withClient: () => Effect.succeed(raw),
+          connectionState,
+          scope: yield* Effect.scope,
+        });
+        const registers = createRegisterCache();
+        const coils = createCoilCache();
+        yield* registry.withBatchingClient(3, { cache: registers, coils: { cache: coils } });
+        registers.observe(3, 0, 1);
+        coils.observe(3, 0, true);
+        // A cache can also serve another transport. Its other units stay.
+        registers.observe(9, 0, 1);
+
+        yield* SubscriptionRef.set(connectionState, ConnectionState.Disconnected());
+        yield* Effect.sleep('10 millis');
+        return { registers: registers.size, coils: coils.size };
+      }),
+    ),
+  );
+
+  expect(sizes).toEqual({ registers: 1, coils: 0 });
 });

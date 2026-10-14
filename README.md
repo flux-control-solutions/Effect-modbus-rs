@@ -326,6 +326,7 @@ Cache comparisons use encoded unsigned 16-bit values.
 For example, `-1` and `65535` have the same wire encoding.
 After an issued write fails, the unit's cached values are invalidated.
 When the connection state leaves `Connected`, all cached writes are invalidated.
+This includes a register or coil cache that the caller supplies, for the units it serves on that transport.
 An invalidation during an in-flight write prevents a later acknowledgement from restoring stale cache entries.
 
 The client compares filtered and unfiltered write plans.
@@ -369,16 +370,16 @@ Batching reads and writes use `modbus.read` and `modbus.write` spans.
 Write spans are created after cache filtering and only when the chosen plan contains writes.
 The span describes the selected plan; failed execution can leave some transactions unissued.
 
-| Attribute                  | Meaning                                             |
-| -------------------------- | --------------------------------------------------- |
-| `modbus.unit_ids`          | Unit ID addressed by the batch.                     |
-| `modbus.register_count`    | Registers in the selected write plan or read spans. |
-| `modbus.coil_count`        | Coils in the selected coil plan or read spans.      |
-| `modbus.table`             | `coils` for coil spans. Register spans omit it.     |
-| `modbus.gap_read_count`    | FC01 reads that fill gap coils in a coil plan.      |
-| `modbus.suppressed_count`  | Proposed writes excluded from the selected plan.    |
-| `modbus.bypassed_count`    | Flagged writes sent although the cache held them.   |
-| `modbus.transaction_count` | Transactions in the selected plan.                  |
+| Attribute                  | Meaning                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `modbus.unit_ids`          | Unit ID addressed by the batch.                        |
+| `modbus.register_count`    | Registers in the selected write plan or read spans.    |
+| `modbus.coil_count`        | Coils in the selected coil plan, gap coils included.   |
+| `modbus.table`             | `coils` for coil spans. Register spans omit it.        |
+| `modbus.gap_read_count`    | FC01 reads that fill gap coils in a coil plan.         |
+| `modbus.suppressed_count`  | Proposed writes excluded from the selected plan.       |
+| `modbus.bypassed_count`    | Flagged writes sent although the cache held them.      |
+| `modbus.transaction_count` | Transactions in the selected plan, gap reads included. |
 
 Write methods accept caller span attributes as their second argument.
 Only attributes from the entries in the chosen write plan contribute.

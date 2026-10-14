@@ -132,45 +132,70 @@ export const createCoilClient = (options: {
   Effect.gen(function* () {
     const { unitId, client, cache } = options;
 
-    /** Gap coils of a step that the cache does not know. */
-    const unknownGaps = (step: MultipleCoilWriteStep) =>
-      step.values.flatMap((value, offset) =>
-        value === undefined && cache?.valueOf(unitId, step.address + offset) === undefined
-          ? [offset]
-          : [],
+    /**
+     * Plans the FC01 reads for the gap coils whose states are not in `known`.
+     *
+     * The reads use the coil read limit. They can cover known coils between two
+     * unknown gaps, because the FC15 step writes every coil in its span.
+     *
+     * @throws RangeError - The read limit is out of range.
+     */
+    const planGapReads = (step: MultipleCoilWriteStep, known: ReadonlyArray<boolean | undefined>) =>
+      planCoilReads(
+        known.flatMap((value, offset) => (value === undefined ? [step.address + offset] : [])),
+        { maxCoilsPerRead: options.plan?.reads?.maxCoilsPerRead, maxGap: known.length },
       );
 
-    /** Transactions a plan costs, with one FC01 read for each step with unknown gaps. */
+    /** The states a step already has, from its own values and from the cache. */
+    const knownStates = (step: MultipleCoilWriteStep) =>
+      step.values.map((value, offset) => value ?? cache?.valueOf(unitId, step.address + offset));
+
+    /** FC01 reads that the gaps of a plan need. */
+    const gapReadsOf = (steps: ReadonlyArray<CoilWritePlanStep>) =>
+      steps.reduce(
+        (total, step) =>
+          step.kind === 'multiple'
+            ? total + planGapReads(step, knownStates(step)).spans.length
+            : total,
+        0,
+      );
+
+    /** Transactions a plan costs, gap reads included. */
     const costOf = (steps: ReadonlyArray<CoilWritePlanStep>) => steps.length + gapReadsOf(steps);
 
-    const gapReadsOf = (steps: ReadonlyArray<CoilWritePlanStep>) =>
-      steps.filter((step) => step.kind === 'multiple' && unknownGaps(step).length > 0).length;
+    /** Coils a plan writes, gap coils included. */
+    const coilsOf = (steps: ReadonlyArray<CoilWritePlanStep>) =>
+      steps.reduce((total, step) => total + (step.kind === 'single' ? 1 : step.values.length), 0);
 
     /**
      * Fills the gaps of an FC15 span with the states the coils hold.
      *
-     * The cache answers first. One FC01 read covers the gaps it does not know.
-     * The cache answers are taken before the read, because an invalidation
-     * during the read must not leave a gap without a state.
+     * The cache answers first. FC01 reads cover the gaps it does not know, and
+     * each read stays within the coil read limit. The cache answers are taken
+     * before the reads, because an invalidation during a read must not leave a
+     * gap without a state.
      */
     const fillGaps = (step: MultipleCoilWriteStep) =>
       Effect.gen(function* () {
-        const known = step.values.map(
-          (value, offset) => value ?? cache?.valueOf(unitId, step.address + offset),
+        const known = knownStates(step);
+        const plan = yield* Effect.try({
+          try: () => planGapReads(step, known),
+          catch: invalidArgument,
+        });
+        const reads = yield* Effect.forEach(plan.spans, (span) =>
+          Effect.flatMap(client.readCoils(span), (read) => {
+            if (read.length === span.quantity) return Effect.succeed(read);
+            const message =
+              `Expected ${span.quantity} coil(s) at address ${span.address}, ` +
+              `received ${read.length}`;
+            return Effect.fail(new ModbusTransportError({ cause: new Error(message), message }));
+          }),
         );
-        const unknown = known.flatMap((value, offset) => (value === undefined ? [offset] : []));
-        if (unknown.length === 0) return known.map((value) => value === true);
-
-        const first = unknown[0]!;
-        const quantity = unknown[unknown.length - 1]! - first + 1;
-        const read = yield* client.readCoils({ address: step.address + first, quantity });
-        if (read.length !== quantity) {
-          const message =
-            `Expected ${quantity} coil(s) at address ${step.address + first}, ` +
-            `received ${read.length}`;
-          return yield* new ModbusTransportError({ cause: new Error(message), message });
-        }
-        return known.map((value, offset) => value ?? read[offset - first] === 1);
+        return known.map((value, offset) => {
+          if (value !== undefined) return value;
+          const location = plan.locate(step.address + offset)!;
+          return reads[location.span]![location.offset] === 1;
+        });
       });
 
     /** Issues one step and records each coil it wrote. */
@@ -227,16 +252,23 @@ export const createCoilClient = (options: {
               cache === undefined ? 0 : forced.length - cache.filter(unitId, forced).pending.length;
             if (pending.length === 0) return undefined;
             const steps = planCoilWrites(pending, options.plan?.writes);
-            if (pending.length === proposed.length) return { steps, written: proposed, bypassed };
-            const whole = planCoilWrites(proposed, options.plan?.writes);
-            return costOf(whole) < costOf(steps)
-              ? { steps: whole, written: proposed, bypassed }
-              : { steps, written: pending, bypassed };
+            const chosen =
+              pending.length === proposed.length
+                ? { steps, written: proposed }
+                : (() => {
+                    const whole = planCoilWrites(proposed, options.plan?.writes);
+                    return costOf(whole) < costOf(steps)
+                      ? { steps: whole, written: proposed }
+                      : { steps, written: pending };
+                  })();
+            // Count the gap reads here, so a bad read limit fails the batch
+            // before a step is issued.
+            return { ...chosen, bypassed, gapReads: gapReadsOf(chosen.steps) };
           },
           catch: invalidArgument,
         });
         if (selected === undefined) return;
-        const { steps, written, bypassed } = selected;
+        const { steps, written, bypassed, gapReads } = selected;
         const carried = new Set(written.map((write) => write.address));
 
         yield* Effect.forEach(steps, issueStep, { discard: true }).pipe(
@@ -251,9 +283,10 @@ export const createCoilClient = (options: {
               ),
               'modbus.unit_ids': String(unitId),
               'modbus.table': 'coils',
-              'modbus.coil_count': written.length,
-              'modbus.transaction_count': steps.length,
-              'modbus.gap_read_count': gapReadsOf(steps),
+              // FC15 writes every coil in its span, so gap coils count too.
+              'modbus.coil_count': coilsOf(steps),
+              'modbus.transaction_count': steps.length + gapReads,
+              'modbus.gap_read_count': gapReads,
               'modbus.suppressed_count': proposed.length - written.length,
               'modbus.bypassed_count': bypassed,
             },
