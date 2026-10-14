@@ -5,10 +5,14 @@
  * @module
  */
 
-import { Clock, Deferred, Duration, Effect, Fiber, type Scope, Semaphore } from 'effect';
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, type Scope, Semaphore } from 'effect';
 
 import { ModbusInvalidArgumentError, ModbusNotConnectedError, type ModbusError } from './errors';
-import { encodeRegisterValue, type RegisterWrite } from './register-plan';
+import {
+  encodeRegisterValue,
+  MODBUS_MAX_WRITE_REGISTERS,
+  type RegisterWrite,
+} from './register-plan';
 import type { ModbusSpanAttributes } from './span-attributes';
 
 /** One write in a flushed batch, with the attributes of the caller that issued it. */
@@ -64,6 +68,26 @@ export interface WriteDebouncerOptions {
    * @defaultValue four times `window`
    */
   readonly maxHold?: Duration.Input;
+  /**
+   * Flushes a run of contiguous addresses early when it reaches
+   * `maxRegistersPerWrite`.
+   *
+   * A full run cannot gain more registers in its transaction, so more waiting
+   * only adds delay. Only complete runs leave the batch. The debouncer counts
+   * held addresses. It does not know which writes a cache removes later. Other held writes stay
+   * for the window, so repeated writes to them can still replace each other.
+   *
+   * @defaultValue false
+   */
+  readonly flushFullRuns?: boolean;
+  /**
+   * Registers one write transaction can carry. A run with this many contiguous
+   * addresses is full. Use the same value as the planner. The planner rejects
+   * a value out of range when the batch is flushed.
+   *
+   * @defaultValue {@link MODBUS_MAX_WRITE_REGISTERS} (123)
+   */
+  readonly maxRegistersPerWrite?: number;
   /**
    * Issues one batch.
    *
@@ -137,12 +161,26 @@ export interface WriteDebouncer {
   readonly pending: number;
 }
 
+/**
+ * One caller that waits on its writes.
+ *
+ * A partial flush can send some of a group and hold the rest. The caller
+ * completes after every entry that holds it is flushed, or at the first failure.
+ */
+interface Waiter {
+  readonly deferred: Deferred.Deferred<void, ModbusError>;
+  /** Held entries that list this waiter. A duplicate address counts each time. */
+  remaining: number;
+}
+
 /** One address held in the batch, with every caller waiting on it. */
 interface HeldWrite {
   readonly write: RegisterWrite;
   readonly attributes: ModbusSpanAttributes | undefined;
   readonly bypassCache: boolean;
-  readonly waiters: ReadonlyArray<Deferred.Deferred<void, ModbusError>>;
+  /** When the first write to this address in the batch arrived. */
+  readonly arrivedAtMs: number;
+  readonly waiters: ReadonlyArray<Waiter>;
 }
 
 /**
@@ -156,15 +194,50 @@ interface HeldWrite {
 const supersede = (
   superseded: HeldWrite | undefined,
   next: Omit<HeldWrite, 'waiters'>,
-  waiter: Deferred.Deferred<void, ModbusError>,
-): HeldWrite =>
-  superseded === undefined
+  waiter: Waiter,
+): HeldWrite => {
+  waiter.remaining += 1;
+  return superseded === undefined
     ? { ...next, waiters: [waiter] }
     : {
         ...next,
         bypassCache: next.bypassCache || superseded.bypassCache,
+        // The hold limit applies from the first arrival, not the newest one.
+        arrivedAtMs: superseded.arrivedAtMs,
         waiters: [...superseded.waiters, waiter],
       };
+};
+
+/**
+ * Tells whether the held run that contains `address` has `limit` addresses.
+ *
+ * The scan stops at `limit`, so one arrival costs at most `limit` lookups.
+ */
+const completesRun = (held: ReadonlyMap<number, unknown>, address: number, limit: number) => {
+  let length = 1;
+  for (let below = address - 1; length < limit && held.has(below); below -= 1) length += 1;
+  for (let above = address + 1; length < limit && held.has(above); above += 1) length += 1;
+  return length >= limit;
+};
+
+/**
+ * Selects the addresses of each held run that fill complete transactions.
+ *
+ * The planner splits a run from its lowest address. These are the addresses of
+ * the full chunks, so the remainder stays held and can still grow.
+ */
+const fullRunAddresses = (addresses: Iterable<number>, limit: number): ReadonlyArray<number> => {
+  const sorted = Array.from(addresses).sort((left, right) => left - right);
+  const selected: number[] = [];
+  let start = 0;
+  for (let index = 1; index <= sorted.length; index += 1) {
+    if (index < sorted.length && sorted[index] === sorted[index - 1]! + 1) continue;
+    const full = Math.floor((index - start) / limit) * limit;
+    selected.push(...sorted.slice(start, start + full));
+    start = index;
+  }
+  return selected;
+};
 
 /** Identity of one scheduled window, used to reject a stale timer callback. */
 interface TimerState {
@@ -202,6 +275,8 @@ export const createWriteDebouncer = (
 ): Effect.Effect<WriteDebouncer, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { windowMs, maxHoldMs } = resolveWriteHold(options.window, options.maxHold);
+    const flushFullRuns = options.flushFullRuns ?? false;
+    const maxRegistersPerWrite = options.maxRegistersPerWrite ?? MODBUS_MAX_WRITE_REGISTERS;
 
     const scope = yield* Effect.scope;
     const lock = yield* Semaphore.make(1);
@@ -210,6 +285,7 @@ export const createWriteDebouncer = (
     let timer: TimerState | undefined;
     let nextTimerId = 0;
     let openedAtMs: number | undefined;
+    let lastArrivalMs: number | undefined;
     let closed = false;
 
     const scopeClosedError = () => {
@@ -240,25 +316,130 @@ export const createWriteDebouncer = (
       });
 
     /**
+     * Starts a new window timer and stops the previous one. Call it under `lock`.
+     *
+     * Do not await the interruption while `lock` is held. An expired timer can
+     * wait for the same lock before it can return.
+     */
+    const scheduleTimer = (delayMs: number) =>
+      Effect.gen(function* () {
+        const previous = timer;
+        const state: TimerState = { id: nextTimerId++ };
+        timer = state;
+        const forked = yield* Effect.forkIn(
+          Effect.sleep(Duration.millis(delayMs)).pipe(Effect.andThen(flushPending(state))),
+          scope,
+        );
+        state.fiber = forked;
+        if (timer?.id !== state.id) forked.interruptUnsafe();
+        previous?.fiber?.interruptUnsafe();
+      });
+
+    /**
+     * Sets the timer for the writes that stay after a partial flush. Call it
+     * under `lock`.
+     *
+     * The hold limit applies from the oldest write that stays, not from the
+     * arrival that opened the batch.
+     */
+    const rescheduleRemaining = Effect.gen(function* () {
+      if (held.size === 0) {
+        const active = timer;
+        timer = undefined;
+        openedAtMs = undefined;
+        active?.fiber?.interruptUnsafe();
+        return;
+      }
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const entry of held.values()) oldest = Math.min(oldest, entry.arrivedAtMs);
+      openedAtMs = oldest;
+      const now = yield* Clock.currentTimeMillis;
+      const deadline = Math.min((lastArrivalMs ?? now) + windowMs, oldest + maxHoldMs);
+      yield* scheduleTimer(Math.max(0, deadline - now));
+    });
+
+    /** Takes the full runs out of the batch, and keeps the rest. Call it under `lock`. */
+    const takeFullRuns = Effect.gen(function* () {
+      const addresses = fullRunAddresses(held.keys(), maxRegistersPerWrite);
+      if (addresses.length === 0) return undefined;
+      const batch = addresses.map((address) => held.get(address)!);
+      for (const address of addresses) held.delete(address);
+      yield* rescheduleRemaining;
+      return { activeTimer: undefined, batch };
+    });
+
+    /** Takes the whole batch and its timer. Call it under `lock`. */
+    const takeAll = Effect.sync(() => {
+      const activeTimer = timer;
+      timer = undefined;
+      const batch = Array.from(held.values());
+      held.clear();
+      openedAtMs = undefined;
+      lastArrivalMs = undefined;
+      return { activeTimer, batch };
+    });
+
+    /**
+     * Removes the held writes of callers that already failed. Call it under `lock`.
+     *
+     * After a partial flush fails, the caller can start recovery. Its other
+     * writes must not reach the bus after that. A write that another caller
+     * also waits on stays.
+     */
+    const dropFailed = (failed: ReadonlySet<Waiter>) =>
+      Effect.gen(function* () {
+        let dropped = false;
+        for (const [address, entry] of held) {
+          if (!entry.waiters.some((waiter) => failed.has(waiter))) continue;
+          const waiters = entry.waiters.filter((waiter) => !failed.has(waiter));
+          if (waiters.length === 0) {
+            held.delete(address);
+            dropped = true;
+          } else {
+            held.set(address, { ...entry, waiters });
+          }
+        }
+        if (dropped) yield* rescheduleRemaining;
+      });
+
+    /** Completes each waiter after its last entry is flushed, or at the first failure. */
+    const settle = (batch: ReadonlyArray<HeldWrite>, exit: Exit.Exit<void, ModbusError>) =>
+      Effect.gen(function* () {
+        const waiters = batch.flatMap((entry) => entry.waiters);
+        if (Exit.isFailure(exit)) {
+          yield* lock.withPermits(1)(dropFailed(new Set(waiters)));
+        }
+        yield* Effect.forEach(
+          waiters,
+          (waiter) => {
+            waiter.remaining -= 1;
+            return Exit.isSuccess(exit) && waiter.remaining > 0
+              ? Effect.void
+              : Deferred.done(waiter.deferred, exit);
+          },
+          { discard: true },
+        );
+      });
+
+    /**
      * Takes the batch under the lock, then issues it without the lock.
      *
      * A flush holds the bus for the length of a transaction. Blocking arrivals
      * for that long would defeat the coalescing the debouncer exists to do.
+     *
+     * With `fullRunsOnly`, the flush takes only the full runs and leaves the
+     * other writes for their window.
      */
-    const flushPending = (expectedTimer?: TimerState): Effect.Effect<void> =>
+    const flushPending = (expectedTimer?: TimerState, fullRunsOnly = false): Effect.Effect<void> =>
       flushLock.withPermits(1)(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const taken = yield* lock.withPermits(1)(
-              Effect.sync(() => {
-                if (expectedTimer !== undefined && timer?.id !== expectedTimer.id) return undefined;
-
-                const activeTimer = timer;
-                timer = undefined;
-                const batch = Array.from(held.values());
-                held.clear();
-                openedAtMs = undefined;
-                return { activeTimer, batch };
+              Effect.suspend(() => {
+                if (expectedTimer !== undefined && timer?.id !== expectedTimer.id) {
+                  return Effect.succeed(undefined);
+                }
+                return fullRunsOnly ? takeFullRuns : takeAll;
               }),
             );
 
@@ -279,11 +460,7 @@ export const createWriteDebouncer = (
               ),
             );
 
-            yield* Effect.forEach(
-              taken.batch.flatMap((entry) => entry.waiters),
-              (waiter) => Deferred.done(waiter, exit),
-              { discard: true },
-            );
+            yield* settle(taken.batch, exit);
           }),
         ),
       );
@@ -291,8 +468,9 @@ export const createWriteDebouncer = (
     /**
      * Adds writes to the batch, returning the one `Deferred` for this caller.
      *
-     * The whole group is added under one hold of the lock, so a flush takes all
-     * of it or none of it. One `Deferred` therefore answers for the group.
+     * The whole group is added under one hold of the lock. A full flush takes
+     * all of it or none of it. A partial flush can take part of it, so the
+     * waiter counts its entries and completes after the last one.
      */
     const enqueue = (
       writes: ReadonlyArray<RegisterWrite>,
@@ -301,40 +479,41 @@ export const createWriteDebouncer = (
       restartTimer: boolean,
     ) =>
       Effect.gen(function* () {
-        const waiter = yield* Deferred.make<void, ModbusError>();
+        const waiter: Waiter = {
+          deferred: yield* Deferred.make<void, ModbusError>(),
+          remaining: 0,
+        };
 
-        yield* lock.withPermits(1)(
+        const full = yield* lock.withPermits(1)(
           Effect.gen(function* () {
             if (closed) return yield* scopeClosedError();
+            const now = yield* Clock.currentTimeMillis;
             for (const write of writes) {
               held.set(
                 write.address,
-                supersede(held.get(write.address), { write, attributes, bypassCache }, waiter),
+                supersede(
+                  held.get(write.address),
+                  { write, attributes, bypassCache, arrivedAtMs: now },
+                  waiter,
+                ),
               );
             }
 
-            const now = yield* Clock.currentTimeMillis;
             openedAtMs ??= now;
-            if (!restartTimer) return;
+            if (!restartTimer) return false;
 
-            const delayMs = Math.max(0, Math.min(windowMs, openedAtMs + maxHoldMs - now));
-
-            const previous = timer;
-            const state: TimerState = { id: nextTimerId++ };
-            timer = state;
-            const forked = yield* Effect.forkIn(
-              Effect.sleep(Duration.millis(delayMs)).pipe(Effect.andThen(flushPending(state))),
-              scope,
+            lastArrivalMs = now;
+            yield* scheduleTimer(Math.max(0, Math.min(windowMs, openedAtMs + maxHoldMs - now)));
+            return (
+              flushFullRuns &&
+              writes.some((write) => completesRun(held, write.address, maxRegistersPerWrite))
             );
-            state.fiber = forked;
-            if (timer?.id !== state.id) forked.interruptUnsafe();
-            // Do not await interruption while holding `lock`: an expired timer
-            // may be waiting to inspect the same state before it can return.
-            previous?.fiber?.interruptUnsafe();
           }),
         );
 
-        return waiter;
+        // Fork after the lock is released. The flush takes the lock itself.
+        if (full) yield* Effect.forkIn(flushPending(undefined, true), scope);
+        return waiter.deferred;
       });
 
     /** Issues a group at once, for a window of zero. */
@@ -426,6 +605,7 @@ export const createWriteDebouncer = (
               const abandoned = Array.from(held.values());
               held.clear();
               openedAtMs = undefined;
+              lastArrivalMs = undefined;
               return abandoned;
             }),
           )
@@ -439,7 +619,7 @@ export const createWriteDebouncer = (
                     Effect.andThen(
                       Effect.forEach(
                         abandoned.flatMap((entry) => entry.waiters),
-                        Deferred.interrupt,
+                        (waiter) => Deferred.interrupt(waiter.deferred),
                         { discard: true },
                       ),
                     ),

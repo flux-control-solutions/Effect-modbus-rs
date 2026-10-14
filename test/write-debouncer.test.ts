@@ -527,3 +527,135 @@ test('a zero window carries the bypass flag to the flush', async () => {
     [[true], [false]],
   );
 });
+
+test('a full run flushes before the window and other writes stay held', async () => {
+  const recorder = makeRecorder();
+
+  const observed = await withDebouncer(
+    { window: '300 millis', flushFullRuns: true, maxRegistersPerWrite: 4, flush: recorder.flush },
+    (debouncer) =>
+      Effect.gen(function* () {
+        const repeated = yield* Effect.forkChild(debouncer.write({ address: 100, value: 1 }));
+        yield* Effect.all(
+          [0, 1, 2, 3].map((address) => debouncer.write({ address, value: address })),
+          { concurrency: 'unbounded' },
+        );
+        const early = recorder.batches.map((batch) => batch.map((write) => write.address));
+        const pending = debouncer.pending;
+        yield* Fiber.join(repeated);
+        return { early, pending };
+      }),
+  );
+
+  expect(observed.early).toEqual([[0, 1, 2, 3]]);
+  expect(observed.pending).toBe(1);
+  expect(recorder.batches.map((batch) => batch.map((write) => write.address))).toEqual([
+    [0, 1, 2, 3],
+    [100],
+  ]);
+});
+
+test('a full run waits for the window when the option is off', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer(
+    { window: '60 millis', maxRegistersPerWrite: 4, flush: recorder.flush },
+    (debouncer) =>
+      Effect.all(
+        [0, 1, 2, 3, 100].map((address) => debouncer.write({ address, value: address })),
+        { concurrency: 'unbounded' },
+      ),
+  );
+
+  expect(recorder.batches.map((batch) => batch.map((write) => write.address))).toEqual([
+    [0, 1, 2, 3, 100],
+  ]);
+});
+
+test('a partial flush keeps the remainder of a run held', async () => {
+  const recorder = makeRecorder();
+
+  const observed = await withDebouncer(
+    { window: '80 millis', flushFullRuns: true, maxRegistersPerWrite: 4, flush: recorder.flush },
+    (debouncer) =>
+      Effect.gen(function* () {
+        const group = yield* Effect.forkChild(
+          debouncer.writeAll([0, 1, 2, 3, 4, 5].map((address) => ({ address, value: address }))),
+        );
+        yield* Effect.sleep('20 millis');
+        const early = recorder.batches.map((batch) => batch.map((write) => write.address));
+        // The caller waits for the two writes that stay held.
+        const doneEarly = group.pollUnsafe() !== undefined;
+        yield* Fiber.join(group);
+        return { early, doneEarly };
+      }),
+  );
+
+  expect(observed.early).toEqual([[0, 1, 2, 3]]);
+  expect(observed.doneEarly).toBe(false);
+  expect(recorder.batches.map((batch) => batch.map((write) => write.address))).toEqual([
+    [0, 1, 2, 3],
+    [4, 5],
+  ]);
+});
+
+test('a failed partial flush fails its caller at once', async () => {
+  let calls = 0;
+  const recorder = makeRecorder(() => ++calls === 1);
+
+  const exit = await withDebouncer(
+    { window: '1 second', flushFullRuns: true, maxRegistersPerWrite: 2, flush: recorder.flush },
+    (debouncer) =>
+      Effect.exit(debouncer.writeAll([0, 1, 50].map((address) => ({ address, value: address })))),
+  );
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(recorder.batches.map((batch) => batch.map((write) => write.address))).toEqual([[0, 1]]);
+});
+
+test('a failed partial flush drops the other held writes of its caller', async () => {
+  let calls = 0;
+  const recorder = makeRecorder(() => ++calls === 1);
+
+  const observed = await withDebouncer(
+    { window: '100 millis', flushFullRuns: true, maxRegistersPerWrite: 3, flush: recorder.flush },
+    (debouncer) =>
+      Effect.gen(function* () {
+        // Another caller also waits on address 50, so that write must stay.
+        const other = yield* Effect.forkChild(debouncer.write({ address: 50, value: 7 }));
+        yield* Effect.yieldNow;
+        const failed = yield* Effect.exit(
+          debouncer.writeAll([0, 1, 2, 50, 51].map((address) => ({ address, value: address }))),
+        );
+        // Keep the scope open after the window, so a held write can still flush.
+        yield* Effect.sleep('300 millis');
+        return { failed, other: yield* Effect.exit(Fiber.join(other)) };
+      }),
+  );
+
+  expect(Exit.isFailure(observed.failed)).toBe(true);
+  expect(Exit.isSuccess(observed.other)).toBe(true);
+  expect(recorder.batches.map((batch) => batch.map((write) => write.address))).toEqual([
+    [0, 1, 2],
+    [50],
+  ]);
+});
+
+test('repeated writes to one address do not fill a run', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer(
+    { window: '60 millis', flushFullRuns: true, maxRegistersPerWrite: 3, flush: recorder.flush },
+    (debouncer) =>
+      Effect.all(
+        [0, 0, 0, 1].map((address, value) => debouncer.write({ address, value })),
+        { concurrency: 'unbounded' },
+      ),
+  );
+
+  expect(recorder.batches).toHaveLength(1);
+  expect(recorder.batches[0]!.map((write) => [write.address, write.value])).toEqual([
+    [0, 2],
+    [1, 3],
+  ]);
+});

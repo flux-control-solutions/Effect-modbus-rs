@@ -1285,6 +1285,33 @@ test('a flagged write that changes a register is not counted as bypassed', async
   expect(writes[0]!.get('modbus.bypassed_count')).toBe(0);
 });
 
+test('a batching client flushes a full run before the write window ends', async () => {
+  const capture = makeSpanCapture();
+
+  const { elapsed, debounce } = await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '2 seconds', flushFullRuns: true } },
+        plan: { writes: { maxRegistersPerWrite: 4 } },
+      });
+      const started = Date.now();
+      yield* Effect.all(
+        [0, 1, 2, 3].map((address) => batched.write({ address, value: address + 1 })),
+        { concurrency: 'unbounded' },
+      );
+      return { elapsed: Date.now() - started, debounce: batched.debounce };
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  expect(elapsed).toBeLessThan(1000);
+  expect(debounce?.writes?.flushFullRuns).toBe(true);
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(4);
+});
+
 test('flagged writes to the same address count as one register', async () => {
   const capture = makeSpanCapture();
 
