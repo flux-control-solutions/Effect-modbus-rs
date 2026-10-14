@@ -216,6 +216,14 @@ Each new write restarts the write window.
 It defaults to four times the write window.
 The read window starts with the first reader and does not restart.
 
+Set `debounce.writes.flushFullRuns` to `true` to flush a run of contiguous addresses early.
+A run is full when it has `plan.writes.maxRegistersPerWrite` addresses, which defaults to 123.
+More waiting cannot add registers to that transaction, so the run leaves the batch at once.
+Other held writes stay for their window, so repeated writes to them can still replace each other.
+If a run is longer than one transaction, only the complete transactions leave the batch.
+The remainder stays held and can still grow.
+A caller whose group is split completes after its last write is flushed, or at the first failure.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Idle

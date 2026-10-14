@@ -39,6 +39,7 @@ import {
   createWriteDebouncer,
   resolveWriteHold,
   type DebouncedWrite,
+  type WriteDebouncerOptions,
   type WriteOptions,
 } from './write-debouncer';
 
@@ -54,6 +55,16 @@ export interface BatchingDebounceOptions {
   readonly writes?: {
     readonly window: Duration.Input;
     readonly maxHold?: Duration.Input;
+    /**
+     * Flushes a run of contiguous addresses early when it fills one
+     * transaction. The limit is `plan.writes.maxRegistersPerWrite`.
+     *
+     * Other held writes stay for the window. Use this for a unit that writes
+     * a wide block once and also repeats writes to a few registers.
+     *
+     * @defaultValue false
+     */
+    readonly flushFullRuns?: boolean;
   };
   /**
    * The window for reads.
@@ -80,6 +91,8 @@ export interface BatchingDebounceWindows {
   readonly writes?: {
     readonly window: Duration.Duration;
     readonly maxHold: Duration.Duration;
+    /** Whether a full run of contiguous addresses flushes before the window ends. */
+    readonly flushFullRuns: boolean;
   };
   /** The read window. Omitted when reads are not debounced. */
   readonly reads?: {
@@ -107,6 +120,7 @@ const resolveDebounceWindows = (
       writes: Object.freeze({
         window: Duration.millis(hold.windowMs),
         maxHold: Duration.millis(hold.maxHoldMs),
+        flushFullRuns: options.writes?.flushFullRuns ?? false,
       }),
     }),
     ...(options.reads && {
@@ -114,6 +128,22 @@ const resolveDebounceWindows = (
     }),
   });
 };
+
+/**
+ * Selects the write debouncer settings from the client options.
+ *
+ * The full-run limit is the planner limit, so an early flush fills exactly one
+ * planned transaction.
+ */
+const writeDebouncerTiming = (
+  writes: BatchingDebounceOptions['writes'],
+  plan: PlanWritesOptions | undefined,
+): Omit<WriteDebouncerOptions, 'flush'> => ({
+  window: writes?.window ?? 0,
+  maxHold: writes?.maxHold,
+  flushFullRuns: writes?.flushFullRuns,
+  maxRegistersPerWrite: plan?.maxRegistersPerWrite,
+});
 
 /** Options for {@link makeBatchingClient}. */
 export interface BatchingClientOptions {
@@ -461,8 +491,7 @@ export const makeBatchingClient = (options: {
         );
 
     const writes = yield* createWriteDebouncer({
-      window: options.debounce?.writes?.window ?? 0,
-      maxHold: options.debounce?.writes?.maxHold,
+      ...writeDebouncerTiming(options.debounce?.writes, options.plan?.writes),
       flush: issueWrites,
     });
 
