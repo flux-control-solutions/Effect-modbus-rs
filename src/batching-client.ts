@@ -56,10 +56,12 @@ export interface BatchingDebounceOptions {
     readonly window: Duration.Input;
     readonly maxHold?: Duration.Input;
     /**
-     * Flushes a run of contiguous addresses early when it fills one
-     * transaction. The limit is `plan.writes.maxRegistersPerWrite`.
+     * Flushes a run of contiguous held addresses early when it has
+     * `plan.writes.maxRegistersPerWrite` addresses.
      *
-     * Other held writes stay for the window. Use this for a unit that writes
+     * The count uses held addresses before the cache filter. Thus the early
+     * flush can send a shorter transaction, or FC06 writes when `minRunLength`
+     * is more than the limit. Other held writes stay for the window. Use this for a unit that writes
      * a wide block once and also repeats writes to a few registers.
      *
      * @defaultValue false
@@ -132,8 +134,9 @@ const resolveDebounceWindows = (
 /**
  * Selects the write debouncer settings from the client options.
  *
- * The full-run limit is the planner limit, so an early flush fills exactly one
- * planned transaction.
+ * The full-run limit is the planner limit, so an early flush takes complete
+ * chunks of held addresses. The cache filter and `minRunLength` can still make
+ * the planned transactions shorter.
  */
 const writeDebouncerTiming = (
   writes: BatchingDebounceOptions['writes'],

@@ -73,7 +73,8 @@ export interface WriteDebouncerOptions {
    * `maxRegistersPerWrite`.
    *
    * A full run cannot gain more registers in its transaction, so more waiting
-   * only adds delay. Only complete runs leave the batch. Other held writes stay
+   * only adds delay. Only complete runs leave the batch. The debouncer counts
+   * held addresses. It does not know which writes a cache removes later. Other held writes stay
    * for the window, so repeated writes to them can still replace each other.
    *
    * @defaultValue false
@@ -378,18 +379,47 @@ export const createWriteDebouncer = (
       return { activeTimer, batch };
     });
 
+    /**
+     * Removes the held writes of callers that already failed. Call it under `lock`.
+     *
+     * After a partial flush fails, the caller can start recovery. Its other
+     * writes must not reach the bus after that. A write that another caller
+     * also waits on stays.
+     */
+    const dropFailed = (failed: ReadonlySet<Waiter>) =>
+      Effect.gen(function* () {
+        let dropped = false;
+        for (const [address, entry] of held) {
+          if (!entry.waiters.some((waiter) => failed.has(waiter))) continue;
+          const waiters = entry.waiters.filter((waiter) => !failed.has(waiter));
+          if (waiters.length === 0) {
+            held.delete(address);
+            dropped = true;
+          } else {
+            held.set(address, { ...entry, waiters });
+          }
+        }
+        if (dropped) yield* rescheduleRemaining;
+      });
+
     /** Completes each waiter after its last entry is flushed, or at the first failure. */
     const settle = (batch: ReadonlyArray<HeldWrite>, exit: Exit.Exit<void, ModbusError>) =>
-      Effect.forEach(
-        batch.flatMap((entry) => entry.waiters),
-        (waiter) => {
-          waiter.remaining -= 1;
-          return Exit.isSuccess(exit) && waiter.remaining > 0
-            ? Effect.void
-            : Deferred.done(waiter.deferred, exit);
-        },
-        { discard: true },
-      );
+      Effect.gen(function* () {
+        const waiters = batch.flatMap((entry) => entry.waiters);
+        if (Exit.isFailure(exit)) {
+          yield* lock.withPermits(1)(dropFailed(new Set(waiters)));
+        }
+        yield* Effect.forEach(
+          waiters,
+          (waiter) => {
+            waiter.remaining -= 1;
+            return Exit.isSuccess(exit) && waiter.remaining > 0
+              ? Effect.void
+              : Deferred.done(waiter.deferred, exit);
+          },
+          { discard: true },
+        );
+      });
 
     /**
      * Takes the batch under the lock, then issues it without the lock.
