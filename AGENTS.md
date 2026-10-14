@@ -69,15 +69,18 @@ bunx fallow audit --base <base-ref>
 
 ## Batching and cache rules
 
-- Keep transaction planning pure in `src/register-plan.ts`.
+- Keep transaction planning pure in `src/register-plan.ts` and `src/coil-plan.ts`.
 - Keep caches and debouncers independently usable. Compose them in `src/batching-client.ts`.
 - Do not make `BatchingModbusClient` extend `ModbusOperations`. Raw writes can bypass the cache and reorder pending writes.
 - After declaring a batching client, preserve the guards on raw FC06, FC16, and FC23 operations for that unit.
-- Preserve raw reads, coils, and other operations outside register-write batching.
+- After declaring coil batching for a unit, preserve the guards on raw FC05 and FC15 operations for that unit.
+- Preserve raw reads, raw coil writes for units without coil batching, and other operations outside write batching.
+- Keep coil batching opt-in for each unit. Keep the coil cache separate from the register cache.
+- Fill FC15 gap coils from the coil cache first. Read only the gaps that the cache does not know.
 - Keep debounce windows opt-in. A zero window must bypass the timer.
 - Keep grouped operations on the debouncer path. With a positive window, `writeAll` and `readAll` collect before issuing.
 - Use `writeAllNow` and `readAllNow` to flush grouped operations immediately.
-- Keep one write cache per transport. Create the cache and its connection watcher only when batching is first requested.
+- Keep one register cache and one coil cache per transport. Create them and their connection watcher only when batching is first requested.
 - Invalidate a unit's cache after a failed write. Invalidate all cached writes when the connection leaves `Connected`.
 - Compare cached values using their wire encoding.
 - Cache one batching client per unit ID. Reject every later declaration of the unit with `ModbusUnitAlreadyDeclaredError`.

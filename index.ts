@@ -126,6 +126,24 @@ export type {
   SingleWriteStep,
   WritePlanStep,
 } from './src/register-plan';
+export {
+  MODBUS_MAX_READ_COILS,
+  MODBUS_MAX_WRITE_COILS,
+  planCoilReads,
+  planCoilWrites,
+} from './src/coil-plan';
+export type {
+  CoilWrite,
+  CoilWritePlanStep,
+  MultipleCoilWriteStep,
+  PlanCoilReadsOptions,
+  PlanCoilWritesOptions,
+  SingleCoilWriteStep,
+} from './src/coil-plan';
+export { createCoilCache } from './src/coil-cache';
+export type { CoilCache, CoilCacheFilter } from './src/coil-cache';
+export { createCoilClient } from './src/coil-batching';
+export type { BatchingCoilClient, BatchingCoilOptions } from './src/coil-batching';
 export { createRegisterCache } from './src/register-cache';
 export type { RegisterCache, RegisterCacheFilter } from './src/register-cache';
 export { createWriteDebouncer } from './src/write-debouncer';

@@ -262,6 +262,33 @@ export const resolveWriteHold = (window: Duration.Input, maxHold: Duration.Input
 };
 
 /**
+ * Selects the timing options of a write debouncer from batching options.
+ *
+ * The full-run limit is the planner limit for the address space, so an early
+ * flush takes complete chunks of held addresses. The cache filter and
+ * `minRunLength` can still make the planned transactions shorter.
+ *
+ * @param writes - The write window options, or `undefined` for no window.
+ * @param maxPerWrite - The planner limit for one write transaction.
+ * @returns Every write debouncer option except `flush`.
+ */
+export const writeDebouncerTiming = (
+  writes:
+    | {
+        readonly window: Duration.Input;
+        readonly maxHold?: Duration.Input;
+        readonly flushFullRuns?: boolean;
+      }
+    | undefined,
+  maxPerWrite: number | undefined,
+): Omit<WriteDebouncerOptions, 'flush'> => ({
+  window: writes?.window ?? 0,
+  maxHold: writes?.maxHold,
+  flushFullRuns: writes?.flushFullRuns,
+  maxRegistersPerWrite: maxPerWrite,
+});
+
+/**
  * Creates a write debouncer bound to the current scope.
  *
  * Waiting callers do not control the flush fiber. Closing the scope discards

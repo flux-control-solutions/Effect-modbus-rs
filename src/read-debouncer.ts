@@ -13,7 +13,7 @@ import {
   ModbusTransportError,
   type ModbusError,
 } from './errors';
-import { planReads, type PlanReadsOptions, type ReadSpan } from './register-plan';
+import { planReads, type PlanReadsOptions, type ReadPlan, type ReadSpan } from './register-plan';
 
 /** Options for {@link createReadDebouncer}. */
 export interface ReadDebouncerOptions {
@@ -30,6 +30,12 @@ export interface ReadDebouncerOptions {
   readonly window: Duration.Input;
   /** Limits handed to `planReads`. */
   readonly plan?: PlanReadsOptions;
+  /**
+   * Plans the collected addresses. Replaces `planReads` and `plan`.
+   *
+   * Use this for an address space with other transaction limits, such as coils.
+   */
+  readonly planSpans?: (addresses: ReadonlyArray<number>) => ReadPlan;
   /**
    * Reads the planned spans, in order.
    *
@@ -166,7 +172,7 @@ export const createReadDebouncer = (
     const issue = (addresses: ReadonlyArray<number>) =>
       Effect.gen(function* () {
         const plan = yield* Effect.try({
-          try: () => planReads(addresses, options.plan),
+          try: () => options.planSpans?.(addresses) ?? planReads(addresses, options.plan),
           catch: (cause) => {
             const error = cause instanceof Error ? cause : new Error(String(cause));
             return new ModbusInvalidArgumentError({ cause: error, message: error.message });
