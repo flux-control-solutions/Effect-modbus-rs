@@ -35,7 +35,12 @@ import {
 } from './register-plan';
 import type { ModbusRetryPolicy } from './retry';
 import { mergeSpanAttributes, type ModbusSpanAttributes } from './span-attributes';
-import { createWriteDebouncer, resolveWriteHold, type DebouncedWrite } from './write-debouncer';
+import {
+  createWriteDebouncer,
+  resolveWriteHold,
+  type DebouncedWrite,
+  type WriteOptions,
+} from './write-debouncer';
 
 /** How long operations are collected before they reach the bus. */
 export interface BatchingDebounceOptions {
@@ -184,41 +189,52 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
    * Completion means the carrying batch succeeded; a cache can suppress its bus write.
    * @param write - Register address and value.
    * @param attributes - Optional span attributes for this caller.
+   * @param options - Optional per-call options, such as `bypassCache`.
    * @returns Completion after the carrying batch succeeds, or its Modbus error.
    */
-  write(write: RegisterWrite, attributes?: ModbusSpanAttributes): Effect.Effect<void, ModbusError>;
+  write(
+    write: RegisterWrite,
+    attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
+  ): Effect.Effect<void, ModbusError>;
   /**
    * Adds a write and flushes pending writes immediately. The newest value wins.
    * Completion means the carrying batch succeeded; a cache can suppress its bus write.
    * @param write - Register address and value.
    * @param attributes - Optional span attributes for this caller.
+   * @param options - Optional per-call options, such as `bypassCache`.
    * @returns Completion after the carrying batch succeeds, or its Modbus error.
    */
   writeNow(
     write: RegisterWrite,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
   /**
    * Submits the group to the write debouncer as one caller.
    * Completion reports its flush result; cache filtering can suppress physical writes.
    * @param writes - Register writes.
    * @param attributes - Optional span attributes for this caller.
+   * @param options - Optional per-call options, such as `bypassCache`.
    * @returns Completion after the carrying batch succeeds, or its Modbus error.
    */
   writeAll(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
   /**
    * Adds a group of writes and flushes pending writes immediately.
    * Completion means the carrying batch succeeded; a cache can suppress bus writes.
    * @param writes - Register writes.
    * @param attributes - Optional span attributes for this caller.
+   * @param options - Optional per-call options, such as `bypassCache`.
    * @returns Completion after the carrying batch succeeds, or its Modbus error.
    */
   writeAllNow(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
 
   /** Reads over the input registers (FC04). The unqualified reads are holding registers (FC03). */
@@ -292,7 +308,12 @@ export const makeBatchingClient = (options: {
     };
 
     /** Attributes every span carries, whatever the caller supplied. */
-    const own = (registerCount: number, transactionCount: number, suppressedCount: number) => ({
+    const own = (
+      registerCount: number,
+      transactionCount: number,
+      suppressedCount: number,
+      bypassedCount: number,
+    ) => ({
       // Plural, although one client addresses one unit. A driver that batches
       // across a bus reports the same key, and a caller reading these spans
       // should not have to know which one produced them.
@@ -300,6 +321,7 @@ export const makeBatchingClient = (options: {
       'modbus.register_count': registerCount,
       'modbus.transaction_count': transactionCount,
       'modbus.suppressed_count': suppressedCount,
+      'modbus.bypassed_count': bypassedCount,
     });
 
     /**
@@ -314,15 +336,37 @@ export const makeBatchingClient = (options: {
      * going to the filtered one because its frames are shorter. A caller that
      * needs a register left alone rather than rewritten with the value it already
      * holds wants `withClient`, which issues exactly the transaction it is given.
+     *
+     * A write flagged with `bypassCache` skips the filter, so it is in both
+     * plans. The other writes in the batch are still filtered.
      */
     const issueWrites = (batch: ReadonlyArray<DebouncedWrite>) =>
       Effect.gen(function* () {
-        const proposed = batch.map((entry) => ({ address: entry.address, value: entry.value }));
+        const toWrite = (entry: DebouncedWrite): RegisterWrite => ({
+          address: entry.address,
+          value: entry.value,
+        });
+        const proposed = batch.map(toWrite);
         const filtered = yield* Effect.try({
-          try: () => cache?.filter(unitId, proposed),
+          try: () => {
+            if (cache === undefined) return undefined;
+            const forced = batch.filter((entry) => entry.bypassCache).map(toWrite);
+            const checked = cache.filter(
+              unitId,
+              batch.filter((entry) => !entry.bypassCache).map(toWrite),
+            );
+            return {
+              pending: [...forced, ...checked.pending],
+              // Flagged addresses that reach the bus only because of the flag.
+              bypassed:
+                new Set(forced.map((write) => write.address)).size -
+                cache.filter(unitId, forced).pending.length,
+            };
+          },
           catch: invalidArgument,
         });
         const pending = filtered?.pending ?? proposed;
+        const bypassed = filtered?.bypassed ?? 0;
         if (pending.length === 0) return;
 
         const plan = yield* Effect.try({
@@ -392,7 +436,7 @@ export const makeBatchingClient = (options: {
                   .filter((entry) => carried.has(entry.address))
                   .map((entry) => entry.attributes),
               ),
-              ...own(written.length, steps.length, suppressed),
+              ...own(written.length, steps.length, suppressed, bypassed),
             },
           }),
         );
@@ -410,6 +454,7 @@ export const makeBatchingClient = (options: {
             attributes: own(
               spans.reduce((total, span) => total + span.quantity, 0),
               spans.length,
+              0,
               0,
             ),
           }),

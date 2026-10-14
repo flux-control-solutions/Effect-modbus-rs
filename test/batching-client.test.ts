@@ -1112,3 +1112,175 @@ test('a link lost during a write is not re-believed by the observe that follows'
   // in doubt. The restoring write then lands and the cache learns 512 again.
   expect(result).toEqual({ afterDrop: 0, afterRestore: 1, held: [512] });
 });
+
+test('a flagged write reaches the bus when the cache holds its value', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3);
+      yield* batched.writeAll([
+        { address: 0, value: 10 },
+        { address: 32, value: 20 },
+      ]);
+      capture.spans.length = 0;
+
+      // Both values repeat. Only the flagged one may reach the bus.
+      yield* batched.writeNow({ address: 0, value: 10 });
+      yield* batched.writeNow(
+        { address: 32, value: 20 },
+        { 'app.point': 'Reset' },
+        {
+          bypassCache: true,
+        },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(1);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(1);
+  expect(writes[0]!.get('app.point')).toBe('Reset');
+});
+
+test('a bypass keeps the filter for the other writes in its batch', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '30 millis' } },
+      });
+      yield* batched.writeAllNow([
+        { address: 0, value: 10 },
+        { address: 32, value: 20 },
+      ]);
+      capture.spans.length = 0;
+
+      // Far apart, so the filtered plan wins. It must still carry the flagged
+      // write and drop the unflagged repeat.
+      yield* Effect.all(
+        [
+          batched.write({ address: 0, value: 10 }),
+          batched.write({ address: 32, value: 20 }, undefined, { bypassCache: true }),
+        ],
+        { concurrency: 'unbounded' },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(1);
+  expect(writes[0]!.get('modbus.suppressed_count')).toBe(1);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(1);
+});
+
+test('the whole plan wins when it carries flagged writes in fewer transactions', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '30 millis' } },
+      });
+      const addresses = Array.from({ length: 11 }, (_, index) => index);
+      yield* batched.writeAllNow(addresses.map((address) => ({ address, value: 100 })));
+      capture.spans.length = 0;
+
+      // One batch: the even addresses repeat without a flag and the odd ones
+      // repeat with a flag. One FC16 is fewer transactions than five FC06.
+      yield* Effect.all(
+        [
+          batched.writeAll(
+            addresses
+              .filter((address) => address % 2 === 0)
+              .map((address) => ({ address, value: 100 })),
+          ),
+          batched.writeAll(
+            addresses
+              .filter((address) => address % 2 === 1)
+              .map((address) => ({ address, value: 100 })),
+            undefined,
+            { bypassCache: true },
+          ),
+        ],
+        { concurrency: 'unbounded' },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(11);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(5);
+});
+
+test('a newer unflagged write to a flagged address still reaches the bus', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, {
+        debounce: { writes: { window: '30 millis' } },
+      });
+      yield* batched.writeNow({ address: 0, value: 10 });
+      capture.spans.length = 0;
+
+      // The flagged caller must not see success for a write that the cache
+      // suppressed after a newer value replaced it.
+      yield* Effect.all(
+        [
+          batched.write({ address: 0, value: 10 }, undefined, { bypassCache: true }),
+          batched.write({ address: 0, value: 10 }),
+        ],
+        { concurrency: 'unbounded' },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.get('modbus.register_count')).toBe(1);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(1);
+});
+
+test('the cache records a flagged write after the device acknowledges it', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3);
+      yield* batched.writeNow({ address: 0, value: 42 }, undefined, { bypassCache: true });
+      capture.spans.length = 0;
+      // The cache now holds 42, so an unflagged repeat stays off the bus.
+      yield* batched.writeNow({ address: 0, value: 42 });
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  expect(attributesOf(capture.spans, 'modbus.write')).toHaveLength(0);
+});
+
+test('a flagged write that changes a register is not counted as bypassed', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3);
+      yield* batched.writeNow({ address: 0, value: 1 }, undefined, { bypassCache: true });
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  // The cache held nothing, so the flag sent nothing extra.
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(0);
+});
