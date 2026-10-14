@@ -295,8 +295,8 @@ Writes accept the `bypassCache` option.
 FC15 writes every coil in its span.
 With `plan.writes.maxGap` above zero, a span can include gap coils that no caller wrote.
 The client fills each gap with the state that the coil cache knows.
-If the cache does not know a gap, the client reads the gaps with one FC01 request before the FC15 write.
-The planner counts that read as a transaction when it compares plans.
+If the cache does not know a gap, the client plans FC01 reads within `maxCoilsPerRead` before the FC15 write.
+The planner counts each gap-read request as a transaction when it compares plans.
 
 CAUTION: If device logic or another client changes a gap coil after its state is known, the FC15 write restores the old state.
 Raise `maxGap` only for coils that only this client writes.
