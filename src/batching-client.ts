@@ -16,6 +16,12 @@ import {
   SubscriptionRef,
 } from 'effect';
 
+import {
+  createCoilClient,
+  type BatchingCoilClient,
+  type BatchingCoilOptions,
+} from './coil-batching';
+import { createCoilCache, type CoilCache } from './coil-cache';
 import { ConnectionState } from './connection';
 import {
   ModbusInvalidArgumentError,
@@ -38,8 +44,8 @@ import { mergeSpanAttributes, type ModbusSpanAttributes } from './span-attribute
 import {
   createWriteDebouncer,
   resolveWriteHold,
+  writeDebouncerTiming,
   type DebouncedWrite,
-  type WriteDebouncerOptions,
   type WriteOptions,
 } from './write-debouncer';
 
@@ -129,22 +135,6 @@ const resolveDebounceWindows = (
   });
 };
 
-/**
- * Selects the write debouncer settings from the client options.
- *
- * The full-run limit is the planner limit, so an early flush fills exactly one
- * planned transaction.
- */
-const writeDebouncerTiming = (
-  writes: BatchingDebounceOptions['writes'],
-  plan: PlanWritesOptions | undefined,
-): Omit<WriteDebouncerOptions, 'flush'> => ({
-  window: writes?.window ?? 0,
-  maxHold: writes?.maxHold,
-  flushFullRuns: writes?.flushFullRuns,
-  maxRegistersPerWrite: plan?.maxRegistersPerWrite,
-});
-
 /** Options for {@link makeBatchingClient}. */
 export interface BatchingClientOptions {
   /**
@@ -163,6 +153,17 @@ export interface BatchingClientOptions {
     readonly writes?: PlanWritesOptions;
     readonly reads?: PlanReadsOptions;
   };
+  /**
+   * Enables coil batching on `client.coils`. Pass options to set the coil cache
+   * and the coil planner limits.
+   *
+   * After a unit declares coil batching, raw FC05 and FC15 writes for that unit
+   * fail with `ModbusInvalidArgumentError`. A raw coil write would bypass the
+   * pending coil batch and its cache.
+   *
+   * @defaultValue false
+   */
+  readonly coils?: boolean | BatchingCoilOptions;
 }
 
 /** Reads over one register space. */
@@ -207,8 +208,9 @@ export interface BatchingRegisterReader {
  * FC16, and FC23 fail with `ModbusInvalidArgumentError`. Mixing the two register
  * write paths would bypass the pending batch and its cache.
  *
- * Coils are not covered. The planners pack registers, so `readCoils`,
- * `writeSingleCoil`, and their relatives stay on the raw client.
+ * Coils are covered only when the declaration sets `coils`. Then `coils`
+ * batches FC01, FC05, and FC15, and raw FC05 and FC15 writes for the unit fail.
+ * Otherwise coil operations stay on the raw client.
  */
 export interface BatchingModbusClient extends BatchingRegisterReader {
   /** The unit this client addresses. */
@@ -279,6 +281,9 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
   /** The cache this client filters against, or `undefined` when `cache` is `false`. */
   readonly cache: RegisterCache | undefined;
 
+  /** Batched coil operations, or `undefined` when the declaration did not set `coils`. */
+  readonly coils: BatchingCoilClient | undefined;
+
   /**
    * The debounce windows this client applies, or `undefined` when its
    * declaration had no `debounce` option.
@@ -312,6 +317,26 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
 }
 
 /**
+ * Builds the coil client when the declaration enables coil batching.
+ *
+ * Without coil batching, the flush is a no-op, so the client flush does not
+ * need a separate branch.
+ */
+const makeOptionalCoilClient = (options: Parameters<typeof makeBatchingClient>[0]) =>
+  options.coils === undefined
+    ? Effect.succeed({ client: undefined, flush: Effect.void })
+    : Effect.map(
+        createCoilClient({
+          unitId: options.unitId,
+          client: options.client,
+          cache: options.coils.cache,
+          debounce: options.debounce,
+          plan: options.coils.plan,
+        }),
+        (client) => ({ client, flush: client.flush }),
+      );
+
+/**
  * Builds a batching client over an Effect-wrapped client for one unit.
  *
  * The transport calls this from `withBatchingClient`, which is where a consumer
@@ -327,6 +352,11 @@ export const makeBatchingClient = (options: {
   readonly cache: RegisterCache | undefined;
   readonly debounce?: BatchingDebounceOptions;
   readonly plan?: BatchingClientOptions['plan'];
+  /** Coil batching settings. Omitted, the client has no `coils`. */
+  readonly coils?: {
+    readonly cache: CoilCache | undefined;
+    readonly plan?: BatchingCoilOptions['plan'];
+  };
 }): Effect.Effect<BatchingModbusClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { unitId, client, cache } = options;
@@ -491,7 +521,7 @@ export const makeBatchingClient = (options: {
         );
 
     const writes = yield* createWriteDebouncer({
-      ...writeDebouncerTiming(options.debounce?.writes, options.plan?.writes),
+      ...writeDebouncerTiming(options.debounce?.writes, options.plan?.writes?.maxRegistersPerWrite),
       flush: issueWrites,
     });
 
@@ -514,10 +544,15 @@ export const makeBatchingClient = (options: {
       readAllNow: debouncer.readAllNow,
     });
 
+    const coils = yield* makeOptionalCoilClient(options);
+
     const flush = Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const fiber = yield* Effect.forkIn(
-          Effect.andThen(writes.flush, Effect.andThen(holding.flush, inputs.flush)),
+          Effect.andThen(
+            writes.flush,
+            Effect.andThen(holding.flush, Effect.andThen(inputs.flush, coils.flush)),
+          ),
           scope,
         );
         yield* restore(Fiber.await(fiber));
@@ -540,6 +575,7 @@ export const makeBatchingClient = (options: {
     return {
       unitId,
       cache,
+      coils: coils.client,
       debounce: resolveDebounceWindows(options.debounce),
       write: writes.write,
       writeNow: writes.writeNow,
@@ -585,7 +621,10 @@ export interface BatchingRegistry {
   ): Effect.Effect<BatchingModbusClient, ModbusError | ModbusUnitAlreadyDeclaredError>;
   /** The batching client for a unit. Fails if nothing has declared one. */
   batchingClient(unitId: number): Effect.Effect<BatchingModbusClient, ModbusError>;
-  /** Disables raw holding-register writes once a batching client exists for the unit. */
+  /**
+   * Disables raw holding-register writes once a batching client exists for the
+   * unit. Disables raw coil writes once the unit declares coil batching.
+   */
   guardRawWrites(unitId: number, operations: ModbusOperations): ModbusOperations;
 }
 
@@ -611,7 +650,9 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
   const clients = new Map<number, BatchingModbusClient>();
   const creating = new Map<number, Deferred.Deferred<BatchingModbusClient, ModbusError>>();
   const writeLocks = new Map<number, Semaphore.Semaphore>();
-  let shared: RegisterCache | undefined;
+  // Units with coil batching, declared or under construction.
+  const coilUnits = new Set<number>();
+  let shared: { readonly registers: RegisterCache; readonly coils: CoilCache } | undefined;
   let closed = false;
   let watchingScope = false;
 
@@ -647,19 +688,31 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
    * flush already acts on it. Losing the link is the stronger sign, and only
    * code next to `connectionState` can see it.
    */
-  const sharedCache = Effect.fnUntraced(function* () {
+  const sharedCaches = Effect.fnUntraced(function* () {
     if (shared) return shared;
-    const cache = createRegisterCache();
-    shared = cache;
+    const caches = { registers: createRegisterCache(), coils: createCoilCache() };
+    shared = caches;
     yield* Effect.forkIn(
       Stream.runForEach(SubscriptionRef.changes(deps.connectionState), (state) =>
         Effect.sync(() => {
-          if (!ConnectionState.$is('Connected')(state)) cache.invalidate();
+          if (ConnectionState.$is('Connected')(state)) return;
+          caches.registers.invalidate();
+          caches.coils.invalidate();
         }),
       ),
       clientScope,
     );
-    return cache;
+    return caches;
+  });
+
+  /** Resolves the coil settings of a declaration, or `undefined` without coil batching. */
+  const resolveCoils = Effect.fnUntraced(function* (coils: BatchingClientOptions['coils']) {
+    if (coils === undefined || coils === false) return undefined;
+    const settings = coils === true ? {} : coils;
+    if (settings.cache === false) return { cache: undefined, plan: settings.plan };
+    const injected =
+      settings.cache === undefined || settings.cache === true ? undefined : settings.cache;
+    return { cache: injected ?? (yield* sharedCaches()).coils, plan: settings.plan };
   });
 
   const writeLockFor = (unitId: number) => {
@@ -684,12 +737,27 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
         }),
       );
 
+    const writeCoils = <A>(operation: () => Effect.Effect<A, ModbusError>) =>
+      writeLockFor(unitId).withPermits(1)(
+        Effect.suspend(() => {
+          if (!coilUnits.has(unitId)) return operation();
+          const message =
+            `Raw coil writes are disabled for unit ${unitId} because it batches coils. ` +
+            `Use the batching client for every coil write on that unit.`;
+          return Effect.fail(
+            new ModbusInvalidArgumentError({ cause: new Error(message), message }),
+          );
+        }),
+      );
+
     return {
       ...operations,
       writeSingleRegister: (options) => write(() => operations.writeSingleRegister(options)),
       writeMultipleRegisters: (options) => write(() => operations.writeMultipleRegisters(options)),
       readWriteMultipleRegisters: (options) =>
         write(() => operations.readWriteMultipleRegisters(options)),
+      writeSingleCoil: (options) => writeCoils(() => operations.writeSingleCoil(options)),
+      writeMultipleCoils: (options) => writeCoils(() => operations.writeMultipleCoils(options)),
     };
   };
 
@@ -732,6 +800,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
               return { _tag: 'Declared' as const } as const;
             }
             creating.set(unitId, fresh);
+            if (options?.coils !== undefined && options.coils !== false) coilUnits.add(unitId);
             return { _tag: 'Leader' as const } as const;
           });
 
@@ -742,7 +811,8 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
             Effect.gen(function* () {
               const raw = yield* deps.withClient(unitId, { retry: options?.retry });
               let cache: RegisterCache | undefined;
-              if (options?.cache !== false) cache = injected ?? (yield* sharedCache());
+              if (options?.cache !== false) cache = injected ?? (yield* sharedCaches()).registers;
+              const coils = yield* resolveCoils(options?.coils);
 
               // Bound to the transport's scope, not the caller's: the client is
               // shared by every caller on this unit, so no one may end it.
@@ -753,6 +823,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
                   cache,
                   debounce: options?.debounce,
                   plan: options?.plan,
+                  coils,
                 }),
                 clientScope,
               );
@@ -767,6 +838,7 @@ export const createBatchingRegistry = (deps: BatchingRegistryDeps): BatchingRegi
                   Effect.sync(() => {
                     creating.delete(unitId);
                     if (Exit.isSuccess(exit)) clients.set(unitId, exit.value.client);
+                    else coilUnits.delete(unitId);
                   }),
                   Deferred.done(
                     fresh,

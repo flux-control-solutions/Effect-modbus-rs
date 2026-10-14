@@ -154,7 +154,7 @@ It does not make separate application operations atomic.
 
 Use `withClient` when the caller selects exact Modbus transactions.
 Use `withBatchingClient` to collect register operations, plan contiguous transactions, and suppress redundant writes.
-Batching does not cover coils, diagnostics, or file records.
+Coil batching is opt-in for each unit. Batching does not cover discrete inputs, diagnostics, or file records.
 
 ```ts
 import { TcpTransportService } from '@flux-control/effect-modbus-rs';
@@ -252,7 +252,49 @@ Interrupting one caller does not remove its request from the shared pending batc
 A `BatchingModbusClient` does not extend `ModbusOperations`.
 After a unit has a batching declaration, raw FC06, FC16, and FC23 operations for that unit fail with `ModbusInvalidArgumentError`.
 This guard prevents raw writes from bypassing pending writes and their cache.
-Raw reads, coils, diagnostics, and file-record operations remain available through `withClient`.
+If the declaration also enables coil batching, raw FC05 and FC15 operations for that unit fail in the same way.
+Raw reads, diagnostics, and file-record operations remain available through `withClient`.
+Raw coil writes remain available for a unit without coil batching.
+
+### Coil batching
+
+Set `coils` in the declaration to batch coil operations on `client.coils`.
+The coil batch is separate from the register batch, and it uses the same debounce windows.
+
+```ts
+const client =
+  yield *
+  transport.withBatchingClient(3, {
+    coils: { plan: { writes: { maxGap: 4 } } },
+  });
+
+yield *
+  client.coils!.writeAllNow([
+    { address: 10, value: true },
+    { address: 11, value: false },
+  ]);
+const states = yield * client.coils!.readAll([10, 11, 12]);
+```
+
+| Coil option   | Default                        | Purpose                                                |
+| ------------- | ------------------------------ | ------------------------------------------------------ |
+| `cache`       | Transport coil cache           | Pass `false` to disable suppression, or a `CoilCache`. |
+| `plan.writes` | `maxCoilsPerWrite` 1968, gap 0 | Limits for FC15 steps. See `planCoilWrites`.           |
+| `plan.reads`  | `maxCoilsPerRead` 2000, gap 0  | Limits for FC01 spans. See `planCoilReads`.            |
+
+`client.coils` has the same write and read methods as the register client, with boolean values.
+Writes accept the `bypassCache` option.
+`client.coils.cache` exposes the coil cache, or `undefined` when it is disabled.
+`client.coils` is `undefined` when the declaration does not set `coils`.
+
+FC15 writes every coil in its span.
+With `plan.writes.maxGap` above zero, a span can include gap coils that no caller wrote.
+The client fills each gap with the state that the coil cache knows.
+If the cache does not know a gap, the client reads the gaps with one FC01 request before the FC15 write.
+The planner counts that read as a transaction when it compares plans.
+
+CAUTION: If device logic or another client changes a gap coil after its state is known, the FC15 write restores the old state.
+Raise `maxGap` only for coils that only this client writes.
 
 ### Declaring and retrieving clients
 
@@ -326,6 +368,9 @@ The span describes the selected plan; failed execution can leave some transactio
 | -------------------------- | --------------------------------------------------- |
 | `modbus.unit_ids`          | Unit ID addressed by the batch.                     |
 | `modbus.register_count`    | Registers in the selected write plan or read spans. |
+| `modbus.coil_count`        | Coils in the selected coil plan or read spans.      |
+| `modbus.table`             | `coils` for coil spans. Register spans omit it.     |
+| `modbus.gap_read_count`    | FC01 reads that fill gap coils in a coil plan.      |
 | `modbus.suppressed_count`  | Proposed writes excluded from the selected plan.    |
 | `modbus.bypassed_count`    | Flagged writes sent although the cache held them.   |
 | `modbus.transaction_count` | Transactions in the selected plan.                  |
@@ -359,13 +404,17 @@ It returns `undefined` outside the spans.
 Use lower transaction limits when required by the device.
 If a gap includes an unreadable address, its entire read transaction can fail.
 Increase `maxGap` only when those addresses are readable.
+`planCoilWrites(writes, options?)` and `planCoilReads(addresses, options?)` plan coils.
+A coil `single` step maps to FC05, and a coil `multiple` step maps to FC15.
+A coil `multiple` step marks each gap coil with `undefined` in `values`.
 The planners throw `RangeError` for invalid addresses, values, or options.
 `encodeRegisterValue(value)` validates and encodes signed or unsigned 16-bit register values.
 
 ### Debouncers and cache
 
 `createWriteDebouncer({ window, maxHold?, flush })` collects writes and invokes the supplied batch callback.
-`createReadDebouncer({ window, plan?, fetch })` collects addresses and invokes the supplied span callback.
+`createReadDebouncer({ window, plan?, planSpans?, fetch })` collects addresses and invokes the supplied span callback.
+`planSpans` replaces the register planner, for example with `planCoilReads`.
 `fetch` must return one `Uint16Array` per span, with the requested quantity of values.
 Both constructors require a scope.
 Both expose normal and immediate operations, `flush`, and a `pending` address count.
@@ -374,13 +423,14 @@ Standalone debouncers do not provide a transport, retry policy, or cache.
 `createRegisterCache()` provides `filter`, `observe`, `invalidate`, and generation tracking.
 Call `observe` only after a successful write acknowledgement.
 Use its generation token to preserve invalidations during an in-flight write.
+`createCoilCache()` provides the same operations for boolean coil states, and `valueOf` for one coil.
 
 `makeBatchingClient({ unitId, client, cache, debounce?, plan? })` composes these utilities over an `EffectModbusClient`.
 Its `cache` field is required; pass `undefined` to omit a cache.
 A raw promise-based binding client is not accepted directly.
 
 `createBatchingRegistry(deps)` provides per-unit declarations and connection-driven cache invalidation for custom transports.
-Pass public raw clients through `registry.guardRawWrites(unitId, client)` to enforce the register-write guard.
+Pass public raw clients through `registry.guardRawWrites(unitId, client)` to enforce the register-write and coil-write guards.
 
 ## Error handling
 
@@ -624,6 +674,7 @@ Package checks do not check that application.
 - `src/retry.ts` and `src/connection.ts`: Retry policies, reconnection supervisor, and circuit guard.
 - `src/register-plan.ts`: Pure read and write transaction planners.
 - `src/register-cache.ts`: Acknowledged-write cache and generation-based invalidation.
+- `src/coil-plan.ts`, `src/coil-cache.ts`, and `src/coil-batching.ts`: Coil planners, coil cache, and coil batching client.
 - `src/read-debouncer.ts` and `src/write-debouncer.ts`: Scoped request collection.
 - `src/batching-client.ts`: Batching composition and per-unit registry.
 - `src/span-attributes.ts`: Caller attribute merging.

@@ -97,6 +97,31 @@ export interface RegisterCache {
  * // pending: the write; suppressed: empty, since nothing is known yet
  */
 export const createRegisterCache = (): RegisterCache => {
+  const cache = createEncodedCache<RegisterWrite>((write) => {
+    assertRegisterAddress(write.address);
+    return encodeRegisterValue(write.value);
+  });
+  return {
+    filter: cache.filter,
+    generationOf: cache.generationOf,
+    observe: (unitId, address, value, generation) =>
+      cache.observe(unitId, { address, value }, generation),
+    invalidate: cache.invalidate,
+    get size() {
+      return cache.size;
+    },
+  };
+};
+
+/**
+ * The shared core of the register cache and the coil cache.
+ *
+ * Both caches compare values in their wire encoding. `encode` validates one
+ * write and returns that encoding.
+ */
+export const createEncodedCache = <W extends { readonly address: number }>(
+  encode: (write: W) => number,
+) => {
   const held = new Map<string, number>();
   const keyOf = (unitId: number, address: number) => `${unitId}:${address}`;
 
@@ -108,18 +133,17 @@ export const createRegisterCache = (): RegisterCache => {
   const generationOf = (unitId: number) => (unitGenerations.get(unitId) ?? 0) + busGeneration;
 
   return {
-    filter: (unitId, writes) => {
-      const latest = new Map<number, { readonly write: RegisterWrite; readonly encoded: number }>();
-      const suppressed: RegisterWrite[] = [];
+    filter: (unitId: number, writes: ReadonlyArray<W>) => {
+      const latest = new Map<number, { readonly write: W; readonly encoded: number }>();
+      const suppressed: W[] = [];
       for (const write of writes) {
-        assertRegisterAddress(write.address);
-        const encoded = encodeRegisterValue(write.value);
+        const encoded = encode(write);
         const superseded = latest.get(write.address);
         if (superseded !== undefined) suppressed.push(superseded.write);
         latest.set(write.address, { write, encoded });
       }
 
-      const pending: RegisterWrite[] = [];
+      const pending: W[] = [];
       for (const { encoded, write } of latest.values()) {
         if (held.get(keyOf(unitId, write.address)) === encoded) {
           suppressed.push(write);
@@ -132,13 +156,17 @@ export const createRegisterCache = (): RegisterCache => {
 
     generationOf,
 
-    observe: (unitId, address, value, generation) => {
-      assertRegisterAddress(address);
+    /** Records a write. Skips it when the unit was invalidated after `generation`. */
+    observe: (unitId: number, write: W, generation: number | undefined) => {
+      const encoded = encode(write);
       if (generation !== undefined && generation !== generationOf(unitId)) return;
-      held.set(keyOf(unitId, address), encodeRegisterValue(value));
+      held.set(keyOf(unitId, write.address), encoded);
     },
 
-    invalidate: (unitId) => {
+    /** The encoded value recorded for an address, or `undefined` when unknown. */
+    valueOf: (unitId: number, address: number) => held.get(keyOf(unitId, address)),
+
+    invalidate: (unitId?: number) => {
       if (unitId === undefined) {
         held.clear();
         busGeneration += 1;

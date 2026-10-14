@@ -151,21 +151,21 @@ export interface ReadPlan {
 }
 
 /** Rejects an option that cannot describe a transaction. */
-const assertPositiveInteger = (name: string, value: number): void => {
+export const assertPositiveInteger = (name: string, value: number): void => {
   if (!Number.isInteger(value) || value < 1) {
     throw new RangeError(`${name} must be an integer of 1 or more, got ${value}`);
   }
 };
 
 /** Rejects a device limit outside the range the protocol can encode. */
-const assertTransactionLimit = (name: string, value: number, maximum: number): void => {
+export const assertTransactionLimit = (name: string, value: number, maximum: number): void => {
   if (!Number.isInteger(value) || value < 1 || value > maximum) {
     throw new RangeError(`${name} must be an integer from 1 to ${maximum}, got ${value}`);
   }
 };
 
-/** Rejects an address that cannot name a register. */
-const assertAddress = (address: number): void => {
+/** Rejects an address that cannot name a register or a coil. */
+export const assertAddress = (address: number): void => {
   if (!Number.isInteger(address) || address < 0 || address > MAX_REGISTER_ADDRESS) {
     throw new RangeError(
       `address must be an integer from 0 to ${MAX_REGISTER_ADDRESS}, got ${address}`,
@@ -306,12 +306,31 @@ export const planReads = (
   options: PlanReadsOptions = {},
 ): ReadPlan => {
   const maxRegistersPerRead = options.maxRegistersPerRead ?? MODBUS_MAX_READ_REGISTERS;
-  const maxGap = options.maxGap ?? 0;
   assertTransactionLimit('maxRegistersPerRead', maxRegistersPerRead, MODBUS_MAX_READ_REGISTERS);
+  return buildReadPlan(addresses, maxRegistersPerRead, options.maxGap ?? 0);
+};
+
+/** Rejects a gap tolerance that is not a count of addresses. */
+export const assertMaxGap = (maxGap: number): void => {
   if (!Number.isInteger(maxGap) || maxGap < 0) {
     throw new RangeError(`maxGap must be a non-negative integer, got ${maxGap}`);
   }
+};
 
+/**
+ * Merges addresses into read spans of at most `maxPerRead` addresses.
+ *
+ * The register and coil read planners share this step. Each planner checks its
+ * own transaction limit first, because the protocol limits are different.
+ *
+ * @throws RangeError - An address or `maxGap` is out of range.
+ */
+export const buildReadPlan = (
+  addresses: ReadonlyArray<number>,
+  maxPerRead: number,
+  maxGap: number,
+): ReadPlan => {
+  assertMaxGap(maxGap);
   for (const address of addresses) assertAddress(address);
   const sorted = Array.from(new Set(addresses)).sort((left, right) => left - right);
 
@@ -322,7 +341,7 @@ export const planReads = (
     for (let index = 1; index < sorted.length; index += 1) {
       const address = sorted[index]!;
       const fitsGap = address - end - 1 <= maxGap;
-      const fitsSpan = address - start + 1 <= maxRegistersPerRead;
+      const fitsSpan = address - start + 1 <= maxPerRead;
       if (fitsGap && fitsSpan) {
         end = address;
         continue;
