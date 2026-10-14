@@ -325,6 +325,7 @@ The cache and connection watcher are created when batching is first requested.
 Cache comparisons use encoded unsigned 16-bit values.
 For example, `-1` and `65535` have the same wire encoding.
 After an issued write fails, the unit's cached values are invalidated.
+For a unit with coil batching, either write path invalidates both write caches.
 When the connection state leaves `Connected`, all cached writes are invalidated.
 This includes a register or coil cache that the caller supplies, for the units it serves on that transport.
 An invalidation during an in-flight write prevents a later acknowledgement from restoring stale cache entries.

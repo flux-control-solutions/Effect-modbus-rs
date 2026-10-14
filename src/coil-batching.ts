@@ -128,9 +128,12 @@ export const createCoilClient = (options: {
   readonly cache: CoilCache | undefined;
   readonly debounce?: BatchingDebounceOptions;
   readonly plan?: BatchingCoilOptions['plan'];
+  /** Invalidates all write caches for this unit. Defaults to invalidating the coil cache. */
+  readonly invalidateUnit?: () => void;
 }): Effect.Effect<BatchingCoilClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const { unitId, client, cache } = options;
+    const invalidateUnit = options.invalidateUnit ?? (() => cache?.invalidate(unitId));
 
     /**
      * Plans the FC01 reads for the gap coils whose states are not in `known`.
@@ -272,7 +275,7 @@ export const createCoilClient = (options: {
         const carried = new Set(written.map((write) => write.address));
 
         yield* Effect.forEach(steps, issueStep, { discard: true }).pipe(
-          Effect.tapError(() => Effect.sync(() => cache?.invalidate(unitId))),
+          Effect.tapError(() => Effect.sync(invalidateUnit)),
           Effect.withSpan('modbus.write', {
             kind: 'client',
             attributes: {

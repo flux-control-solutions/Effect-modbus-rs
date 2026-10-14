@@ -324,7 +324,10 @@ export interface BatchingModbusClient extends BatchingRegisterReader {
  * Without coil batching, the flush is a no-op, so the client flush does not
  * need a separate branch.
  */
-const makeOptionalCoilClient = (options: Parameters<typeof makeBatchingClient>[0]) =>
+const makeOptionalCoilClient = (
+  options: Parameters<typeof makeBatchingClient>[0],
+  invalidateUnit: () => void,
+) =>
   options.coils === undefined
     ? Effect.succeed({ client: undefined, flush: Effect.void })
     : Effect.map(
@@ -334,6 +337,7 @@ const makeOptionalCoilClient = (options: Parameters<typeof makeBatchingClient>[0
           cache: options.coils.cache,
           debounce: options.debounce,
           plan: options.coils.plan,
+          invalidateUnit,
         }),
         (client) => ({ client, flush: client.flush }),
       );
@@ -363,6 +367,12 @@ export const makeBatchingClient = (options: {
   Effect.gen(function* () {
     const { unitId, client, cache } = options;
     const scope = yield* Effect.scope;
+
+    // A device reset can affect both tables without changing the link state.
+    const invalidateUnit = () => {
+      cache?.invalidate(unitId);
+      options.coils?.cache?.invalidate(unitId);
+    };
 
     const invalidArgument = (cause: unknown) => {
       const error = cause instanceof Error ? cause : new Error(String(cause));
@@ -491,7 +501,7 @@ export const makeBatchingClient = (options: {
           // A failed transaction means the state of the device is unknown: it
           // may have power-cycled and reset its registers. A stale belief then
           // suppresses exactly the write that would restore it.
-          Effect.tapError(() => Effect.sync(() => cache?.invalidate(unitId))),
+          Effect.tapError(() => Effect.sync(invalidateUnit)),
           Effect.withSpan('modbus.write', {
             kind: 'client',
             attributes: {
@@ -552,7 +562,7 @@ export const makeBatchingClient = (options: {
       readAllNow: debouncer.readAllNow,
     });
 
-    const coils = yield* makeOptionalCoilClient(options);
+    const coils = yield* makeOptionalCoilClient(options, invalidateUnit);
 
     const flush = Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {

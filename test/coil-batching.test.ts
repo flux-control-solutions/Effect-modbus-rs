@@ -1,8 +1,12 @@
 import { expect, test } from 'bun:test';
 
-import { Effect, Fiber, Layer, Tracer } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Tracer } from 'effect';
 
+import { makeBatchingClient } from '../src/batching-client';
+import { createCoilCache } from '../src/coil-cache';
+import { ModbusTimeoutError } from '../src/errors';
 import type { SlaveDeviceDefinitions } from '../src/mocks';
+import { createRegisterCache } from '../src/register-cache';
 import { RtuTransportService } from '../src/RtuTransportService';
 
 /** Tests coil batching: planned writes, the coil cache, gap filling, reads, and guards. */
@@ -308,6 +312,143 @@ test('a failed coil write discards what the coil cache knows about the unit', as
 
   expect(known).toBeUndefined();
 });
+
+test.each(['coils', 'registers'] as const)(
+  'a failed %s write clears both caches and permits recovery after a device reset',
+  async (failingTable) => {
+    const observed = await run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transport = yield* RtuTransportService;
+          const raw = yield* transport.withClient(3);
+          const registers = createRegisterCache();
+          const coils = createCoilCache();
+          let failNext = false;
+          // A device reset can clear both tables without closing the transport.
+          const resetAndFail = Effect.gen(function* () {
+            failNext = false;
+            yield* raw.writeSingleRegister({ address: 0, value: 0 });
+            yield* raw.writeSingleCoil({ address: 0, value: 0 });
+            return yield* Effect.fail(
+              new ModbusTimeoutError({ cause: new Error('Device reset'), message: 'Device reset' }),
+            );
+          });
+          const client = yield* makeBatchingClient({
+            unitId: 3,
+            cache: registers,
+            coils: { cache: coils },
+            client: {
+              ...raw,
+              writeSingleCoil: (write) =>
+                Effect.suspend(() =>
+                  failNext && failingTable === 'coils' ? resetAndFail : raw.writeSingleCoil(write),
+                ),
+              writeSingleRegister: (write) =>
+                Effect.suspend(() =>
+                  failNext && failingTable === 'registers'
+                    ? resetAndFail
+                    : raw.writeSingleRegister(write),
+                ),
+            },
+          });
+          yield* client.writeNow({ address: 0, value: 10 });
+          yield* client.coils!.writeNow({ address: 0, value: true });
+          registers.observe(9, 0, 20);
+          coils.observe(9, 0, true);
+          const otherGenerations = [registers.generationOf(9), coils.generationOf(9)];
+          failNext = true;
+          const failed = yield* Effect.result(
+            failingTable === 'coils'
+              ? client.coils!.writeNow({ address: 0, value: false })
+              : client.writeNow({ address: 0, value: 20 }),
+          );
+          const cleared = {
+            registers: registers.filter(3, [{ address: 0, value: 10 }]).pending.length,
+            coils: coils.valueOf(3, 0),
+          };
+          yield* client.writeNow({ address: 0, value: 10 });
+          yield* client.coils!.writeNow({ address: 0, value: true });
+          return {
+            failure: failed._tag,
+            cleared,
+            registers: Array.from(yield* raw.readHoldingRegisters({ address: 0, quantity: 1 })),
+            coils: yield* raw.readCoils({ address: 0, quantity: 1 }),
+            otherRegisters: registers.filter(9, [{ address: 0, value: 20 }]).pending.length,
+            otherCoil: coils.valueOf(9, 0),
+            otherGenerationsUnchanged:
+              registers.generationOf(9) === otherGenerations[0] &&
+              coils.generationOf(9) === otherGenerations[1],
+          };
+        }),
+      ),
+    );
+
+    expect(observed).toEqual({
+      failure: 'Failure',
+      cleared: { registers: 1, coils: undefined },
+      registers: [10],
+      coils: [1],
+      otherRegisters: 0,
+      otherCoil: true,
+      otherGenerationsUnchanged: true,
+    });
+  },
+);
+
+test.each(['coils', 'registers'] as const)(
+  'a failed %s write prevents an in-flight acknowledgement from restoring the other cache',
+  async (failingTable) => {
+    const known = await run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transport = yield* RtuTransportService;
+          const raw = yield* transport.withClient(3);
+          const registers = createRegisterCache();
+          const coils = createCoilCache();
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const fail = Effect.fail(
+            new ModbusTimeoutError({ cause: new Error('Device reset'), message: 'Device reset' }),
+          );
+          // Hold the acknowledgement until the other table's write has failed.
+          const acknowledge = Effect.andThen(
+            Deferred.succeed(started, undefined),
+            Deferred.await(release),
+          );
+          const client = yield* makeBatchingClient({
+            unitId: 3,
+            cache: registers,
+            coils: { cache: coils },
+            client: {
+              ...raw,
+              writeSingleCoil: () => (failingTable === 'coils' ? fail : acknowledge),
+              writeSingleRegister: () => (failingTable === 'registers' ? fail : acknowledge),
+            },
+          });
+          const inFlight = yield* Effect.forkChild(
+            failingTable === 'coils'
+              ? client.writeNow({ address: 0, value: 10 })
+              : client.coils!.writeNow({ address: 0, value: true }),
+          );
+          yield* Deferred.await(started);
+          yield* Effect.result(
+            failingTable === 'coils'
+              ? client.coils!.writeNow({ address: 0, value: true })
+              : client.writeNow({ address: 0, value: 10 }),
+          );
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(inFlight);
+          return {
+            registers: registers.filter(3, [{ address: 0, value: 10 }]).pending.length,
+            coils: coils.valueOf(3, 0),
+          };
+        }),
+      ),
+    );
+
+    expect(known).toEqual({ registers: 1, coils: undefined });
+  },
+);
 
 test('a coil write with a value that is not a boolean fails as an invalid argument', async () => {
   const result = await run(
