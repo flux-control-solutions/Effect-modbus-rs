@@ -209,17 +209,22 @@ export const createCoilClient = (options: {
         const proposed = batch.map(toCoilWrite);
         const selected = yield* Effect.try({
           try: () => {
-            const forced = batch.filter((entry) => entry.bypassCache).map(toCoilWrite);
+            // Forced writes skip the cache, which removes earlier writes to the
+            // same address. Remove them here to keep the span counts correct.
+            const forced = Array.from(
+              new Map(
+                batch
+                  .filter((entry) => entry.bypassCache)
+                  .map((entry) => [entry.address, toCoilWrite(entry)] as const),
+              ).values(),
+            );
             const checked = cache?.filter(
               unitId,
               batch.filter((entry) => !entry.bypassCache).map(toCoilWrite),
             );
             const pending = checked === undefined ? proposed : [...forced, ...checked.pending];
             const bypassed =
-              cache === undefined
-                ? 0
-                : new Set(forced.map((write) => write.address)).size -
-                  cache.filter(unitId, forced).pending.length;
+              cache === undefined ? 0 : forced.length - cache.filter(unitId, forced).pending.length;
             if (pending.length === 0) return undefined;
             const steps = planCoilWrites(pending, options.plan?.writes);
             if (pending.length === proposed.length) return { steps, written: proposed, bypassed };

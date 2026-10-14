@@ -132,6 +132,31 @@ test('the coil cache suppresses an unchanged coil and a bypass sends it', async 
   expect(writes[0]!.get('modbus.bypassed_count')).toBe(1);
 });
 
+test('flagged coil writes to the same address count as one coil', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3, { coils: true });
+      yield* batched.coils!.writeAllNow(
+        [
+          { address: 7, value: true },
+          { address: 7, value: false },
+        ],
+        undefined,
+        { bypassCache: true },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  // Only the last state reaches the device. The earlier write is replaced.
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes[0]!.get('modbus.coil_count')).toBe(1);
+  expect(writes[0]!.get('modbus.suppressed_count')).toBe(1);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(0);
+});
+
 test('the cache fills gap coils without a read', async () => {
   const capture = makeSpanCapture();
 
