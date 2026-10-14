@@ -19,6 +19,28 @@ export interface DebouncedWrite {
   readonly value: number;
   /** Attributes of the caller that issued the newest value for this address. */
   readonly attributes: ModbusSpanAttributes | undefined;
+  /**
+   * Whether the flush must send this write when a cache holds the same value.
+   * `true` when the flush must send this write when a cache holds the same value.
+   * A newer write to the same address in the same batch keeps this flag. Otherwise
+   * the cache can suppress the newer value, and the caller that asked for the
+   * bypass sees success for a write that did not reach the device.
+   */
+  readonly bypassCache?: boolean;
+}
+
+/** Per-call options for the write methods. */
+export interface WriteOptions {
+  /**
+   * Sends the write when the cache already holds its value.
+   *
+   * Use this when the device can change a register on its own, or when an action
+   * must restore a known state. Other writes in the same batch are still
+   * filtered. The cache records the value after the device acknowledges it.
+   *
+   * @defaultValue false
+   */
+  readonly bypassCache?: boolean;
 }
 
 /** Options for {@link createWriteDebouncer}. */
@@ -59,7 +81,11 @@ export interface WriteDebouncer {
    * Completes with the flush result for its address. A later write can supersede
    * its value, and a downstream cache can suppress the physical write.
    */
-  write(write: RegisterWrite, attributes?: ModbusSpanAttributes): Effect.Effect<void, ModbusError>;
+  write(
+    write: RegisterWrite,
+    attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
+  ): Effect.Effect<void, ModbusError>;
 
   /**
    * Adds a write to the batch and flushes immediately, rather than waiting.
@@ -72,6 +98,7 @@ export interface WriteDebouncer {
   writeNow(
     write: RegisterWrite,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -88,12 +115,14 @@ export interface WriteDebouncer {
   writeAll(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
 
   /** Adds several writes to the batch and flushes immediately. */
   writeAllNow(
     writes: ReadonlyArray<RegisterWrite>,
     attributes?: ModbusSpanAttributes,
+    options?: WriteOptions,
   ): Effect.Effect<void, ModbusError>;
 
   /**
@@ -112,8 +141,30 @@ export interface WriteDebouncer {
 interface HeldWrite {
   readonly write: RegisterWrite;
   readonly attributes: ModbusSpanAttributes | undefined;
+  readonly bypassCache: boolean;
   readonly waiters: ReadonlyArray<Deferred.Deferred<void, ModbusError>>;
 }
+
+/**
+ * Replaces a held write with a newer write to the same address.
+ *
+ * The newer write inherits the waiters: only the newest value reaches the wire,
+ * and every caller that waits on the address learns whether it got there. The
+ * bypass flag also stays. Otherwise the cache can suppress the newer value after
+ * an earlier caller asked for a forced write.
+ */
+const supersede = (
+  superseded: HeldWrite | undefined,
+  next: Omit<HeldWrite, 'waiters'>,
+  waiter: Deferred.Deferred<void, ModbusError>,
+): HeldWrite =>
+  superseded === undefined
+    ? { ...next, waiters: [waiter] }
+    : {
+        ...next,
+        bypassCache: next.bypassCache || superseded.bypassCache,
+        waiters: [...superseded.waiters, waiter],
+      };
 
 /** Identity of one scheduled window, used to reject a stale timer callback. */
 interface TimerState {
@@ -222,6 +273,7 @@ export const createWriteDebouncer = (
                     address: entry.write.address,
                     value: entry.write.value,
                     attributes: entry.attributes,
+                    ...(entry.bypassCache && { bypassCache: true as const }),
                   })),
                 ),
               ),
@@ -245,6 +297,7 @@ export const createWriteDebouncer = (
     const enqueue = (
       writes: ReadonlyArray<RegisterWrite>,
       attributes: ModbusSpanAttributes | undefined,
+      bypassCache: boolean,
       restartTimer: boolean,
     ) =>
       Effect.gen(function* () {
@@ -254,17 +307,10 @@ export const createWriteDebouncer = (
           Effect.gen(function* () {
             if (closed) return yield* scopeClosedError();
             for (const write of writes) {
-              const superseded = held.get(write.address);
-
-              // A later write to the same address replaces the value but
-              // inherits its waiters: only the newest value reaches the wire,
-              // and everyone waiting on that address learns whether it got
-              // there.
-              held.set(write.address, {
-                write,
-                attributes,
-                waiters: [...(superseded?.waiters ?? []), waiter],
-              });
+              held.set(
+                write.address,
+                supersede(held.get(write.address), { write, attributes, bypassCache }, waiter),
+              );
             }
 
             const now = yield* Clock.currentTimeMillis;
@@ -295,25 +341,33 @@ export const createWriteDebouncer = (
     const issueDirectly = (
       writes: ReadonlyArray<RegisterWrite>,
       attributes: ModbusSpanAttributes | undefined,
+      bypassCache: boolean,
     ) =>
       flushLock.withPermits(1)(
         options.flush(
-          writes.map((write) => ({ address: write.address, value: write.value, attributes })),
+          writes.map((write) => ({
+            address: write.address,
+            value: write.value,
+            attributes,
+            ...(bypassCache && { bypassCache: true as const }),
+          })),
         ),
       );
 
     const writeAll = (
       writes: ReadonlyArray<RegisterWrite>,
       attributes?: ModbusSpanAttributes,
+      writeOptions?: WriteOptions,
     ): Effect.Effect<void, ModbusError> => {
       if (writes.length === 0) return Effect.void;
+      const bypassCache = writeOptions?.bypassCache ?? false;
       return Effect.andThen(
         ensureOpen,
         Effect.andThen(
           validateWrites(writes),
           windowMs <= 0
-            ? issueDirectly(writes, attributes)
-            : Effect.flatMap(enqueue(writes, attributes, true), Deferred.await),
+            ? issueDirectly(writes, attributes, bypassCache)
+            : Effect.flatMap(enqueue(writes, attributes, bypassCache, true), Deferred.await),
         ),
       );
     };
@@ -321,17 +375,19 @@ export const createWriteDebouncer = (
     const writeAllNow = (
       writes: ReadonlyArray<RegisterWrite>,
       attributes?: ModbusSpanAttributes,
+      writeOptions?: WriteOptions,
     ): Effect.Effect<void, ModbusError> => {
       if (writes.length === 0) return Effect.void;
+      const bypassCache = writeOptions?.bypassCache ?? false;
       return Effect.andThen(
         ensureOpen,
         Effect.andThen(
           validateWrites(writes),
           windowMs <= 0
-            ? issueDirectly(writes, attributes)
+            ? issueDirectly(writes, attributes, bypassCache)
             : Effect.uninterruptibleMask((restore) =>
                 Effect.gen(function* () {
-                  const waiter = yield* enqueue(writes, attributes, false);
+                  const waiter = yield* enqueue(writes, attributes, bypassCache, false);
                   yield* Effect.forkIn(flushPending(), scope);
                   return yield* restore(Deferred.await(waiter));
                 }),
@@ -340,11 +396,17 @@ export const createWriteDebouncer = (
       );
     };
 
-    const write = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
-      writeAll([write], attributes);
+    const write = (
+      write: RegisterWrite,
+      attributes?: ModbusSpanAttributes,
+      writeOptions?: WriteOptions,
+    ) => writeAll([write], attributes, writeOptions);
 
-    const writeNow = (write: RegisterWrite, attributes?: ModbusSpanAttributes) =>
-      writeAllNow([write], attributes);
+    const writeNow = (
+      write: RegisterWrite,
+      attributes?: ModbusSpanAttributes,
+      writeOptions?: WriteOptions,
+    ) => writeAllNow([write], attributes, writeOptions);
 
     const flush = Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {

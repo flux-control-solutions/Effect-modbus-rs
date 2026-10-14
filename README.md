@@ -186,19 +186,19 @@ program.pipe(
 
 ### Batching client methods
 
-| Method                                    | Behavior                                                         |
-| ----------------------------------------- | ---------------------------------------------------------------- |
-| `write(write, attributes?)`               | Collect one holding-register write for the configured window.    |
-| `writeNow(write, attributes?)`            | Enqueue one write and flush pending writes immediately.          |
-| `writeAll(writes, attributes?)`           | Collect a group as one caller for the configured window.         |
-| `writeAllNow(writes, attributes?)`        | Enqueue a group and flush pending writes immediately.            |
-| `read(address)`                           | Collect one holding-register read.                               |
-| `readNow(address)`                        | Enqueue one address and flush collected reads immediately.       |
-| `readAll(addresses)`                      | Collect a group and return values in the requested order.        |
-| `readAllNow(addresses)`                   | Enqueue a group and flush collected reads immediately.           |
-| `inputs.read` through `inputs.readAllNow` | Apply the same read methods to input registers.                  |
-| `flush`                                   | Flush writes, holding-register reads, then input-register reads. |
-| `onShutdown(action)`                      | Register an action in the calling scope.                         |
+| Method                                       | Behavior                                                         |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| `write(write, attributes?, options?)`        | Collect one holding-register write for the configured window.    |
+| `writeNow(write, attributes?, options?)`     | Enqueue one write and flush pending writes immediately.          |
+| `writeAll(writes, attributes?, options?)`    | Collect a group as one caller for the configured window.         |
+| `writeAllNow(writes, attributes?, options?)` | Enqueue a group and flush pending writes immediately.            |
+| `read(address)`                              | Collect one holding-register read.                               |
+| `readNow(address)`                           | Enqueue one address and flush collected reads immediately.       |
+| `readAll(addresses)`                         | Collect a group and return values in the requested order.        |
+| `readAllNow(addresses)`                      | Enqueue a group and flush collected reads immediately.           |
+| `inputs.read` through `inputs.readAllNow`    | Apply the same read methods to input registers.                  |
+| `flush`                                      | Flush writes, holding-register reads, then input-register reads. |
+| `onShutdown(action)`                         | Register an action in the calling scope.                         |
 
 `flush` reports batch outcomes to waiting callers, not through its own typed error channel.
 `client.cache` exposes the write cache, or `undefined` when caching is disabled.
@@ -279,6 +279,21 @@ If the counts are equal, it selects the filtered plan.
 Pass `cache: false` to disable suppression.
 Pass a `RegisterCache` instance to supply a custom cache.
 
+#### Bypass the cache for one write
+
+Pass `{ bypassCache: true }` as the third argument of a write method to send that write when the cache holds its value.
+Use it when a device can change a register on its own, or when an action must restore a known state.
+
+```ts
+yield * client.writeNow({ address: 2000, value: 0 }, undefined, { bypassCache: true });
+```
+
+The flag applies only to the writes in that call.
+Other writes in the same batch are still filtered.
+If a newer write to the same address arrives before the flush, the address keeps the flag for that batch.
+After the device acknowledges a bypassed write, the cache records its value.
+The option has no effect when the client has no cache.
+
 ### Shutdown actions
 
 `client.onShutdown(action)` registers a finalizer in the calling scope.
@@ -304,6 +319,7 @@ The span describes the selected plan; failed execution can leave some transactio
 | `modbus.unit_ids`          | Unit ID addressed by the batch.                     |
 | `modbus.register_count`    | Registers in the selected write plan or read spans. |
 | `modbus.suppressed_count`  | Proposed writes excluded from the selected plan.    |
+| `modbus.bypassed_count`    | Flagged writes sent although the cache held them.   |
 | `modbus.transaction_count` | Transactions in the selected plan.                  |
 
 Write methods accept caller span attributes as their second argument.

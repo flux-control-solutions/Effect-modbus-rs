@@ -129,7 +129,12 @@ export type {
 export { createRegisterCache } from './src/register-cache';
 export type { RegisterCache, RegisterCacheFilter } from './src/register-cache';
 export { createWriteDebouncer } from './src/write-debouncer';
-export type { DebouncedWrite, WriteDebouncer, WriteDebouncerOptions } from './src/write-debouncer';
+export type {
+  DebouncedWrite,
+  WriteDebouncer,
+  WriteDebouncerOptions,
+  WriteOptions,
+} from './src/write-debouncer';
 export { createReadDebouncer } from './src/read-debouncer';
 export type { ReadDebouncer, ReadDebouncerOptions } from './src/read-debouncer';
 export { makeBatchingClient, createBatchingRegistry } from './src/batching-client';

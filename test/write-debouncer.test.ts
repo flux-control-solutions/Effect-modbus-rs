@@ -485,3 +485,45 @@ test('writeAll of nothing does nothing', async () => {
 
   expect(recorder.batches).toHaveLength(0);
 });
+
+test('a newer write keeps the bypass flag of the write it supersedes', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer({ window: '40 millis', flush: recorder.flush }, (debouncer) =>
+    Effect.all(
+      [
+        debouncer.write({ address: 2000, value: 100 }, undefined, { bypassCache: true }),
+        debouncer.write({ address: 2000, value: 200 }),
+        debouncer.write({ address: 2001, value: 300 }),
+      ],
+      { concurrency: 'unbounded' },
+    ),
+  );
+
+  expect(recorder.batches).toHaveLength(1);
+  expect(
+    recorder.batches[0]!.map(({ address, value, bypassCache }) => ({
+      address,
+      value,
+      bypassCache: bypassCache ?? false,
+    })),
+  ).toEqual([
+    { address: 2000, value: 200, bypassCache: true },
+    { address: 2001, value: 300, bypassCache: false },
+  ]);
+});
+
+test('a zero window carries the bypass flag to the flush', async () => {
+  const recorder = makeRecorder();
+
+  await withDebouncer({ window: 0, flush: recorder.flush }, (debouncer) =>
+    Effect.andThen(
+      debouncer.writeAllNow([{ address: 2000, value: 1 }], undefined, { bypassCache: true }),
+      debouncer.writeNow({ address: 2001, value: 2 }),
+    ),
+  );
+
+  expect(recorder.batches.map((batch) => batch.map((write) => write.bypassCache ?? false))).toEqual(
+    [[true], [false]],
+  );
+});
