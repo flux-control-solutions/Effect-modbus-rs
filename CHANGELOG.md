@@ -1,5 +1,29 @@
 # @flux-control/effect-modbus-rs
 
+## 0.10.0
+
+### Minor Changes
+
+- 5aec936: Add opt-in coil batching to the batching client.
+  
+  Set `coils` in `withBatchingClient` to get `client.coils`. It plans coil writes as FC05 and FC15 steps, suppresses unchanged states with a coil cache, and plans coil reads as FC01 spans. With `plan.writes.maxGap` above zero, an FC15 span can include gap coils. The client fills them from the coil cache, or with FC01 reads within `plan.reads.maxCoilsPerRead`.
+  
+  After a unit declares coil batching, raw FC05 and FC15 writes for that unit fail with `ModbusInvalidArgumentError`. Units without coil batching keep raw coil writes.
+  
+  New exports: `planCoilWrites`, `planCoilReads`, `MODBUS_MAX_WRITE_COILS`, `MODBUS_MAX_READ_COILS`, `createCoilCache`, `createCoilClient`, and their types. `createReadDebouncer` accepts a `planSpans` option.
+  
+  When the connection leaves `Connected`, the transport now also invalidates a register cache or a coil cache that the caller supplies. It invalidates only the units that the cache serves on that transport.
+  
+  When an issued register or coil write fails, the batching client invalidates both write caches for that unit. A device reset can affect both tables without changing the connection state. An acknowledgement already in flight cannot restore the invalidated values.
+- 24313f7: Add the `debounce.writes.flushFullRuns` option to the batching client.
+  
+  When a run of contiguous held addresses fills one write transaction, the write debouncer flushes that run at once. Other held writes stay for their window. The limit is `plan.writes.maxRegistersPerWrite`. The option is off by default. `client.debounce.writes.flushFullRuns` reports the resolved value.
+  
+  The write debouncer also accepts the `flushFullRuns` and `maxRegistersPerWrite` options.
+- bb0beb1: Add a per-call `bypassCache` option to the batching client write methods.
+  
+  A flagged write reaches the device when the write cache already holds its value. Other writes in the same batch are still filtered. If a newer write to the same address arrives before the flush, the address keeps the flag. The cache records the value after the device acknowledges the write. Write spans report the number of bypassed writes in `modbus.bypassed_count`.
+
 ## 0.9.0
 
 ### Minor Changes
