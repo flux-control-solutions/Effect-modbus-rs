@@ -410,7 +410,15 @@ export const makeBatchingClient = (options: {
         const filtered = yield* Effect.try({
           try: () => {
             if (cache === undefined) return undefined;
-            const forced = batch.filter((entry) => entry.bypassCache).map(toWrite);
+            // The cache removes earlier writes to the same address. Forced writes
+            // skip the cache, so remove them here to keep the span counts correct.
+            const forced = Array.from(
+              new Map(
+                batch
+                  .filter((entry) => entry.bypassCache)
+                  .map((entry) => [entry.address, toWrite(entry)] as const),
+              ).values(),
+            );
             const checked = cache.filter(
               unitId,
               batch.filter((entry) => !entry.bypassCache).map(toWrite),
@@ -418,9 +426,7 @@ export const makeBatchingClient = (options: {
             return {
               pending: [...forced, ...checked.pending],
               // Flagged addresses that reach the bus only because of the flag.
-              bypassed:
-                new Set(forced.map((write) => write.address)).size -
-                cache.filter(unitId, forced).pending.length,
+              bypassed: forced.length - cache.filter(unitId, forced).pending.length,
             };
           },
           catch: invalidArgument,

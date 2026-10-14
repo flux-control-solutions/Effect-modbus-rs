@@ -1311,3 +1311,28 @@ test('a batching client flushes a full run before the write window ends', async 
   expect(writes[0]!.get('modbus.transaction_count')).toBe(1);
   expect(writes[0]!.get('modbus.register_count')).toBe(4);
 });
+
+test('flagged writes to the same address count as one register', async () => {
+  const capture = makeSpanCapture();
+
+  await run(
+    Effect.gen(function* () {
+      const transport = yield* RtuTransportService;
+      const batched = yield* transport.withBatchingClient(3);
+      yield* batched.writeAllNow(
+        [
+          { address: 0, value: 1 },
+          { address: 0, value: 2 },
+        ],
+        undefined,
+        { bypassCache: true },
+      );
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  // Only the last value reaches the device. The earlier write is replaced.
+  const writes = attributesOf(capture.spans, 'modbus.write');
+  expect(writes[0]!.get('modbus.register_count')).toBe(1);
+  expect(writes[0]!.get('modbus.suppressed_count')).toBe(1);
+  expect(writes[0]!.get('modbus.bypassed_count')).toBe(0);
+});
